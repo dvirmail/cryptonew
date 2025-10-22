@@ -117,6 +117,25 @@ export const fetchKlineData = async (symbol, interval, limit = 500, endTime = nu
   return fetchKlineDataFromApi(symbol, interval, limit);
 };
 
+// Fetch current price for a symbol
+export const fetchCurrentPrice = async (symbol) => {
+  try {
+    // Use the existing fetchMultiplePrices function to get current price
+    const result = await fetchMultiplePricesFromApi([symbol]);
+    if (result && result[symbol]) {
+      return {
+        symbol,
+        price: parseFloat(result[symbol].price),
+        timestamp: result[symbol].timestamp
+      };
+    }
+    throw new Error(`No price data found for ${symbol}`);
+  } catch (error) {
+    console.error(`[IndicatorManager] fetchCurrentPrice error for ${symbol}:`, error);
+    throw error;
+  }
+};
+
 export const fetchMultiplePrices = async (symbols) => {
   if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
     return { success: true, data: [] };
@@ -679,9 +698,37 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
             indicators.awesomeoscillator = safeCalculate('Awesome Oscillator (TTM Dep)', calculateAwesomeOscillator, klines);
         }
         indicators.ttm_squeeze = safeCalculate('TTM Squeeze', () => {
-            // This is a simplified placeholder for the actual TTM Squeeze logic
-            // In a full implementation, this would actually combine BB and KC to detect squeezes and use AO for momentum
-            return klines.map((_, i) => ({ isSqueeze: false, momentum: 0 }));
+            // Implement proper TTM Squeeze logic
+            const ttmSqueezeData = [];
+            
+            for (let i = 0; i < klines.length; i++) {
+                if (i < 20) { // Need enough data for BB and KC
+                    ttmSqueezeData.push({ isSqueeze: false, momentum: 0 });
+                    continue;
+                }
+                
+                // Get Bollinger Bands and Keltner Channels for current period
+                const bbUpper = indicators.bollinger?.[i]?.upper;
+                const bbLower = indicators.bollinger?.[i]?.lower;
+                const kcUpper = indicators.keltner?.[i]?.upper;
+                const kcLower = indicators.keltner?.[i]?.lower;
+                const ao = indicators.awesomeoscillator?.[i];
+                
+                if (!bbUpper || !bbLower || !kcUpper || !kcLower || ao === undefined) {
+                    ttmSqueezeData.push({ isSqueeze: false, momentum: 0 });
+                    continue;
+                }
+                
+                // TTM Squeeze logic: BB is inside KC (squeeze condition)
+                const isSqueeze = bbUpper < kcUpper && bbLower > kcLower;
+                
+                // Momentum: Use Awesome Oscillator for momentum direction
+                const momentum = ao > 0 ? 1 : (ao < 0 ? -1 : 0);
+                
+                ttmSqueezeData.push({ isSqueeze, momentum });
+            }
+            
+            return ttmSqueezeData;
         });
     }
   }
@@ -875,6 +922,87 @@ export {
   calculateWMA
 };
 
+// Evaluate signal conditions for a strategy
+export const evaluateSignalConditions = (strategy, indicators, klinesForEval) => {
+  try {
+    if (!strategy || !strategy.signals || !indicators) {
+      return {
+        isMatch: false,
+        combinedStrength: 0,
+        matchedSignals: [],
+        error: 'Missing required parameters'
+      };
+    }
+
+    const matchedSignals = [];
+    let totalStrength = 0;
+    let signalCount = 0;
+
+    // Check each signal in the strategy
+    for (const signalName of Object.keys(strategy.signals)) {
+      const signalConfig = strategy.signals[signalName];
+      
+      if (!signalConfig || !signalConfig.enabled) {
+        continue;
+      }
+
+      // Get the signal value from indicators
+      const signalValue = indicators[signalName];
+      
+      if (signalValue === undefined || signalValue === null) {
+        continue;
+      }
+
+      // Check if signal condition is met
+      let isMatch = false;
+      let strength = 0;
+
+      // Basic signal evaluation logic
+      if (typeof signalValue === 'object' && signalValue.value !== undefined) {
+        strength = signalValue.value;
+        isMatch = signalValue.value >= (signalConfig.threshold || 50);
+      } else if (typeof signalValue === 'number') {
+        strength = signalValue;
+        isMatch = signalValue >= (signalConfig.threshold || 50);
+      } else if (typeof signalValue === 'boolean') {
+        strength = signalValue ? 75 : 0;
+        isMatch = signalValue;
+      }
+
+      if (isMatch) {
+        matchedSignals.push({
+          name: signalName,
+          strength: strength,
+          config: signalConfig
+        });
+        totalStrength += strength;
+        signalCount++;
+      }
+    }
+
+    // Calculate combined strength
+    const combinedStrength = signalCount > 0 ? totalStrength / signalCount : 0;
+    const isMatch = signalCount >= (strategy.minSignals || 1) && combinedStrength >= (strategy.minStrength || 50);
+
+    return {
+      isMatch,
+      combinedStrength,
+      matchedSignals,
+      signalCount,
+      totalStrength
+    };
+
+  } catch (error) {
+    console.error('Error evaluating signal conditions:', error);
+    return {
+      isMatch: false,
+      combinedStrength: 0,
+      matchedSignals: [],
+      error: error.message
+    };
+  }
+};
+
 // Default export for backward compatibility
 export default {
   fetchKlineData,
@@ -883,6 +1011,7 @@ export default {
   getAvailablePairs,
   getRequiredIndicators,
   calculateAllIndicators,
+  evaluateSignalConditions,
   resetIndicatorManagerDebug, // Export the reset function
   // Include all calculation functions
   calculateMACD,

@@ -208,12 +208,13 @@ export default function AutoScan() {
         
         setCheckingKeys(true); // Move state update inside
         try {
-            const settings = await queueEntityCall('ScanSettings', 'list');
-            if (settings.length === 0 || !settings[0]) {
+            // Check localStorage for API keys (local development setup)
+            const savedKeys = localStorage.getItem('binanceApiKeys');
+            if (!savedKeys) {
                 setBinanceKeysValid(false);
                 if (!silent) {
                     toast({
-                        title: "No Settings Found",
+                        title: "No API Keys Found",
                         description: "Please configure your Binance API keys in Settings first",
                         variant: "destructive"
                     });
@@ -222,9 +223,9 @@ export default function AutoScan() {
                 return;
             }
 
-            const savedSettings = settings[0];
-            const apiKey = mode === 'live' ? savedSettings.binance_api_key : savedSettings.binance_testnet_api_key;
-            const apiSecret = mode === 'live' ? savedSettings.binance_api_secret : savedSettings.binance_testnet_api_secret;
+            const keys = JSON.parse(savedKeys);
+            const apiKey = mode === 'live' ? keys.liveApiKey : keys.testnetApiKey;
+            const apiSecret = mode === 'live' ? keys.liveApiSecret : keys.testnetApiSecret;
 
             if (!apiKey || !apiSecret) {
                 setBinanceKeysValid(false);
@@ -240,9 +241,8 @@ export default function AutoScan() {
             }
 
             const response = await testBinanceKeys({
-                binance_mode: mode,
-                binance_api_key: apiKey,
-                binance_api_secret: apiSecret
+                mode: mode,
+                proxyUrl: 'http://localhost:3003'
             });
             
             if (response?.data?.success) {
@@ -450,7 +450,7 @@ export default function AutoScan() {
                             variant: "destructive"
                         });
                     }
-                }, 1000); // Increased to 1000ms for better stability
+                }, 2000); // Increased to 2000ms to prevent rapid session cycling during development
             }
         };
         
@@ -458,7 +458,7 @@ export default function AutoScan() {
         
         // Initial data loads
         loadConfiguration();
-        checkBinanceKeys(service.getTradingMode());
+        checkBinanceKeys(service.getTradingMode(), { silent: true });
         // Initial load of mode-specific stats (will be overwritten by tradingMode useEffect if needed)
         loadModeStats(service.getTradingMode());
         
@@ -485,19 +485,27 @@ export default function AutoScan() {
 
     // Ensure session release on browser/tab refresh or navigation
     useEffect(() => {
+        let isUnmounting = false;
+        
         const handler = () => {
+            if (isUnmounting) return; // Prevent double cleanup
             try {
                 const service = scannerService.current;
                 if (service && service.getState().isRunning && service.sessionId === service.getState().leaderSessionId) {
+                    console.log('[AutoScan.js] Releasing session on page unload');
                     service.stop();
                 }
             } catch (e) {
                 console.warn('[AutoScan.js] Cleanup stop() warning on unload:', e?.message);
             }
         };
+        
+        // Only add listeners for actual page unload events
         window.addEventListener('beforeunload', handler);
         window.addEventListener('pagehide', handler);
+        
         return () => {
+            isUnmounting = true;
             window.removeEventListener('beforeunload', handler);
             window.removeEventListener('pagehide', handler);
         };
@@ -518,7 +526,7 @@ export default function AutoScan() {
         // This effect runs after the initial mount effect and when tradingMode changes.
         // `isInitializedRef.current` ensures it doesn't run before the service is fully set up.
         if (isInitializedRef.current && scannerState.tradingMode) {
-            checkBinanceKeys(scannerState.tradingMode);
+            checkBinanceKeys(scannerState.tradingMode, { silent: true });
             // When mode changes, optionally reset or load per-mode stats
             if (config && config.resetStatsOnModeSwitch === true) {
                 loadModeStats(scannerState.tradingMode, { reset: true });
@@ -617,7 +625,14 @@ export default function AutoScan() {
             }
             setConfig(configToSave);
             // Do a silent key check after save so users can save even if keys are missing
-            checkBinanceKeys(scannerService.current.getTradingMode(), { silent: true }); 
+            try {
+                await Promise.race([
+                    checkBinanceKeys(scannerService.current.getTradingMode(), { silent: true }),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Key check timeout')), 10000))
+                ]);
+            } catch (error) {
+                console.warn('Key check failed or timed out during save:', error.message);
+            } 
         } catch (error) {
             console.error('Error saving configuration:', error);
             toast({

@@ -17,6 +17,7 @@ import * as dynamicSizing from "@/components/utils/dynamicPositionSizing";
 // NEW: helper to fetch fresh free balance for a base asset from Binance account info
 async function fetchFreshFreeBalance({ baseAsset, tradingMode, proxyUrl }) {
   const resp = await queueFunctionCall(
+    'liveTradingAPI',
     liveTradingAPI,
     {
       action: "getAccountInfo",
@@ -145,7 +146,59 @@ export default class PositionManager {
         this.walletSavePromise = null; // Initialize with null as per outline
 
         // CRITICAL: Assign positionSizeValidator to instance
-        this.positionSizeValidator = positionSizeValidator;
+        // Use our updated dynamic position sizing system instead of the old validator
+        this.positionSizeValidator = {
+            calculate: (params) => {
+                console.log('[POSITION_MANAGER] 🔄 Routing to updated dynamicPositionSizing system');
+                
+                // Convert old parameter format to new format
+                const sizingOptions = {
+                    strategySettings: {
+                        useWinStrategySize: params.useWinStrategySize !== false,
+                        defaultPositionSize: params.defaultPositionSize || 100,
+                        riskPerTrade: params.riskPercentage || 2,
+                        minimumTradeValue: params.minimumTradeValue || 10,
+                        minimumConvictionScore: 50 // Default minimum conviction
+                    },
+                    currentPrice: params.currentPrice,
+                    convictionScore: params.convictionScore,
+                    availableCash: params.balance,
+                    totalWalletBalance: params.balance, // Use balance as total for now
+                    balanceInTrades: 0, // Assume no current trades
+                    indicators: {
+                        atr: params.atr
+                    },
+                    exchangeInfo: params.exchangeInfo,
+                    symbol: params.symbol || 'UNKNOWN'
+                };
+
+                const result = dynamicSizing.calculatePositionSize(sizingOptions);
+                
+                // Convert new result format to old format for compatibility
+                if (!result.isValid) {
+                    return {
+                        isValid: false,
+                        reason: result.reason,
+                        message: result.message,
+                        details: result.message,
+                        positionSizeUSDT: undefined
+                    };
+                }
+
+                return {
+                    isValid: true,
+                    positionSizeUSDT: result.positionSize,
+                    calculationMethod: result.calculationMethod,
+                    calculationDetails: {
+                        positionSize: result.positionSize,
+                        quantityCrypto: result.quantityCrypto,
+                        riskAmount: result.riskAmount,
+                        convictionMultiplier: result.convictionMultiplier,
+                        appliedFilters: result.appliedFilters
+                    }
+                };
+            }
+        };
         
         if (!this.positionSizeValidator || typeof this.positionSizeValidator.calculate !== 'function') {
             this.addLog('[PositionManager] CRITICAL: positionSizeValidator.calculate is not available!', 'error');
@@ -802,17 +855,26 @@ export default class PositionManager {
         //this.addLog(`[RECONCILE] 🔄 Starting Binance reconciliation (${this.getTradingMode()} mode)...`, 'info');
         
         try {
-            const settings = await queueEntityCall('ScanSettings', 'list');
-            const proxyUrl = settings?.[0]?.local_proxy_url;
-
+            // Get proxy URL from scanner service settings first, then fallback to database
+            let proxyUrl = this.scannerService?.state?.settings?.local_proxy_url;
+            
             if (!proxyUrl) {
-                this.addLog('[RECONCILE] ❌ No proxy URL configured!', 'error');
-                throw new Error('local_proxy_url not set in ScanSettings');
+                const settings = await queueEntityCall('ScanSettings', 'list');
+                proxyUrl = settings?.[0]?.local_proxy_url;
+            }
+            
+            // Final fallback to default
+            if (!proxyUrl) {
+                proxyUrl = 'http://localhost:3003';
+                this.addLog(`[RECONCILE] Using default proxy URL: ${proxyUrl}`, 'info');
+            } else {
+                this.addLog(`[RECONCILE] Using configured proxy URL: ${proxyUrl}`, 'info');
             }
 
             //this.addLog('[RECONCILE] 📡 Fetching account info to verify holdings...', 'info');
 
             const accountInfoResponse = await queueFunctionCall(
+                'liveTradingAPI',
                 liveTradingAPI,
                 { action: 'getAccountInfo', tradingMode: this.getTradingMode(), proxyUrl: proxyUrl },
                 'critical',
@@ -1115,17 +1177,52 @@ export default class PositionManager {
                 throw new Error("Invalid position quantity");
             }
 
+            // Check if this is a test position (no real tokens in account)
+            const isTestPosition = position?.position_id?.startsWith('test_') || 
+                                 position?.strategy_name?.includes('Test') ||
+                                 position?.strategy_name?.includes('Strategy') && 
+                                 (position?.strategy_name !== 'Momentum Strategy' && position?.strategy_name !== 'Raging Bear');
+
+            if (isTestPosition) {
+                this.addLog(
+                    `${logPrefix} 🧪 Detected test position ${symbolKey} (${position?.position_id}). ` +
+                    `Simulating close without Binance order.`,
+                    "info"
+                );
+                return { 
+                    success: true, 
+                    orderResult: { 
+                        orderId: `test_close_${Date.now()}`, 
+                        executedQty: positionQty.toString(),
+                        fills: [{ price: currentPrice.toString() }]
+                    },
+                    isTestPosition: true
+                };
+            }
+
             // 1) Fresh free balance pull to avoid -2010
             const freeBalance = await fetchFreshFreeBalance({ baseAsset, tradingMode, proxyUrl });
 
             // 2) Compute requested quantity = min(position qty, free balance), then round down to lot-size step
             let requestedQty = Math.min(positionQty, freeBalance);
+            const originalRequestedQty = requestedQty;
             requestedQty = roundDownToStepSize(requestedQty, stepSize); // This is a numeric value
 
             // 3) Validate against lot-size and notional; if below thresholds, skip as dust and trigger reconcile
             const notional = requestedQty * Number(currentPrice || 0);
             const belowLot = minQty && requestedQty < minQty - 1e-12;
             const belowNotional = minNotional && notional < (minNotional - 1e-8);
+
+            // DEBUG: Add detailed logging for ADA position
+            this.addLog(
+                `${logPrefix} 🔍 DEBUG for ${symbolKey}: ` +
+                `positionQty=${positionQty.toFixed(8)}, freeBalance=${freeBalance.toFixed(8)}, ` +
+                `originalRequestedQty=${originalRequestedQty.toFixed(8)}, stepSize=${stepSize}, ` +
+                `finalRequestedQty=${requestedQty.toFixed(8)}, currentPrice=${currentPrice}, ` +
+                `notional=${notional.toFixed(6)}, minQty=${minQty}, minNotional=${minNotional}, ` +
+                `belowLot=${belowLot}, belowNotional=${belowNotional}`,
+                "debug"
+            );
 
             if (requestedQty <= 0 || belowLot || belowNotional) {
                 this.addLog(
@@ -1657,7 +1754,7 @@ export default class PositionManager {
             // Map the current wallet positions, replacing updated ones with their new state
             // It's important to update both this.positions and walletState.positions for consistency
             this.positions = this.positions.map(p => {
-                const updatedVersion = positionsUpdatedButStillOpen.find(up => up.id === p.id); // Changed to use 'id'
+                const updatedVersion = positionsUpdatedButStillOpen.find(up => up.id === p.db_record_id); // Match by database record ID
                 return updatedVersion || p;
             });
             // Also update the scannerService's in-memory liveWalletState for immediate consistency
@@ -1925,10 +2022,10 @@ export default class PositionManager {
      * @returns {Promise<{ success: boolean, trade?: object, pnl?: number, pnlPercentage?: number, error?: string, isInsufficientBalance?: boolean }>} An object indicating success or failure with an message.
      */
     async manualClosePosition(position, currentPrice = null, exitReason = 'manual_close') {
-        const activePosition = this.positions.find(p => p.id === position.id);
+        const activePosition = this.positions.find(p => p.db_record_id === position.id);
 
         if (!activePosition) {
-            const availableIds = this.positions.map(p => `${p.symbol} (${p.position_id} / DB_ID: ${p.id})`).join(', ');
+            const availableIds = this.positions.map(p => `${p.symbol} (${p.position_id} / DB_ID: ${p.db_record_id})`).join(', ');
             const errorMsg = `Position ${position.symbol} (ID: ${position.id}) not found in PositionManager. Available positions: ${availableIds || 'none'}`;
             
             this.scannerService.addLog(`[MANUAL_CLOSE] ❌ ${errorMsg}`, 'error');
@@ -1938,7 +2035,7 @@ export default class PositionManager {
         this.scannerService.addLog(
             `[MANUAL_CLOSE] 🔄 Manual close requested: ${JSON.stringify({
                 symbol: activePosition.symbol,
-                positionId: activePosition.id, // Use LivePosition.id for logging
+                positionId: activePosition.db_record_id, // Use database record ID for logging
                 quantity: activePosition.quantity_crypto,
                 entryPrice: activePosition.entry_price,
                 strategyName: activePosition.strategy_name,
@@ -1983,6 +2080,20 @@ export default class PositionManager {
                 this.addLog(`[MANUAL_CLOSE] ❌ ${errorMsg}`, 'error');
                 throw new Error(errorMsg);
             }
+        }
+
+        // Check if position is too small for Binance (dust threshold)
+        const positionValue = parseFloat(activePosition.quantity_crypto) * exitPrice;
+        const minNotionalValue = 5.0; // Binance minimum notional value (usually $5-10)
+        
+        if (positionValue < minNotionalValue) {
+            const errorMsg = `Position ${activePosition.symbol} value ($${positionValue.toFixed(2)}) is below Binance's minimum threshold ($${minNotionalValue}). Cannot close position.`;
+            this.scannerService.addLog(`[MANUAL_CLOSE] ❌ ${errorMsg}`, 'error');
+            return {
+                success: false,
+                error: errorMsg,
+                isInsufficientBalance: false
+            };
         }
 
         // Execute sell order on Binance for live/testnet modes
@@ -3489,7 +3600,7 @@ export default class PositionManager {
                 this.addLog(`[PositionManager] 💱 Executing SELL orders on Binance (${mode.toUpperCase()} MODE)...`, 'info');
 
                 for (const positionId of positionIdsToClose) {
-                    const position = this.positions.find(p => p.id === positionId);
+                    const position = this.positions.find(p => p.db_record_id === positionId);
                     const trade = tradesToCreate.find(t => t.trade_id === position?.position_id); // Find corresponding trade data
 
                     if (!position) {

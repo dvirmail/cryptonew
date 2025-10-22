@@ -42,7 +42,7 @@ export default function FearGreedBitcoinChart(props) {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        const fearGreedResponse = await queueFunctionCall(getFearAndGreedIndex, {}, 'normal', 'fearGreed', 300000);
+        const fearGreedResponse = await getFearAndGreedIndex();
 
         if (fearGreedResponse?.data?.data && Array.isArray(fearGreedResponse.data.data)) {
           setFearGreedData(fearGreedResponse.data.data);
@@ -51,16 +51,23 @@ export default function FearGreedBitcoinChart(props) {
           setFearGreedData([]);
         }
 
-        const btcPriceResponse = await queueFunctionCall(getBinancePrices, { symbols: ['BTC/USDT'] }, 'normal', 'btcPrice', 60000);
+        const btcPriceResponse = await getBinancePrices({ symbols: ['BTCUSDT'] });
 
-        if (btcPriceResponse?.data?.data && Array.isArray(btcPriceResponse.data.data)) {
-          const btcData = btcPriceResponse.data.data.find(item => item.symbol === 'BTC/USDT');
-          if (btcData) {
-            setBitcoinPrices({
-              currentPrice: btcData.price,
-              change24h: btcData.change
-            });
-          }
+        // Handle both direct response and wrapped response formats
+        let btcData = null;
+        if (Array.isArray(btcPriceResponse)) {
+          btcData = btcPriceResponse.find(item => item.symbol === 'BTCUSDT');
+        } else if (btcPriceResponse?.data?.data && Array.isArray(btcPriceResponse.data.data)) {
+          btcData = btcPriceResponse.data.data.find(item => item.symbol === 'BTCUSDT');
+        } else if (btcPriceResponse?.data && Array.isArray(btcPriceResponse.data)) {
+          btcData = btcPriceResponse.data.find(item => item.symbol === 'BTCUSDT');
+        }
+
+        if (btcData) {
+          setBitcoinPrices({
+            currentPrice: btcData.price,
+            change24h: btcData.change
+          });
         }
 
       } catch (error) {

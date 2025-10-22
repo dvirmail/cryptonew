@@ -1,8 +1,5 @@
-import { createClient } from '@base44/sdk';
-// import { getAccessToken } from '@base44/sdk/utils/auth-utils';
+// Local development - use local API instead of Base44
+import localClient from './localClient.js';
 
-// Create a client with authentication required
-export const base44 = createClient({
-  appId: "6882398552dec440d9cc68b6", 
-  requiresAuth: true // Ensure authentication is required for all operations
-});
+// Export local client as base44 for compatibility
+export const base44 = localClient;

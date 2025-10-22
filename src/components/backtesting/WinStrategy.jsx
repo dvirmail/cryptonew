@@ -9,7 +9,7 @@ import {
   Target, Shield, DollarSign, Clock, TrendingUp,
   Zap, BarChart3, Activity, SlidersHorizontal, Settings, AlertCircle
 } from 'lucide-react';
-import { VirtualWalletState } from '@/api/entities/VirtualWalletState'; // New import for VirtualWalletState
+import { VirtualWalletState } from '@/api/entities'; // New import for VirtualWalletState
 
 const generateThematicName = (coin, signals, timeframe) => {
     const adjectives = ["Golden", "Silver", "Crystal", "Shadow", "Quantum", "Galactic", "Solar", "Lunar", "Cosmic", "Atomic", "Mystic", "Arctic", "Crimson", "Azure", "Emerald", "Obsidian", "Phantom", "Silent", "Iron", "Steel", "Diamond", "Vortex", "Abyss", "Zenith", "Apex", "Nova", "Pulse", "Echo", "Oracle", "Cipher", "Matrix", "Aegis", "Titan", "Spectre", "Warden", "Reaper", "Viper", "Cobra", "Phoenix", "Griffin", "Dragon", "Hydra", "Chimera", "Basilisk", "Wyvern", "Manticore", "Ronin", "Samurai", "Ninja", "Shinobi", "Shogun", "Daimyo", "Kensei", "Sensei", "Roshi", "Satori", "Kensho", "Zanshin"];

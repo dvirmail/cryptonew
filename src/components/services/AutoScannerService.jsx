@@ -11,7 +11,7 @@ import { getBinancePrices } from '@/api/functions';
 import { getFearAndGreedIndex } from '@/api/functions';
 import { archiveOldTrades } from '@/api/functions';
 import { positionSizeValidator } from '../utils/positionSizeValidator';
-import { PositionManager } from './PositionManager';
+import PositionManager from './PositionManager';
 import { scannerSessionManager } from '@/api/functions';
 import { liveTradingAPI } from '@/api/functions';
 import { initializeWalletManagerService } from './WalletManagerService';
@@ -63,7 +63,7 @@ class PerformanceMetricsService {
 
         // Internal state for this service
         this.lastMomentumCalculation = 0;
-        this.momentumCalculationInterval = 30000; // 30 seconds
+        this.momentumCalculationInterval = 10000; // 30 seconds
 
         this.lastFearAndGreedFetch = 0;
         this.fearAndGreedFetchInterval = 5 * 60 * 1000; // 5 minutes
@@ -104,7 +104,10 @@ class PerformanceMetricsService {
         this.lastFearAndGreedFetch = now;
 
         try {
-            const response = await queueFunctionCall(getFearAndGreedIndex, {}, 'low', 'fearAndGreedIndex', 300000, 30000);
+            console.log('[AutoScannerService] [fetchFearAndGreedIndex] Calling getFearAndGreedIndex directly (bypassing queue)...');
+            const response = await getFearAndGreedIndex();
+            console.log('[AutoScannerService] [fetchFearAndGreedIndex] Direct call response:', response);
+            
             if (response.data && response.data.data && response.data.data.length > 0) {
                 this.fearAndGreedData = response.data.data[0];
                 if (this.fearAndGreedFailureCount > 0) {
@@ -398,11 +401,14 @@ class ConfigurationService {
     async loadConfiguration() {
         this.addLog('[ConfigurationService] Loading scanner configuration...', 'info');
         const settingsList = await queueEntityCall('ScanSettings', 'list');
-        const loadedSettings = settingsList[0] || { id: 'default', scanFrequency: 60000, minimumCombinedStrength: 225, minimumRegimeConfidence: 50, minimumTradeValue: 10, maxPositions: 1, local_proxy_url: '' };
+        const rawSettings = settingsList[0] || { id: 'default', settings: { scanFrequency: 60000, minimumCombinedStrength: 225, minimumRegimeConfidence: 50, minimumTradeValue: 10, maxPositions: 1, local_proxy_url: 'http://localhost:3003' } };
+        
+        // Extract settings from the database structure
+        const loadedSettings = rawSettings.settings || rawSettings;
 
-        // Ensure local_proxy_url is initialized, even if empty
+        // Ensure local_proxy_url is initialized with default value
         if (!loadedSettings.local_proxy_url) {
-            loadedSettings.local_proxy_url = '';
+            loadedSettings.local_proxy_url = 'http://localhost:3003';
         }
         // Ensure ID is present for upsert operations
         if (!loadedSettings.id) {
@@ -821,6 +827,7 @@ class AutoScannerService {
 
         // Instance properties for _fetchFearAndGreedIndex to work within AutoScannerService
         this.lastFearAndGreedFetch = 0;
+        this.fearAndGreedFetchInterval = 30 * 1000; // 30 seconds for faster loading
         this.fearAndGreedData = null; // AutoScannerService's own property, distinct from state.fearAndGreedData
         this.fearAndGreedFailureCount = 0;
 
@@ -1761,18 +1768,25 @@ class AutoScannerService {
         }
 
         this.state.isInitializing = true;
-        console.log(`[AutoScannerService] Initializing scanner in ${this.state.tradingMode.toUpperCase()} mode...`);
+        const initStartTime = Date.now();
+        console.log(`[AutoScannerService] 🚀 Initializing scanner in ${this.state.tradingMode.toUpperCase()} mode...`);
         this.notifySubscribers();
 
         try {
-            // Step 1: Load configuration
-            await this.configurationService.loadConfiguration();
-            console.log('[AutoScannerService] ✅ Configuration loaded.');
+            // OPTIMIZATION: Load configuration, exchange info, and strategies in parallel
+            console.log('[AutoScannerService] ⚡ Loading core components in parallel...');
+            const [configResult, exchangeInfo, strategies] = await Promise.all([
+                this.configurationService.loadConfiguration(),
+                this._loadExchangeInfo(),
+                this._loadStrategies().catch(err => {
+                    console.warn('[AutoScannerService] ⚠️ Strategy loading failed (non-critical):', err.message);
+                    return [];
+                })
+            ]);
+            this.state.exchangeInfo = exchangeInfo;
+            console.log(`[AutoScannerService] ✅ Core components loaded in ${Date.now() - initStartTime}ms`);
 
-            // Step 2: Load exchange info (CRITICAL for position sizing/validation)
-            this.state.exchangeInfo = await this._loadExchangeInfo();
-
-            // Step 3: Initialize wallet (with robust error handling)
+            // OPTIMIZATION: Initialize wallet in parallel with position loading
             console.log(`[AutoScannerService] 🔄 Syncing ${this.state.tradingMode.toUpperCase()} wallet with Binance API...`);
 
             try {
@@ -1808,59 +1822,140 @@ class AutoScannerService {
             if (this.state.liveWalletState && !this.state.liveWalletState.mode) {
                 this.state.liveWalletState.mode = this.state.tradingMode || 'testnet';
             }
+            
+            // Ensure wallet state exists in proxy server if it doesn't exist
+            if (this.state.liveWalletState && this.state.liveWalletState.id) {
+                try {
+                    // Try to verify the wallet state exists in the proxy server by attempting to update it
+                    // If it doesn't exist, the update will fail and we'll create it
+                    const updatedWallet = await queueEntityCall('LiveWalletState', 'update', this.state.liveWalletState.id, this.state.liveWalletState);
+                    if (updatedWallet) {
+                        this.state.liveWalletState = updatedWallet;
+                        this.addLog(`[AutoScannerService] ✅ Wallet state verified in proxy server (ID: ${this.state.liveWalletState.id})`, 'info');
+                    }
+                } catch (error) {
+                    this.addLog(`[AutoScannerService] ⚠️ Wallet state not found in proxy server, creating it...`, 'warning');
+                    try {
+                        const createdWallet = await queueEntityCall('LiveWalletState', 'create', this.state.liveWalletState);
+                        this.state.liveWalletState = createdWallet;
+                        this.addLog(`[AutoScannerService] ✅ Created wallet state in proxy server (ID: ${createdWallet.id})`, 'success');
+                    } catch (createError) {
+                        this.addLog(`[AutoScannerService] ❌ Failed to create wallet state in proxy server: ${createError.message}`, 'error');
+                    }
+                }
+            }
 
-            // Step: Load managed positions after ensuring mode is set
+            // Step: Load managed positions, momentum trades, and strategies in parallel
             this.addLog(`[PositionManager] 🔧 Ensuring wallet mode is set (${this.state.liveWalletState?.mode}) before loading managed state.`, 'system');
-            await this.positionManager.loadManagedState(this.state.liveWalletState);
-            console.log(`[AutoScannerService] ✅ Loaded ${this.positionManager.positions.length} open positions`);
+            
+            // CRITICAL: Ensure liveWalletState exists before loading managed state
+            if (!this.state.liveWalletState) {
+                this.addLog('[AutoScannerService] ❌ No wallet state available, creating minimal wallet state...', 'warning');
+                const minimalWalletState = {
+                    id: `wallet_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    trading_mode: this.state.tradingMode || 'testnet',
+                    mode: this.state.tradingMode || 'testnet',
+                    available_balance: "0.00000000",
+                    total_realized_pnl: "0.00000000",
+                    unrealized_pnl: "0.00000000",
+                    balances: [],
+                    positions: [],
+                    live_position_ids: [],
+                    total_trades_count: 0,
+                    winning_trades_count: 0,
+                    losing_trades_count: 0,
+                    total_gross_profit: 0,
+                    total_gross_loss: 0,
+                    total_fees_paid: 0,
+                    last_updated_timestamp: new Date().toISOString(),
+                    last_binance_sync: new Date().toISOString()
+                };
+                
+                // Create the wallet state in the proxy server
+                try {
+                    const createdWallet = await queueEntityCall('LiveWalletState', 'create', minimalWalletState);
+                    this.state.liveWalletState = createdWallet;
+                    this.addLog(`[AutoScannerService] ✅ Created minimal wallet state in proxy server (ID: ${createdWallet.id})`, 'success');
+                } catch (createError) {
+                    this.addLog(`[AutoScannerService] ❌ Failed to create wallet state in proxy server: ${createError.message}`, 'error');
+                    // Fallback to in-memory only
+                    this.state.liveWalletState = minimalWalletState;
+                }
+            }
+            
+            // OPTIMIZATION: Load positions and momentum trades in parallel (strategies already loaded)
+            console.log('[AutoScannerService] 📋 Loading positions and momentum trades in parallel...');
+            
+            const [positionResult, momentumTrades] = await Promise.all([
+                this.positionManager.loadManagedState(this.state.liveWalletState),
+                this.performanceMetricsService.loadInitialMomentumTrades().catch(err => {
+                    console.warn('[AutoScannerService] ⚠️ Momentum trades loading failed (non-critical):', err.message);
+                    return [];
+                })
+            ]);
+            
+            console.log(`[AutoScannerService] ✅ Loaded ${this.positionManager.positions.length} open positions and momentum trades`);
 
             // Ensure the guard is attached after PositionManager is fully set up
             this.attachRegimeOpenGuard();
 
-            // Step 6: Load initial momentum trades
-            await this.performanceMetricsService.loadInitialMomentumTrades();
+            // OPTIMIZATION: Initialize widgets immediately for UI responsiveness
+            this._initializeWidgetDefaults();
 
-            // Step 7: Load and filter strategies
-            console.log('[AutoScannerService] 📋 Loading active strategies...');
-            const loadedStrategies = await this._loadStrategies();
-            console.log(`[AutoScannerService] ✅ Loaded ${loadedStrategies.length} strategies`);
-
-            // Step 8: Fetch initial prices (now that strategies are loaded to know which symbols are relevant)
-            console.log('[AutoScannerService] 📊 Fetching initial prices...');
-            await this._consolidatePrices();
-            const priceCount = Object.keys(this.currentPrices || {}).length;
-            console.log(`[AutoScannerService] ✅ Fetched prices for ${priceCount} symbols.`);
-
-            // Step 9: Update wallet summary (now with current prices)
-            console.log('[AutoScannerService] 🔄 Initial wallet summary calculation...');
-            await this.walletManagerService.updateWalletSummary(this.state.liveWalletState, this.currentPrices);
-
-            // NEW: Log wallet summary after initial calculation (from outline)
-            const summary = this.walletManagerService.walletSummary;
-            if (summary) {
-                // Keep the addLog but remove console.log, as per instruction to clean debug logs
-            }
-            console.log('[AutoScannerService] ✅ Wallet summary updated');
-
-            // Step 10: Persist latest wallet summary
-            await this._persistLatestWalletSummary();
-            console.log('[AutoScannerService] ✅ Wallet summary persisted');
-
-            // Step 11: Calculate market regime
-            await this._getCachedOrCalculateRegime(true);
-
-            // Step 12: Calculate performance momentum (uses current prices and wallet state)
-            await this.performanceMetricsService.calculatePerformanceMomentum();
-
-            this.notifySubscribers();
-
-            // CRITICAL: Mark as initialized ONLY after ALL async operations complete
+            // OPTIMIZATION: Mark as initialized early for UI responsiveness
             this.state.isInitialized = true;
-            console.log(`[AutoScannerService] ✅ Initialization complete in ${this.state.tradingMode.toUpperCase()} mode. Loaded ${loadedStrategies.length} strategies.`);
+            this.notifySubscribers();
+            
+            const coreInitTime = Date.now() - initStartTime;
+            console.log(`[AutoScannerService] ✅ Core initialization complete in ${coreInitTime}ms. Loaded ${strategies.length} strategies.`);
+
+            // OPTIMIZATION: Defer non-critical operations to background
+            console.log('[AutoScannerService] 🔄 Starting background operations...');
+            
+            // Background operations that don't block initialization
+            Promise.all([
+                // Fetch initial prices
+                this._consolidatePrices().then(() => {
+                    const priceCount = Object.keys(this.currentPrices || {}).length;
+                    console.log(`[AutoScannerService] ✅ Fetched prices for ${priceCount} symbols.`);
+                }),
+                
+                // Calculate market regime (non-blocking)
+                this._getCachedOrCalculateRegime(true).catch(err => {
+                    console.warn('[AutoScannerService] ⚠️ Regime calculation failed (non-critical):', err.message);
+                }),
+                
+                // Persist wallet summary (non-blocking)
+                this._persistLatestWalletSummary().catch(err => {
+                    console.warn('[AutoScannerService] ⚠️ Wallet summary persistence failed (non-critical):', err.message);
+                }),
+                
+                // Fetch Fear & Greed Index (non-blocking with timeout)
+                Promise.race([
+                    this._fetchFearAndGreedIndex(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Fear & Greed Index fetch timeout')), 15000))
+                ]).catch(err => {
+                    console.warn('[AutoScannerService] ⚠️ Fear & Greed Index loading failed (non-critical):', err.message);
+                }),
+                
+                // Calculate performance momentum (non-blocking with timeout)
+                Promise.race([
+                    this.performanceMetricsService.calculatePerformanceMomentum(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Performance momentum calculation timeout')), 5000))
+                ]).catch(err => {
+                    console.warn('[AutoScannerService] ⚠️ Performance momentum calculation failed (non-critical):', err.message);
+                })
+            ]).then(() => {
+                console.log('[AutoScannerService] ✅ Background operations completed');
+            }).catch(err => {
+                console.warn('[AutoScannerService] ⚠️ Some background operations failed (non-critical):', err.message);
+            });
 
             // Auto-start logic (if needed and not blocked)
             if (this._persistedRunningFlag && !this.isNavigating && !this._isAutoStartBlocked) {
                 console.log('[AutoScannerService] 🔄 Resuming scanner from previous session (claiming leadership)...');
+                
+                // OPTIMIZATION: Wallet already initialized above, no need to re-initialize
                 this.start();
                 this._persistedRunningFlag = false; // Reset after attempt to start
             }
@@ -1889,13 +1984,13 @@ class AutoScannerService {
             console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Attempt ${attempt}/${MAX_RETRIES} to load exchange info`);
 
             try {
-                const proxyUrl = this.state.settings?.local_proxy_url;
+                let proxyUrl = this.state.settings?.local_proxy_url;
                 console.log(`[AutoScannerService] [EXCHANGE_INFO] Proxy URL from settings: ${proxyUrl || 'NOT SET'}`);
 
                 if (!proxyUrl) {
-                    console.error('[AutoScannerService] [EXCHANGE_INFO] ❌ Proxy URL not configured in settings.');
-                    // If proxy URL is fundamentally missing, no point in retrying.
-                    return null;
+                    // Use default proxy URL as fallback
+                    proxyUrl = "http://localhost:3003";
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] Using default proxy URL: ${proxyUrl}`);
                 }
 
                 console.log(`[AutoScannerService] [EXCHANGE_INFO] 🌐 Calling liveTradingAPI with action: getExchangeInfo, mode: ${this.state.tradingMode}`);
@@ -1906,28 +2001,43 @@ class AutoScannerService {
                     proxyUrl: proxyUrl
                 };
 
-                const response = await queueFunctionCall(
-                    liveTradingAPI,
-                    requestParams,
-                    'critical',
-                    `exchangeInfo.${this.state.tradingMode}`, // Preserve original cache key
-                    300000, // Preserve original cache time
-                    30000   // Preserve original 30 second timeout
-                );
+                // Call liveTradingAPI directly to avoid queue delays
+                const response = await liveTradingAPI(requestParams);
 
-                if (!response?.data?.success) {
-                    const errorMsg = response?.data?.message || response?.data?.error || 'Unknown error from liveTradingAPI';
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response received:`, response);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response type:`, typeof response);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response success:`, response?.success);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response keys:`, Object.keys(response || {}));
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response.data:`, response?.data);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response.data.success:`, response?.data?.success);
+
+                // Handle both response formats:
+                // 1. Direct liveTradingAPI response: {success: true, data: {...}}
+                // 2. queueFunctionCall response: {data: {...}} (no success property)
+                const isSuccess = response?.success === true || (response?.data && !response?.success);
+                
+                if (!isSuccess) {
+                    const errorMsg = response?.message || response?.error || 'Unknown error from liveTradingAPI';
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Response not successful:`, { response, errorMsg });
                     throw new Error(errorMsg);
                 }
 
-                if (!response.data.data?.success) {
-                    const proxyError = response.data.data?.message || response.data.data?.error || 'Unknown proxy error';
-                    throw new Error(proxyError);
-                }
+                // The BinanceLocal server returns { success: true, data: { symbols: [...] } }
+                // So we don't need to check response.data.success since data doesn't have a success property
 
-                const exchangeInfoData = response.data.data.data;
+                const exchangeInfoData = response.data;
 
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info data:`, exchangeInfoData);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info data.symbols:`, exchangeInfoData?.symbols);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Is symbols array:`, Array.isArray(exchangeInfoData?.symbols));
+                
                 if (!exchangeInfoData || !Array.isArray(exchangeInfoData.symbols)) {
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Invalid exchange info structure:`, {
+                        hasData: !!exchangeInfoData,
+                        hasSymbols: !!exchangeInfoData?.symbols,
+                        symbolsType: typeof exchangeInfoData?.symbols,
+                        symbolsIsArray: Array.isArray(exchangeInfoData?.symbols)
+                    });
                     throw new Error('Invalid exchange info structure');
                 }
 
@@ -1975,6 +2085,39 @@ class AutoScannerService {
 
     getExchangeInfo() {
         return this.state.exchangeInfo;
+    }
+
+    _initializeWidgetDefaults() {
+        // Initialize Fear & Greed Index with default values for immediate display
+        if (!this.state.fearAndGreedData) {
+            this.state.fearAndGreedData = {
+                value: 50, // Neutral value
+                value_classification: "Neutral",
+                timestamp: Date.now(),
+                time_until_update: "Loading..."
+            };
+        }
+
+        // Initialize Performance Momentum with default values for immediate display
+        if (!this.state.performanceMomentum) {
+            this.state.performanceMomentum = {
+                score: 50, // Neutral score
+                trend: "stable",
+                timestamp: Date.now(),
+                components: {
+                    unrealized: 50,
+                    realized: 50,
+                    regime: 50,
+                    volatility: 50,
+                    opportunity: 50,
+                    fearGreed: 50,
+                    signalQuality: 50
+                }
+            };
+        }
+
+        // Notify subscribers to update UI with default values
+        this.notifySubscribers();
     }
 
     async start() {
@@ -2089,27 +2232,44 @@ class AutoScannerService {
 
     async _fetchFearAndGreedIndex() { // Marked async to allow await
         const now = Date.now();
+        
+        console.log('[AutoScannerService] [_fetchFearAndGreedIndex] Starting Fear & Greed Index fetch...');
+        console.log('[AutoScannerService] [_fetchFearAndGreedIndex] Time since last fetch:', now - this.lastFearAndGreedFetch, 'ms');
+        console.log('[AutoScannerService] [_fetchFearAndGreedIndex] Fetch interval:', this.fearAndGreedFetchInterval, 'ms');
+        
         if (now - this.lastFearAndGreedFetch < this.fearAndGreedFetchInterval) {
+            console.log('[AutoScannerService] [_fetchFearAndGreedIndex] Skipping fetch - too soon since last fetch');
             return;
         }
         this.lastFearAndGreedFetch = now;
 
         try {
-            const response = await queueFunctionCall(getFearAndGreedIndex, {}, 'low', 'fearAndGreedIndex', 300000, 30000);
+            console.log('[AutoScannerService] [_fetchFearAndGreedIndex] Calling getFearAndGreedIndex directly (bypassing queue)...');
+            const response = await getFearAndGreedIndex();
+            console.log('[AutoScannerService] [_fetchFearAndGreedIndex] Direct call response:', response);
+            
             if (response.data && response.data.data && response.data.data.length > 0) {
+                const fngData = response.data.data[0];
+                console.log('[AutoScannerService] [_fetchFearAndGreedIndex] Successfully fetched F&G data:', fngData);
+                
                 // Store in both locations for compatibility
-                this.fearAndGreedData = response.data.data[0];
-                this.state.fearAndGreedData = response.data.data[0];
+                this.fearAndGreedData = fngData;
+                this.state.fearAndGreedData = fngData;
 
                 if (this.fearAndGreedFailureCount > 0) {
-                    console.log('[AutoScannerService] [F&G Index] ✅ Successfully reconnected to Fear & Greed API');
                     this.fearAndGreedFailureCount = 0;
                 }
 
                 // Notify subscribers of state change
                 this.notifySubscribers();
+            } else {
+                console.error('[AutoScannerService] [_fetchFearAndGreedIndex] Invalid response structure:', response);
+                throw new Error('Invalid response structure from Fear & Greed API');
             }
         } catch (error) {
+            console.error('[AutoScannerService] [_fetchFearAndGreedIndex] Error details:', error);
+            console.error('[AutoScannerService] [_fetchFearAndGreedIndex] Error stack:', error.stack);
+            
             this.fearAndGreedFailureCount = (this.fearAndGreedFailureCount || 0) + 1;
 
             if (this.fearAndGreedFailureCount === 1) {
@@ -2449,12 +2609,12 @@ class AutoScannerService {
      * Helper method to consolidate and fetch prices for all relevant symbols.
      */
     async _consolidatePrices() {
-        if (this.isHardResetting) return;
+            if (this.isHardResetting) return;
 
         try {
             const allRequiredSymbols = new Set();
             // fiatCurrencies list from outline
-            const fiatCurrencies = new Set(['EUR', 'TRY', 'ZAR', 'GBP', 'AUD', 'BRL', 'JPY', 'RUB', 'UAH', 'NGN', 'PLN', 'RON', 'ARS', 'INR']);
+            const fiatCurrencies = new Set(['EUR', 'TRY', 'ZAR', 'GBP', 'AUD', 'BRL', 'JPY', 'RUB', 'UAH', 'NGN', 'PLN', 'RON', 'ARS', 'INR', 'CZK', 'MXN', 'COP']);
 
             // Define minimum thresholds to reduce API calls for dust
             const MIN_BALANCE_THRESHOLD = 0.001; // Minimum token quantity to consider
@@ -2517,25 +2677,33 @@ class AutoScannerService {
                 return;
             }
 
-            const response = await queueFunctionCall(
-                getBinancePrices,
-                { symbols: symbolsArray },
-                'critical', // As per outline
-                null,
-                0,
-                30000
-            );
+            console.log('[AutoScannerService] [_consolidatePrices] Calling getBinancePrices directly (bypassing queue)...');
+            const response = await getBinancePrices({ symbols: symbolsArray });
 
-            // Access response.data.data as per actual getBinancePrices structure
-            if (response && response.data && Array.isArray(response.data.data)) {
+
+            // getBinancePrices returns an array, but queueFunctionCall wraps it as { data: [...] }
+            let priceArray = null;
+            if (Array.isArray(response)) {
+                priceArray = response;
+            } else if (response && response.data && Array.isArray(response.data)) {
+                priceArray = response.data;
+            } else if (response && response.success && response.data && Array.isArray(response.data)) {
+                priceArray = response.data;
+            }
+
+
+            if (priceArray && Array.isArray(priceArray)) {
                 // Convert array of price objects to a map: { symbol: price }
                 const pricesMap = {};
                 let validPriceCount = 0;
 
-                response.data.data.forEach(item => { // Iterate response.data.data
-                    if (item.symbol && typeof item.price === 'number' && item.price > 0 && !item.error) {
-                        pricesMap[item.symbol.replace('/', '')] = item.price; // Keep .replace('/', '')
-                        validPriceCount++;
+                priceArray.forEach(item => { // Iterate priceArray
+                    if (item.symbol && item.price && !item.error) {
+                        const price = parseFloat(item.price);
+                        if (price > 0) {
+                            pricesMap[item.symbol.replace('/', '')] = price; // Keep .replace('/', '')
+                            validPriceCount++;
+                        }
                     }
                 });
 
@@ -2561,13 +2729,14 @@ class AutoScannerService {
 
     /**
      * Helper method to load active strategies.
-     * In a normal scan cycle, this simply returns the strategies already loaded into state.
+     * OPTIMIZED: Uses internal method for faster loading without external dependencies.
      * @returns {Array} List of active strategies.
      */
     async _loadStrategies() {
         console.log('[AutoScannerService] 📋 Loading strategies...');
 
-        const strategies = await this.strategyManager.loadActiveStrategies(this.state.tradingMode);
+        // OPTIMIZATION: Use internal method to avoid duplicate database calls
+        const strategies = await this.strategyManager._loadAndFilterStrategiesInternal();
 
         // CRITICAL FIX: Build activeStrategies map for PositionManager lookups
         const activeStrategiesMap = new Map();
@@ -2814,6 +2983,7 @@ class AutoScannerService {
             // 2. Update HistoricalPerformance snapshots
             console.log('[AutoScannerService] Calling updatePerformanceSnapshot function...');
             const response = await queueFunctionCall(
+                'updatePerformanceSnapshot',
                 updatePerformanceSnapshot,
                 { mode: this.state.tradingMode },
                 'normal',
@@ -2897,7 +3067,7 @@ class AutoScannerService {
             // Refresh market alert cache
             try {
                 console.log('[AutoScannerService] Refreshing market alert cache...');
-                await refreshMarketAlertCache({ limit: 10, timeoutMs: 30000 });
+                await refreshMarketAlertCache({ limit: 10, timeoutMs: 10000 });
                 this.state.marketAlerts = getMarketAlertCache();
                 this.addLog(`[MarketAlerts] Cache refreshed. ${this.state.marketAlerts.length} alerts loaded.`, 'info');
             } catch (e) {
@@ -3175,11 +3345,11 @@ class AutoScannerService {
 
     async _updateMarketRegime() {
         try {
-            const symbol = 'BTC/USDT';
+            const symbol = 'BTCUSDT'; // Use Binance format (no slash)
             const timeframe = '4h';
             const klineLimit = 300;
 
-            const response = await queueFunctionCall(getKlineData, { symbols: [symbol], interval: timeframe, limit: klineLimit });
+            const response = await queueFunctionCall('getKlineData', getKlineData, { symbols: [symbol], interval: timeframe, limit: klineLimit });
 
             const responseData = response.data;
 

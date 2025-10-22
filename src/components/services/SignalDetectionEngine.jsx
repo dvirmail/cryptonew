@@ -4,7 +4,7 @@ import { evaluateSignalConditions, getSignalValue } from '@/components/utils/sig
 import { queueFunctionCall, apiQueue, queueEntityCall } from '@/components/utils/apiQueue';
 import { calculateConvictionScore } from '../utils/convictionScoring';
 import { calculateVolatilityAdjustedSize, calculateFixedSize } from '@/components/utils/dynamicPositionSizing';
-import { PositionSizeValidator } from '@/components/utils/positionSizeValidator';
+import { positionSizeValidator } from '@/components/utils/positionSizeValidator';
 import { getKlineData } from '@/api/functions';
 import { getBinancePrices } from '@/api/functions';
 import { MarketAlert } from '@/api/entities';
@@ -1432,7 +1432,7 @@ export class SignalDetectionEngine {
                     });
                     groupMaxKlineLimit = calculateMaxRequiredKlineLimit(signalSettingsForGroup);
 
-                    const klinePromise = queueFunctionCall(getKlineData, {
+                    const klinePromise = queueFunctionCall('getKlineData', getKlineData, {
                         symbols: [coin],
                         interval: timeframe,
                         limit: groupMaxKlineLimit

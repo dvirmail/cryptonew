@@ -24,7 +24,7 @@ const Slider = React.forwardRef(({ className, min = 0, max = 100, step = 1, valu
         className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700 slider"
         {...props}
       />
-      <style jsx>{`
+      <style>{`
         .slider::-webkit-slider-thumb {
           appearance: none;
           height: 20px;

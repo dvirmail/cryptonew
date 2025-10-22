@@ -60,7 +60,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 
 // Providers and Context
-import { ToastProvider, useToast } from '@/components/ui/toast';
+import { useToast } from '@/components/ui/use-toast';
 import { WalletProvider } from '@/components/providers/WalletProvider';
 import { LivePriceProvider, LivePriceContext } from '@/components/providers/LivePriceProvider';
 import { TradingModeProvider, useTradingMode } from '@/components/providers/TradingModeProvider';
@@ -542,8 +542,7 @@ function AppLayout({ children, currentPageName }) {
 // Main export with providers
 export default function Layout({ children, currentPageName }) {
     return (
-        <ToastProvider>
-          <TradingModeProvider>
+        <TradingModeProvider>
             <WalletProvider>
                 <LivePriceProvider>
                     <AppLayout currentPageName={currentPageName}>
@@ -551,8 +550,7 @@ export default function Layout({ children, currentPageName }) {
                     </AppLayout>
                 </LivePriceProvider>
             </WalletProvider>
-          </TradingModeProvider>
-        </ToastProvider>
+        </TradingModeProvider>
     );
 }
 

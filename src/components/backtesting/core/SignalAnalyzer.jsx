@@ -53,14 +53,22 @@ export const analyzeSignalChunk = ({
         try {
             const marketRegime = get(marketRegimesHistory, `[${i}].regime`, 'unknown');
             
-            // Added logging from analyzeCandle outline
-            if (onLog && i < 5) {
+            // Smart sampling: only log first few candles to avoid spam
+            if (onLog && i < 3) {
                 onLog(`[SIGNAL_ANALYZER] Analyzing candle ${i} (${candle.time}) for signals`, 'debug');
             }
 
+            // CRITICAL DEBUG: Log before calling evaluateSignalCondition
+            if (onLog && i < 3) {
+                onLog(`[SIGNAL_ANALYZER] About to call evaluateSignalCondition for candle ${i}`, 'debug');
+                onLog(`[SIGNAL_ANALYZER] Signal settings keys: ${Object.keys(signalSettings).join(', ')}`, 'debug');
+                onLog(`[SIGNAL_ANALYZER] BBW enabled: ${signalSettings.bbw?.enabled}`, 'debug');
+                onLog(`[SIGNAL_ANALYZER] TTM_SQUEEZE enabled: ${signalSettings.ttm_squeeze?.enabled}`, 'debug');
+            }
+            
             const rawFoundSignals = evaluateSignalCondition(candle, indicators, i, signalSettings, marketRegime, onLog, true);
             
-            if (onLog && i < 5) {
+            if (onLog && i < 3) {
                 onLog(`[SIGNAL_ANALYZER] Candle ${i}: evaluateSignalCondition returned ${rawFoundSignals.length} signals`, 'debug');
             }
 
@@ -85,7 +93,8 @@ export const analyzeSignalChunk = ({
                 signalTypesFound.add(signal.type);
             }
 
-            if (onLog && i < 5) {
+            // Smart sampling: only log first few candles to avoid spam
+            if (onLog && i < 3) {
                 onLog(`[SIGNAL_ANALYZER] Candle ${i}: Final output ${allCandleSignals.length} signals. Types: ${Array.from(signalTypesFound).join(', ')}`, 'debug');
             }
             // End of added logging from analyzeCandle outline

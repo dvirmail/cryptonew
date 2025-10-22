@@ -2,7 +2,7 @@
 /**
  * Momentum-based technical indicators
  */
-import { calculateMA } from './trendIndicators'; // New import for MA
+import { calculateMA } from './helpers'; // New import for MA
 // The old import { calculateRSI } from './helpers'; is removed as RSI is now defined locally.
 
 // --- DEEP DIAGNOSTIC REWRITE ---

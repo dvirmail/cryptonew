@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Badge } from '@/components/ui/badge';
-import { SlidersHorizontal, TrendingUp, Activity, Zap, BarChart3, Layers, Eye } from 'lucide-react';
+import { SlidersHorizontal, TrendingUp, Activity, Zap, BarChart3, Layers, Eye, ChevronDown } from 'lucide-react';
 import { SIGNAL_CATEGORIES } from '../utils/signalSettings';
 
 const ICONS = { TrendingUp, Activity, Zap, BarChart3, Layers, Eye };
@@ -132,7 +132,7 @@ const TechnicalSignalPanel = ({
 
             return (
               <AccordionItem value={categoryName} key={categoryName} className="border bg-gray-50 dark:bg-gray-900/40 rounded-lg">
-                <AccordionTrigger className="p-4 hover:no-underline">
+                <div className="p-4 border-b border-gray-200 dark:border-gray-800">
                   <div className="flex items-center justify-between w-full">
                     <div className="flex items-center gap-4">
                       <Icon className="h-6 w-6 text-primary" />
@@ -141,21 +141,24 @@ const TechnicalSignalPanel = ({
                         <p className="text-sm text-muted-foreground text-left">{categoryData.description}</p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-4 pr-4">
+                    <div className="flex items-center gap-4">
                       <Badge variant={stats.enabled > 0 ? "default" : "secondary"}>
                         {stats.enabled} / {stats.total} Enabled
                       </Badge>
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleSignalGroup(categoryData.signals, !allEnabled);
-                        }}
+                        onClick={() => toggleSignalGroup(categoryData.signals, !allEnabled)}
                       >
                         {allEnabled ? "Disable All" : "Enable All"}
                       </Button>
                     </div>
+                  </div>
+                </div>
+                <AccordionTrigger className="p-4 hover:no-underline">
+                  <div className="flex items-center justify-between w-full">
+                    <span className="text-sm text-muted-foreground">Click to expand/collapse signals</span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200" />
                   </div>
                 </AccordionTrigger>
                 <AccordionContent className="p-4 border-t border-gray-200 dark:border-gray-800">

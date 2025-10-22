@@ -1,0 +1,32 @@
+[
+  {
+    "id": "pos_1761154189308_14n7xb40i",
+    "wallet_id": "wallet_test_123",
+    "position_id": "test_pos_456",
+    "strategy_name": "Test Strategy",
+    "symbol": "BTCUSDT",
+    "direction": "long",
+    "entry_price": 50000,
+    "quantity_crypto": 0.001,
+    "entry_value_usdt": 50,
+    "status": "open",
+    "trading_mode": "testnet",
+    "created_date": "2025-10-22T17:29:49.308Z",
+    "updated_date": "2025-10-22T17:29:49.308Z"
+  },
+  {
+    "id": "pos_1761154464851_knogfyrbe",
+    "wallet_id": "wallet_1761154189308_ll52c7zw9",
+    "position_id": "real_pos_789",
+    "strategy_name": "Momentum Strategy",
+    "symbol": "ETHUSDT",
+    "direction": "long",
+    "entry_price": 3500,
+    "quantity_crypto": 0.1,
+    "entry_value_usdt": 350,
+    "status": "open",
+    "trading_mode": "testnet",
+    "created_date": "2025-10-22T17:34:24.851Z",
+    "updated_date": "2025-10-22T17:34:24.851Z"
+  }
+]

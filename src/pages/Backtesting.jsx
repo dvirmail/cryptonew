@@ -332,6 +332,12 @@ const loadSavedConfig = () => {
       if (savedConfigString) {
         const savedConfig = JSON.parse(savedConfigString);
         const loadedSignalSettings = deepClone(defaultInternalSignalSettings);
+        
+      // Ensure BBW is enabled with correct threshold
+      if (loadedSignalSettings.bbw) {
+        loadedSignalSettings.bbw.enabled = true;
+        loadedSignalSettings.bbw.threshold = 2.0;
+      }
 
         if (savedConfig.signalSettings) {
             const keyMigrationMap = {
@@ -554,7 +560,24 @@ export default function Backtesting() {
 
     // Step 4: Align combinations to only include those present in finalFilteredMatches
     const optimalCombinationNames = new Set(finalFilteredMatches.map(match => match.combinationName));
-    const finalCombinationsWithMeta = combinationsMeetingProfitFactor.filter(combo => optimalCombinationNames.has(combo.combinationName));
+    
+    // DIAGNOSTIC: Log the combination names to see the mismatch
+    logCallback(`[BACKTESTING] DEBUG: finalFilteredMatches sample names: ${finalFilteredMatches.slice(0, 3).map(m => m.combinationName).join(', ')}`, 'debug');
+    logCallback(`[BACKTESTING] DEBUG: combinationsMeetingProfitFactor sample names: ${combinationsMeetingProfitFactor.slice(0, 3).map(c => c.combinationName).join(', ')}`, 'debug');
+    logCallback(`[BACKTESTING] DEBUG: optimalCombinationNames size: ${optimalCombinationNames.size}`, 'debug');
+    
+    // FIX: Handle regime-aware mode where combination names have (DOWNTREND) suffixes
+    const finalCombinationsWithMeta = combinationsMeetingProfitFactor.filter(combo => {
+      // Check exact match first
+      if (optimalCombinationNames.has(combo.combinationName)) {
+        return true;
+      }
+      
+      // Check if the combination name without regime suffix matches
+      const baseName = combo.combinationName.replace(/\s+\([^)]+\)$/, ''); // Remove (DOWNTREND) suffix
+      return optimalCombinationNames.has(baseName);
+    });
+    
     logCallback(`[BACKTESTING] Final unique high-quality strategies: ${finalCombinationsWithMeta.length}`, 'success');
 
     return {
@@ -907,7 +930,7 @@ export default function Backtesting() {
       for (const result of signalCombinations) {
         const combinationData = {
           coin: result.coin, timeframe: result.timeframe, signals: result.signals || [],
-          signalCount: result.signals?.length || 0, combinedStrength: result.combinedStrength || 0,
+          signalCount: result.signals?.length || 0, combinedStrength: result.combinedStrength || (result.signals?.reduce((sum, signal) => sum + (signal.strength || 0), 0) || 0),
           successRate: result.successRate || 0, occurrences: result.occurrences || 0,
           occurrenceDates: result.matches?.map(m => m.time) || [], avgPriceMove: result.netAveragePriceMove || 0,
           recommendedTradingStrategy: '', includedInScanner: false,
@@ -1131,7 +1154,25 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
 
     // NEW: Apply Minimum Average Price Move filter
     logCallback(`[BACKTESTING] Applying Minimum Average Price Move filter (>= ${minAveragePriceMove}%)`, 'info');
-    const finalCombinations = allFinalCombinations.filter(c => c.netAveragePriceMove >= minAveragePriceMove);
+    
+    // DIAGNOSTIC: Log the first few combinations to see what properties they have
+    if (allFinalCombinations.length > 0) {
+        const sampleCombo = allFinalCombinations[0];
+        logCallback(`[BACKTESTING] Sample combination properties: ${JSON.stringify(Object.keys(sampleCombo))}`, 'debug');
+        logCallback(`[BACKTESTING] Sample combination netAveragePriceMove: ${sampleCombo.netAveragePriceMove}, avgPriceMove: ${sampleCombo.avgPriceMove}`, 'debug');
+        logCallback(`[BACKTESTING] Sample combination dominantMarketRegime: ${sampleCombo.dominantMarketRegime}`, 'debug');
+        logCallback(`[BACKTESTING] Sample combination marketRegimeDistribution: ${JSON.stringify(sampleCombo.marketRegimeDistribution)}`, 'debug');
+    }
+    
+    const finalCombinations = allFinalCombinations.filter(c => {
+        const avgMove = c.netAveragePriceMove || c.avgPriceMove || 0;
+        const passes = avgMove >= minAveragePriceMove;
+        if (!passes && allFinalCombinations.indexOf(c) < 3) {
+            logCallback(`[BACKTESTING] Combination ${allFinalCombinations.indexOf(c) + 1} failed avg move filter: ${avgMove}% < ${minAveragePriceMove}%`, 'debug');
+        }
+        return passes;
+    });
+    
     if (allFinalCombinations.length !== finalCombinations.length) {
         logCallback(`[BACKTESTING] ${finalCombinations.length}/${allFinalCombinations.length} combinations passed the avg. move filter.`, 'success');
     }
@@ -1202,6 +1243,23 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
     // FIX: Use case-insensitive comparison for found signals
     const foundSignalsLower = Object.keys(aggregatedSignalCounts).map(s => s.toLowerCase());
     const notFoundSignals = enabledSignalKeys.filter(key => !foundSignalsLower.includes(key.toLowerCase()));
+    
+    // DIAGNOSTIC: Log enabled signals and found signals for debugging
+    logCallback(`[BACKTESTING] Enabled signals: ${enabledSignalKeys.join(', ')}`, 'debug');
+    logCallback(`[BACKTESTING] Found signals: ${Object.keys(aggregatedSignalCounts).join(', ')}`, 'debug');
+    logCallback(`[BACKTESTING] Not found signals: ${notFoundSignals.join(', ')}`, 'debug');
+    
+    // DIAGNOSTIC: Check if the missing signals are actually enabled in signal settings
+    const missingSignalSettings = notFoundSignals.map(signal => {
+      const setting = currentRunSignalSettings[signal];
+      return `${signal}: enabled=${setting?.enabled}, settings=${JSON.stringify(setting)}`;
+    });
+    logCallback(`[BACKTESTING] Missing signal settings: ${missingSignalSettings.join(', ')}`, 'debug');
+    
+    // DIAGNOSTIC: Check if the missing signals are in the calculated indicators
+    const calculatedIndicators = Object.keys(aggregatedSignalCounts);
+    const missingInCalculated = notFoundSignals.filter(signal => !calculatedIndicators.includes(signal));
+    logCallback(`[BACKTESTING] Missing signals not in calculated indicators: ${missingInCalculated.join(', ')}`, 'debug');
 
     let summaryLog = "\n\n--- Backtest Signal Summary ---\n\n";
     summaryLog += `✅ Found Signals (${Object.keys(aggregatedSignalCounts).length}):\n`;
@@ -1821,6 +1879,7 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
                 timeframe={timeframe}
                 getPandasTaSignalType={getPandasTaSignalType}
                 minProfitFactor={minProfitFactor}
+                selectedCoins={selectedCoins}
               />
             </div>
             {signalCombinations.length > 0 && !loading && (
@@ -1990,6 +2049,7 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
                               timeframe={timeframe}
                               getPandasTaSignalType={getPandasTaSignalType}
                               minProfitFactor={minProfitFactor}
+                              selectedCoins={selectedCoins}
                           />
                       </CardFooter>
                   </Card>

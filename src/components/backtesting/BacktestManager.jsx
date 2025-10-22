@@ -300,7 +300,19 @@ const BacktestManager = ({
           estimatedExitTimeMinutes,
         };
       })
-      .filter(combo => combo.successRate >= 50 && combo.occurrences > 1);
+      .filter(combo => {
+        const passesSuccessRate = combo.successRate >= 50;
+        const passesOccurrences = combo.occurrences > 1;
+        const passesAvgPriceMove = combo.avgPriceMove >= 0.5; // 0.5% minimum average price move
+        
+        console.log(`[FINAL_FILTER] Combination: ${combo.combinationName || 'Unknown'}`);
+        console.log(`[FINAL_FILTER]   • Success Rate: ${combo.successRate.toFixed(1)}% (>= 50%: ${passesSuccessRate})`);
+        console.log(`[FINAL_FILTER]   • Occurrences: ${combo.occurrences} (> 1: ${passesOccurrences})`);
+        console.log(`[FINAL_FILTER]   • Avg Price Move: ${combo.avgPriceMove.toFixed(2)}% (>= 0.5%: ${passesAvgPriceMove})`);
+        console.log(`[FINAL_FILTER]   • Passes all filters: ${passesSuccessRate && passesOccurrences && passesAvgPriceMove}`);
+        
+        return passesSuccessRate && passesOccurrences && passesAvgPriceMove;
+      });
 
     log(`Found ${successfulCombinations.length} combinations meeting success criteria.`);
     

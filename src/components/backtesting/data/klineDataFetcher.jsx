@@ -47,59 +47,104 @@ export const fetchDataForCoins = async ({
   if (onLog) onLog(`[KLINE_BATCH] Required candles: ~${requiredCandles.toLocaleString()} per symbol`, 'info');
 
   try {
-    const params = {
-      symbols: coinsToFetch, // Send all symbols at once
-      interval: currentTimeframe,
-      limit: 1000, // Max per request
-      source: 'backtesting_fetcher_batch',
-    };
-
-    if (dataLoadingProgressSetter) dataLoadingProgressSetter(10);
-
-    const response = await queueFunctionCall(
-      getKlineData,
-      params,
-      'critical',
-      null, // No custom cache key
-      60000, // 1 minute cache
-      300000 // 5 minute timeout for batch
-    );
-
-    if (dataLoadingProgressSetter) dataLoadingProgressSetter(80);
-
-    const responseData = response?.data;
-    
-    if (!responseData || typeof responseData !== 'object') {
-      throw new Error('Invalid response from getKlineData: expected an object.');
-    }
-
-    // Process results for each coin
+    const MAX_PER_REQUEST = 1000;
     const results = {};
-    let successCount = 0;
-    let failCount = 0;
-
+    
+    // Initialize results for all coins
     for (const coin of coinsToFetch) {
-      const coinResult = responseData[coin];
-
-      if (!coinResult || !coinResult.success) {
-        const fetchError = coinResult?.error || 'No data returned for coin.';
-        results[coin] = { success: false, error: fetchError, data: [] };
-        failCount++;
-        if (onLog) onLog(`[KLINE_BATCH] ❌ ${coin}: ${fetchError}`, 'warning');
-        continue;
+      results[coin] = {
+        success: false,
+        data: [],
+        error: null
+      };
+    }
+    
+    // Calculate how many requests we need for each coin
+    const requestsNeeded = Math.ceil(requiredCandles / MAX_PER_REQUEST);
+    
+    if (onLog) onLog(`[KLINE_BATCH] Need ${requestsNeeded} requests per coin to get ${requiredCandles.toLocaleString()} candles`, 'info');
+    
+    // Process each coin individually to handle large data requirements
+    for (const coin of coinsToFetch) {
+      if (onLog) onLog(`[KLINE_BATCH] Processing ${coin}...`, 'info');
+      
+      let allKlines = [];
+      let endTime = Date.now();
+      
+      for (let i = 0; i < requestsNeeded; i++) {
+        if (dataLoadingProgressSetter) {
+          dataLoadingProgressSetter((i / requestsNeeded) * 100);
+        }
+        
+        const limit = Math.min(MAX_PER_REQUEST, requiredCandles - allKlines.length);
+        
+        if (limit <= 0) {
+          if (onLog) onLog(`[${coin}] Sufficient candles fetched (${allKlines.length}). Breaking fetch loop.`, 'info');
+          break;
+        }
+        
+        const params = {
+          symbols: [coin.replace('/', '')], // Remove slash for Binance API
+          interval: currentTimeframe,
+          limit: limit,
+          source: 'backtesting_fetcher_batch',
+        };
+        
+        if (i > 0) {
+          params.endTime = endTime;
+        }
+        
+        try {
+          const response = await queueFunctionCall(
+            'getKlineData',
+            getKlineData,
+            params,
+            'critical',
+            null,
+            60000,
+            300000
+          );
+          
+          const responseData = response?.data;
+          
+          if (!responseData || typeof responseData !== 'object') {
+            throw new Error('Invalid response from getKlineData: expected an object.');
+          }
+          
+          const coinResult = responseData[coin.replace('/', '')];
+          
+          if (!coinResult || !coinResult.success) {
+            const fetchError = coinResult?.error || 'No data or success=false returned for coin.';
+            throw new Error(fetchError);
+          }
+          
+          const klines = coinResult.data;
+          
+          if (!Array.isArray(klines)) {
+            throw new Error('Invalid kline data format: expected an array.');
+          }
+          
+          if (klines.length === 0) {
+            if (onLog) onLog(`[${coin}] Kline data chunk fetch returned 0 candles on attempt #${i + 1}.`, 'warning');
+            break; 
+          }
+          
+          allKlines = [...klines, ...allKlines];
+          endTime = klines[0][0] - 1; 
+          
+          if (klines.length < MAX_PER_REQUEST) {
+            if (onLog) onLog(`[${coin}] Received ${klines.length} candles, less than max limit (${MAX_PER_REQUEST}). Assuming end of history. Halting fetch loop.`, 'info');
+            break; 
+          }
+          
+        } catch (e) {
+          if (onLog) onLog(`[${coin}] Critical error during fetch attempt #${i + 1}: ${e.message}`, 'error');
+          throw e;
+        }
       }
-
-      const klines = coinResult.data;
-
-      if (!Array.isArray(klines) || klines.length === 0) {
-        results[coin] = { success: false, error: 'No kline data returned', data: [] };
-        failCount++;
-        if (onLog) onLog(`[KLINE_BATCH] ❌ ${coin}: No data`, 'warning');
-        continue;
-      }
-
-      // Format the data
-      const formattedData = klines.map(k => ({
+      
+      // Format the data for this coin
+      const formattedData = allKlines.map(k => ({
         time: k[0],
         open: parseFloat(k[1]),
         high: parseFloat(k[2]),
@@ -117,36 +162,22 @@ export const fetchDataForCoins = async ({
 
       // Sort chronologically
       formattedData.sort((a, b) => a.time - b.time);
-
+      
+      // Store the results for this coin
       results[coin] = {
         success: true,
-        data: formattedData,
-        error: null,
+        data: formattedData
       };
-      successCount++;
+      
+      if (onLog) onLog(`[${coin}] Successfully fetched ${formattedData.length} candles`, 'info');
     }
-
+    
     if (dataLoadingProgressSetter) dataLoadingProgressSetter(100);
     
-    if (onLog) {
-      onLog(`[KLINE_BATCH] ✅ Batch complete: ${successCount} success, ${failCount} failed`, 'success');
-    }
-
     return results;
-
   } catch (error) {
-    if (onLog) onLog(`[KLINE_BATCH] ❌ Batch fetch failed: ${error.message}`, 'error');
-    
-    // Return error results for all coins
-    const results = {};
-    for (const coin of coinsToFetch) {
-      results[coin] = {
-        success: false,
-        error: `Batch fetch failed: ${error.message}`,
-        data: []
-      };
-    }
-    return results;
+    if (onLog) onLog(`[KLINE_BATCH] Batch fetch failed: ${error.message}`, 'error');
+    throw error;
   }
 };
 
@@ -181,7 +212,7 @@ export const fetchDataForCoin = async ({
     }
 
     const params = {
-      symbols: [coinToFetch],
+      symbols: [coinToFetch.replace('/', '')], // Remove slash for Binance API
       interval: currentTimeframe,
       limit: limit,
       source: 'backtesting_fetcher',
@@ -193,6 +224,7 @@ export const fetchDataForCoin = async ({
 
     try {
       const response = await queueFunctionCall(
+        'getKlineData',
         getKlineData,
         params,
         'critical'
@@ -203,7 +235,7 @@ export const fetchDataForCoin = async ({
           throw new Error('Invalid response from getKlineData: expected an object.');
       }
 
-      const coinResult = responseData[coinToFetch];
+      const coinResult = responseData[coinToFetch.replace('/', '')];
 
       if (!coinResult || !coinResult.success) {
           const fetchError = coinResult?.error || 'No data or success=false returned for coin.';
@@ -230,43 +262,35 @@ export const fetchDataForCoin = async ({
       }
 
     } catch (e) {
-      const errorMessage = e.message || 'An unknown error occurred during data fetch.';
-      if (onLog) onLog(`[${coinToFetch}] Critical error during fetch attempt #${i + 1}: ${errorMessage}`, 'error');
-      return { success: false, error: `Critical failure on data fetch #${i + 1}: ${errorMessage}`, data: [] };
+      if (onLog) onLog(`[${coinToFetch}] Critical error during fetch attempt #${i + 1}: ${e.message}`, 'error');
+      throw e;
     }
   }
 
-  if (allKlines.length === 0) {
-      return { success: false, error: 'No kline data could be fetched after all attempts.', data: [] };
-  }
-
-  if (onLog) onLog(`[${coinToFetch}] Completed fetch. Loaded ${allKlines.length.toLocaleString()} raw candles. Now processing...`, 'success');
-  if (dataLoadingProgressSetter) dataLoadingProgressSetter(98);
-
+  // Format the data
   const formattedData = allKlines.map(k => ({
-      time: k[0],
-      open: parseFloat(k[1]),
-      high: parseFloat(k[2]),
-      low: parseFloat(k[3]),
-      close: parseFloat(k[4]),
-      volume: parseFloat(k[5]),
-      closeTime: k[6],
-      quoteAssetVolume: parseFloat(k[7]),
-      trades: k[8],
-      takerBuyBaseAssetVolume: parseFloat(k[9]),
-      takerBuyQuoteAssetVolume: parseFloat(k[10]),
-      ignore: k[11],
-      coin: coinToFetch
+    time: k[0],
+    open: parseFloat(k[1]),
+    high: parseFloat(k[2]),
+    low: parseFloat(k[3]),
+    close: parseFloat(k[4]),
+    volume: parseFloat(k[5]),
+    closeTime: k[6],
+    quoteAssetVolume: parseFloat(k[7]),
+    trades: k[8],
+    takerBuyBaseAssetVolume: parseFloat(k[9]),
+    takerBuyQuoteAssetVolume: parseFloat(k[10]),
+    ignore: k[11],
+    coin: coinToFetch
   }));
 
+  // Sort chronologically
   formattedData.sort((a, b) => a.time - b.time);
 
   if (dataLoadingProgressSetter) dataLoadingProgressSetter(100);
-  if (onLog) onLog(`[${coinToFetch}] Successfully processed ${formattedData.length} candles into the required format.`, 'success');
 
   return {
     success: true,
-    data: formattedData,
-    error: null,
+    data: formattedData
   };
 };

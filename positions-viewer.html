@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Positions Viewer</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-label {
+            font-size: 14px;
+            color: #6c757d;
+            margin-top: 5px;
+        }
+        .table-container {
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+        th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }
+        tr:hover {
+            background-color: #f8f9fa;
+        }
+        .status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status.open {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status.trailing {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .status.closed {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .direction {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .direction.long {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        .direction.short {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .refresh-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 20px;
+        }
+        .refresh-btn:hover {
+            background: #5a6fd8;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            margin: 20px;
+            border-radius: 4px;
+            border: 1px solid #f5c6cb;
+        }
+        .no-positions {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Open Positions (<span id="positionCount">0</span>)</h1>
+            <p>Real-time view of all trading positions</p>
+        </div>
+        
+        <div class="stats" id="stats">
+            <div class="stat-item">
+                <div class="stat-value" id="openPositions">-</div>
+                <div class="stat-label">Open Positions</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="totalValue">-</div>
+                <div class="stat-label">Total Value (USDT)</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="totalPnL">-</div>
+                <div class="stat-label">Total P&L</div>
+            </div>
+        </div>
+
+        <button class="refresh-btn" onclick="loadPositions()">🔄 Refresh Positions</button>
+
+        <div id="content">
+            <div class="loading">Loading positions...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:3003';
+        
+        async function loadPositions() {
+            const contentDiv = document.getElementById('content');
+            contentDiv.innerHTML = '<div class="loading">Loading positions...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/livePositions`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayPositions(data.data);
+                    updateStats(data.data);
+                } else {
+                    throw new Error('Failed to load positions');
+                }
+            } catch (error) {
+                console.error('Error loading positions:', error);
+                contentDiv.innerHTML = `
+                    <div class="error">
+                        <strong>Error loading positions:</strong><br>
+                        ${error.message}<br><br>
+                        Make sure the proxy server is running on port 3003.
+                    </div>
+                `;
+            }
+        }
+        
+        function displayPositions(positions) {
+            const contentDiv = document.getElementById('content');
+            
+            if (positions.length === 0) {
+                contentDiv.innerHTML = `
+                    <div class="no-positions">
+                        <h3>No positions found</h3>
+                        <p>No trading positions are currently open.</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            const tableHTML = `
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Symbol</th>
+                                <th>Entry Price</th>
+                                <th>Current Price</th>
+                                <th>Quantity</th>
+                                <th>Value (USDT)</th>
+                                <th>Unrealized P&L</th>
+                                <th>Status</th>
+                                <th>Entry Time</th>
+                                <th>Time Left</th>
+                                <th>SL/TP/Trailing</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${positions.map(position => {
+                                // Calculate current price (mock for demo - in real app this would come from market data)
+                                const currentPrice = position.entry_price ? position.entry_price * (1 + (Math.random() - 0.5) * 0.1) : 0;
+                                
+                                // Calculate unrealized P&L
+                                const entryValue = position.entry_value_usdt || 0;
+                                const currentValue = currentPrice * (position.quantity_crypto || 0);
+                                const unrealizedPnL = currentValue - entryValue;
+                                const pnlPercentage = entryValue > 0 ? (unrealizedPnL / entryValue) * 100 : 0;
+                                
+                                // Format entry time
+                                const entryTimestamp = position.entry_timestamp || position.created_date;
+                                const entryTime = entryTimestamp ? new Date(entryTimestamp).toLocaleDateString('en-US', { 
+                                    month: 'short', 
+                                    day: 'numeric', 
+                                    hour: '2-digit', 
+                                    minute: '2-digit' 
+                                }) : 'N/A';
+                                
+                                // Calculate time left (mock for demo)
+                                const entryTimestamp = position.entry_timestamp || position.created_date;
+                                const timeExitHours = position.time_exit_hours || 24;
+                                
+                                let timeLeft = 'N/A';
+                                if (entryTimestamp) {
+                                    const entryTime = new Date(entryTimestamp);
+                                    const exitTime = new Date(entryTime.getTime() + (timeExitHours * 60 * 60 * 1000));
+                                    const now = new Date();
+                                    const timeLeftMs = exitTime.getTime() - now.getTime();
+                                    
+                                    if (timeLeftMs <= 0) {
+                                        const overdueMs = Math.abs(timeLeftMs);
+                                        const totalSeconds = Math.floor(overdueMs / 1000);
+                                        const hours = Math.floor((totalSeconds % (3600 * 24)) / 3600);
+                                        const minutes = Math.floor((totalSeconds % 3600) / 60);
+                                        timeLeft = `Overdue by ${hours}h ${minutes}m`;
+                                    } else {
+                                        const totalSeconds = Math.floor(timeLeftMs / 1000);
+                                        const hours = Math.floor(totalSeconds / 3600);
+                                        const minutes = Math.floor((totalSeconds % 3600) / 60);
+                                        timeLeft = `${hours}h ${minutes}m left`;
+                                    }
+                                }
+                                
+                                return `
+                                    <tr>
+                                        <td>
+                                            <strong>${position.symbol || 'N/A'}</strong><br>
+                                            <small style="color: #666;">${position.strategy_name || 'Unknown Strategy'}</small>
+                                        </td>
+                                        <td>$${position.entry_price ? position.entry_price.toLocaleString() : 'N/A'}</td>
+                                        <td style="color: ${currentPrice > position.entry_price ? '#10b981' : currentPrice < position.entry_price ? '#ef4444' : '#6b7280'};">$${currentPrice.toFixed(2)}</td>
+                                        <td>${position.quantity_crypto ? position.quantity_crypto.toFixed(4) : 'N/A'}</td>
+                                        <td style="color: ${currentPrice > position.entry_price ? '#10b981' : currentPrice < position.entry_price ? '#ef4444' : '#6b7280'};">$${entryValue.toFixed(2)}</td>
+                                        <td style="color: ${unrealizedPnL >= 0 ? '#10b981' : '#ef4444'};">
+                                            ${unrealizedPnL >= 0 ? '+' : ''}$${unrealizedPnL.toFixed(2)} (${pnlPercentage >= 0 ? '+' : ''}${pnlPercentage.toFixed(2)}%)
+                                            ${unrealizedPnL >= 0 ? '↗️' : '↘️'}
+                                        </td>
+                                        <td><span class="status ${position.status || 'unknown'}">${position.status || 'N/A'}</span></td>
+                                        <td>${entryTime}</td>
+                                        <td style="color: ${timeLeft.includes('Overdue') ? '#ef4444' : '#10b981'};">
+                                            ${timeLeft}
+                                        </td>
+                                        <td>
+                                            SL: $${(position.entry_price * 0.95).toFixed(2)} (-5.00%)<br>
+                                            TP: $${(position.entry_price * 1.05).toFixed(2)} (+5.00%)<br>
+                                            <span style="color: #3b82f6;">Trailing: Off</span>
+                                        </td>
+                                        <td>
+                                            <button style="background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                                                Close
+                                            </button>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            
+            contentDiv.innerHTML = tableHTML;
+        }
+        
+        function updateStats(positions) {
+            const openPositions = positions.filter(p => p.status === 'open').length;
+            const totalValue = positions.reduce((sum, p) => sum + (p.entry_value_usdt || 0), 0);
+            
+            // Calculate total P&L (mock for demo)
+            const totalPnL = positions.reduce((sum, p) => {
+                const entryValue = p.entry_value_usdt || 0;
+                const currentPrice = p.entry_price ? p.entry_price * (1 + (Math.random() - 0.5) * 0.1) : 0;
+                const currentValue = currentPrice * (p.quantity_crypto || 0);
+                return sum + (currentValue - entryValue);
+            }, 0);
+            
+            document.getElementById('positionCount').textContent = openPositions;
+            document.getElementById('openPositions').textContent = openPositions;
+            document.getElementById('totalValue').textContent = totalValue.toLocaleString();
+            document.getElementById('totalPnL').textContent = totalPnL >= 0 ? 
+                `+$${totalPnL.toFixed(2)}` : 
+                `-$${Math.abs(totalPnL).toFixed(2)}`;
+            document.getElementById('totalPnL').style.color = totalPnL >= 0 ? '#10b981' : '#ef4444';
+        }
+        
+        // Load positions on page load
+        document.addEventListener('DOMContentLoaded', loadPositions);
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadPositions, 30000);
+    </script>
+</body>
+</html>

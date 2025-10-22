@@ -236,12 +236,12 @@ export const defaultSignalSettings = {
   },
   bbw: {
     name: "Bollinger Band Width",
-    enabled: false, // Updated from outline
+    enabled: true, // FIXED: Enable BBW by default
     category: 'volatility',
     pandasTaName: 'bbw',
     period: 20,
     stdDev: 2,
-    threshold: 0.1, // Renamed from squeezeThreshold and updated value from outline
+    threshold: 2.0, // FIXED: Use percentage-based threshold (2% is reasonable for squeeze detection)
     priority: 15, // Updated from outline
   },
   keltner: {

@@ -47,6 +47,7 @@ class BacktestingEngine {
     this.regimeTrackingEnabled = regimeTrackingEnabled; 
     this.isRegimeAware = isRegimeAware;
     
+    
     this.allMatches = []; 
     this.summary = {}; 
     
@@ -363,7 +364,8 @@ class BacktestingEngine {
         if (this.isRegimeAware && regimeDetector) {
             regimeDetectionStartTime = performance.now();
             
-            if (i % 200 === 0) {
+            // Only log regime detection diagnostics for first few candles to avoid spam
+            if (i % 2000 === 0) {
                 this.onLog(`[${this.settings.coin}] [ENGINE_DIAGNOSTIC] Attempting to call MarketRegimeDetector for candle ${i}`, 'info');
                 
                 if (typeof MarketRegimeDetector === 'undefined') {
@@ -381,6 +383,11 @@ class BacktestingEngine {
                 currentMarketRegime = regimeResult.regime; 
                 regimeConfidence = regimeResult.confidence; 
                 this.regimeHistory.push(currentMarketRegime); 
+                
+                // DEBUG: Log regime detection results for first 10 candles only to investigate bias
+                if (i < 10) {
+                    this.log(`[${this.settings.coin}] [REGIME_DEBUG] Candle ${i}: ${currentMarketRegime.toUpperCase()} (confidence: ${regimeConfidence.toFixed(1)}%)`, 'info');
+                }
                 
                 this.regimeDetectionStats.totalDetections++;
                 
@@ -404,13 +411,23 @@ class BacktestingEngine {
         }
         
         try {
+            // DEBUG: Log signal settings structure for first few candles
+            if (this.debugMode && i < 3) {
+                this.log(`[ENGINE_DEBUG] Signal settings keys: ${Object.keys(this.signalSettings).join(', ')}`, 'debug');
+                this.log(`[ENGINE_DEBUG] HMA enabled: ${this.signalSettings.hma?.enabled}`, 'debug');
+                this.log(`[ENGINE_DEBUG] BBW enabled: ${this.signalSettings.bbw?.enabled}`, 'debug');
+                this.log(`[ENGINE_DEBUG] BBW settings: ${JSON.stringify(this.signalSettings.bbw)}`, 'debug');
+                this.log(`[ENGINE_DEBUG] Volume enabled: ${this.signalSettings.volume?.enabled}`, 'debug');
+                this.log(`[ENGINE_DEBUG] TTM_SQUEEZE enabled: ${this.signalSettings.ttm_squeeze?.enabled}`, 'debug');
+            }
+            
             const signalsAtCandle = this.evaluateSignalCondition(
                 candle, 
                 allIndicators, 
                 i, 
                 this.signalSettings, 
                 currentMarketRegime, 
-                noopLogger, 
+                this.log.bind(this), 
                 this.debugMode 
             );
             
@@ -427,7 +444,8 @@ class BacktestingEngine {
                 effectiveSignals = Array.from(strongestSignalMap.values());
             }
 
-            if (this.debugMode && (i - this.minCandles) < 5) {
+            // Smart sampling: only log first few candles and then sample every 1000th candle
+            if (this.debugMode && ((i - this.minCandles) < 5 || (i - this.minCandles) % 1000 === 0)) {
                 this.log(`[${this.settings.coin}] [ENGINE_CANDLE_${i}] Found ${effectiveSignals.length} signals at candle ${i}. Signal types: ${(effectiveSignals || []).map(s => s.type).join(', ')}`, 'debug');
             }
 
@@ -551,6 +569,28 @@ class BacktestingEngine {
     this.summary.totalCandles = this.historicalData.length;
     this.summary.totalMatches = this.allMatches.length;
 
+    // DEBUG: Analyze regime distribution if regime-aware mode was used
+    if (this.isRegimeAware && this.regimeHistory.length > 0) {
+      const regimeCounts = {};
+      this.regimeHistory.forEach(regime => {
+        regimeCounts[regime] = (regimeCounts[regime] || 0) + 1;
+      });
+      
+      this.log(`[${this.settings.coin}] [REGIME_ANALYSIS] Regime distribution during backtesting:`, 'info');
+      Object.entries(regimeCounts).forEach(([regime, count]) => {
+        const percentage = ((count / this.regimeHistory.length) * 100).toFixed(1);
+        this.log(`[${this.settings.coin}] [REGIME_ANALYSIS]   • ${regime.toUpperCase()}: ${count} candles (${percentage}%)`, 'info');
+      });
+      
+      // Check for bias
+      const totalRegimes = Object.keys(regimeCounts).length;
+      if (totalRegimes === 1) {
+        this.log(`[${this.settings.coin}] [REGIME_ANALYSIS] ⚠️ WARNING: Only one regime detected! This indicates a problem with regime detection.`, 'warning');
+      } else if (regimeCounts.downtrend && regimeCounts.downtrend > (this.regimeHistory.length * 0.8)) {
+        this.log(`[${this.settings.coin}] [REGIME_ANALYSIS] ⚠️ WARNING: Severe DOWNTREND bias detected (${((regimeCounts.downtrend / this.regimeHistory.length) * 100).toFixed(1)}%)`, 'warning');
+      }
+    }
+
     return {
         matches: this.allMatches, 
         summary: this.summary, 
@@ -566,3 +606,6 @@ class BacktestingEngine {
 }
 
 export default BacktestingEngine;
+
+// Re-export processBacktestResults from backtestProcessor
+export { processBacktestResults } from './core/backtestProcessor';

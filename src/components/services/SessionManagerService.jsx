@@ -129,6 +129,14 @@ export default class SessionManagerService {
   async start(force = false) {
     this._validateSessionId();
 
+    // Prevent rapid successive start calls
+    if (this._isStarting) {
+      console.log('[SESSION] Start already in progress, ignoring duplicate call');
+      return false;
+    }
+    
+    this._isStarting = true;
+
     //console.log(`[SESSION] start() called ${force ? '(FORCE MODE)' : ''}`, { sessionId: this.sessionId });
     this.addLog(`[SESSION] Attempting to claim leadership${force ? ' (FORCE MODE)' : ''}...`, 'system');
 
@@ -155,6 +163,7 @@ export default class SessionManagerService {
             this.scannerService.state.leaderSessionId = this.sessionId;
             this.scannerService._startRunningState();
             this.addLog('[SESSION] ✅ Leadership claimed successfully', 'success');
+            this._isStarting = false;
             return true;
           } else {
             const errorMsg = response?.data?.error || 'Unknown error';
@@ -211,11 +220,13 @@ export default class SessionManagerService {
       const errorMessage = lastError?.message || 'Unknown error';
       this.addLog(`[SESSION] ❌ Failed to claim leadership after ${maxRetries} attempts: ${errorMessage}`, 'error');
       console.error('[SESSION] Error during start():', errorMessage);
+      this._isStarting = false;
       return false;
 
     } catch (error) {
       this.addLog(`[SESSION] ❌ Critical error during start(): ${error.message}`, 'error');
       console.error('[SESSION] Critical error during start():', error);
+      this._isStarting = false;
       return false;
     } finally {
       this.notifySubscribers(); // Ensure subscribers are notified of final state
@@ -224,6 +235,14 @@ export default class SessionManagerService {
 
   async stop() {
     this._validateSessionId();
+
+    // Prevent rapid successive stop calls
+    if (this._isStopping) {
+      console.log('[SESSION] Stop already in progress, ignoring duplicate call');
+      return false;
+    }
+    
+    this._isStopping = true;
 
     console.log('[SESSION] stop() called', { sessionId: this.sessionId });
     this.addLog('[SESSION] Releasing leadership...', 'system');
@@ -241,11 +260,13 @@ export default class SessionManagerService {
         this.scannerService._stopRunningState();
         this.addLog('[SESSION] ✅ Leadership released successfully', 'success');
         this.scannerService.state.leaderSessionId = null; // Clear local leader state
+        this._isStopping = false;
         return true;
       } else {
         this.addLog(`[SESSION] ⚠️ Release reported non-success: ${response?.data?.error || 'Unknown'}`, 'warning');
         // Still stop running state locally even if release failed on backend
         this.scannerService._stopRunningState();
+        this._isStopping = false;
         return false;
       }
     } catch (error) {
@@ -253,6 +274,7 @@ export default class SessionManagerService {
       console.error('[SESSION] Error during stop():', error);
       // Still stop running state locally
       this.scannerService._stopRunningState();
+      this._isStopping = false;
       return false;
     } finally {
       this.notifySubscribers();

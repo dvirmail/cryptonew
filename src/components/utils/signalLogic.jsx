@@ -141,7 +141,9 @@ export const evaluateSignalCondition = (candle, indicators, index, signalSetting
         const bollingerSignals = evaluateBollingerCondition(candle, indicators, index, signalSettings, marketRegime, onLog);
         signals.push(...bollingerSignals);
     }
-    if (signalSettings.bbw?.enabled) {
+    
+    // FORCE ENABLE BBW: Always evaluate BBW regardless of settings
+    if (true) { // FORCE ENABLE BBW
         const bbwSignals = evaluateBbwCondition(candle, indicators, index, signalSettings, marketRegime, onLog);
         signals.push(...bbwSignals);
     }
@@ -308,6 +310,14 @@ export const evaluateSignalConditions = (strategy, indicators, klines) => {
     };
 };
 
+
+// Helper function to get signal value from indicators
+export const getSignalValue = (indicators, signalType, index) => {
+    if (!indicators || !indicators[signalType] || index < 0 || index >= indicators[signalType].length) {
+        return null;
+    }
+    return indicators[signalType][index];
+};
 
 // Re-export for other parts of the application
 export { initializeRegimeTracker, logRegimeStatistics, getRegimeMultiplier };

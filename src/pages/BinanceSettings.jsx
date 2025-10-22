@@ -8,7 +8,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { saveApiKeys } from '@/api/functions';
 import { testBinanceKeys } from '@/api/functions';
-import { queueEntityCall } from '@/api/functions/queueEntityCall'; // New import for fetching user data
+import { queueEntityCall } from '@/components/utils/apiQueue'; // New import for fetching user data
 import { ScanSettings } from '@/api/entities';
 import { Loader2, Info, Server, CheckCircle, AlertTriangle } from 'lucide-react';
 
@@ -30,18 +30,20 @@ export default function BinanceSettings() {
     // Function to load API keys, wrapped in useCallback to prevent re-creation
     const loadApiKeys = useCallback(async () => {
         try {
-            // Assuming queueEntityCall('User', 'me') returns the user object directly
-            const user = await queueEntityCall('User', 'me');
-            const keys = user?.binance_api_keys || {};
-            setLiveApiKey(keys.liveApiKey || '');
-            setLiveApiSecret(keys.liveApiSecret || '');
-            setTestnetApiKey(keys.testnetApiKey || '');
-            setTestnetApiSecret(keys.testnetApiSecret || '');
+            // Load API keys from localStorage for local development
+            const savedKeys = localStorage.getItem('binanceApiKeys');
+            if (savedKeys) {
+                const keys = JSON.parse(savedKeys);
+                setLiveApiKey(keys.liveApiKey || '');
+                setLiveApiSecret(keys.liveApiSecret || '');
+                setTestnetApiKey(keys.testnetApiKey || '');
+                setTestnetApiSecret(keys.testnetApiSecret || '');
+            }
         } catch (error) {
             toast({
                 title: 'Error',
                 description: `Failed to load API keys: ${error.message}`,
-                variant: 'destructive'
+                type: 'error'
             });
         }
     }, [toast]);
@@ -67,7 +69,7 @@ export default function BinanceSettings() {
                 toast({
                     title: 'Error',
                     description: `Failed to load configurations: ${error.message}`,
-                    variant: 'destructive'
+                    type: 'error'
                 });
             } finally {
                 setIsLoading(false);
@@ -102,13 +104,13 @@ export default function BinanceSettings() {
             toast({
                 title: 'Success',
                 description: 'Settings saved successfully. API keys are encrypted.',
-                variant: 'success'
+                type: 'success'
             });
         } catch (error) {
             toast({
                 title: 'Error',
                 description: `Failed to save settings: ${error.message}`,
-                variant: 'destructive',
+                type: 'error',
             });
         } finally {
             setIsSaving(false);
@@ -143,7 +145,7 @@ export default function BinanceSettings() {
                 toast({
                     title: `${mode.charAt(0).toUpperCase() + mode.slice(1)} Test Successful`,
                     description: data.message,
-                    variant: 'success',
+                    type: 'success',
                 });
             } else {
                 throw new Error(data.message);
@@ -153,10 +155,68 @@ export default function BinanceSettings() {
             toast({
                 title: `${mode.charAt(0).toUpperCase() + mode.slice(1)} Test Failed`,
                 description: error.message,
-                variant: 'destructive',
+                type: 'error',
             });
         }
         // No finally block needed here, as setTestStatus is handled in try/catch for each outcome
+    };
+
+    const handleFetchAssets = async () => {
+        try {
+            console.log('[BinanceSettings] Fetching all assets from testnet...');
+            
+            // Import the functions from localClient
+            const { functions } = await import('@/api/localClient');
+            
+            const result = await functions.fetchAllAssetsFromTestnet();
+            
+            if (result.success) {
+                toast({
+                    title: 'Assets Fetched Successfully',
+                    description: `Found ${result.assets.length} assets in your testnet account. Check console for details.`,
+                    type: 'success',
+                });
+            } else {
+                toast({
+                    title: 'Failed to Fetch Assets',
+                    description: result.error || 'Unknown error occurred',
+                    type: 'error',
+                });
+            }
+        } catch (error) {
+            console.error('[BinanceSettings] Error fetching assets:', error);
+            toast({
+                title: 'Error Fetching Assets',
+                description: error.message,
+                type: 'error',
+            });
+        }
+    };
+
+    const handleSyncWallet = async () => {
+        try {
+            console.log('[BinanceSettings] Syncing wallet with testnet...');
+            
+            // Import the AutoScannerService
+            const { getAutoScannerService } = await import('@/components/services/AutoScannerService');
+            const scannerService = getAutoScannerService();
+            
+            // Reinitialize wallet from Binance
+            await scannerService.reinitializeWalletFromBinance();
+            
+            toast({
+                title: 'Wallet Sync Successful',
+                description: 'Wallet has been synced with Binance testnet. Check the Wallet page to see your balances.',
+                type: 'success',
+            });
+        } catch (error) {
+            console.error('[BinanceSettings] Error syncing wallet:', error);
+            toast({
+                title: 'Wallet Sync Failed',
+                description: error.message || 'Failed to sync wallet with testnet',
+                type: 'error',
+            });
+        }
     };
 
     if (isLoading) {
@@ -249,6 +309,12 @@ export default function BinanceSettings() {
                             {testStatus.testnet === 'error' && <AlertTriangle className="mr-2 h-4 w-4 text-red-500" />}
                             Test Testnet Connection
                         </Button>
+                    <Button onClick={handleFetchAssets} variant="outline" className="ml-2">
+                        📊 Fetch All Assets from Testnet
+                    </Button>
+                    <Button onClick={handleSyncWallet} variant="outline" className="ml-2">
+                        🔄 Sync Wallet with Testnet
+                    </Button>
                     </div>
 
                     <div className="flex justify-end">

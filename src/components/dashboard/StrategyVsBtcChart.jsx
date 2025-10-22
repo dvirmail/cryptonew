@@ -61,7 +61,7 @@ export default function StrategyVsBtcChart() {
                 });
 
                 // Fetch BTC Price Data
-                const { data: btcResult } = await queueFunctionCall(getKlineData, {
+                const { data: btcResult } = await queueFunctionCall('getKlineData', getKlineData, {
                     symbols: ['BTCUSDT'],
                     interval: '1d',
                     limit: days,

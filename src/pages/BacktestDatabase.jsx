@@ -99,14 +99,17 @@ export default function BacktestDatabase() {
             return;
         }
         try {
+            console.log('[BacktestDatabase] 🗑️ Attempting to delete combination:', combinationId);
             await BacktestCombination.delete(combinationId);
+            console.log('[BacktestDatabase] ✅ Delete API call successful');
             setCombinations(prev => prev.filter(c => c.id !== combinationId));
+            console.log('[BacktestDatabase] ✅ UI updated, combination removed from list');
             toast({
                 title: "Success",
                 description: "Combination deleted successfully.",
             });
         } catch (error) {
-            console.error("Failed to delete combination:", error);
+            console.error('[BacktestDatabase] ❌ Failed to delete combination:', error);
             toast({
                 title: "Error",
                 description: "Could not delete combination.",
@@ -241,9 +244,8 @@ export default function BacktestDatabase() {
             return;
         }
         try {
-            await Promise.all(
-                Array.from(selectedIds).map(id => BacktestCombination.delete(id))
-            );
+            const idsArray = Array.from(selectedIds);
+            await BacktestCombination.bulkDelete(idsArray);
             toast({
                 title: "Bulk Delete Successful",
                 description: `${selectedIds.size} strategies have been deleted.`,

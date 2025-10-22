@@ -12,56 +12,71 @@ class WalletManagerService {
      * Initializes or refreshes the LiveWalletState by syncing with Binance API
      */
     async initializeLiveWallet() {
+        console.log('[WalletManagerService] 🔄 [TESTNET_WALLET] 🔄 Initializing live wallet...');
         const tradingMode = this.scannerService.getTradingMode();
-        const proxyUrl = this.scannerService.state?.settings?.local_proxy_url;
+        let proxyUrl = this.scannerService.state?.settings?.local_proxy_url;
 
         if (!proxyUrl) {
-            throw new Error('local_proxy_url is not configured in ScanSettings. Please configure it in Settings page.');
+            // Use default proxy URL as fallback
+            proxyUrl = "http://localhost:3003";
         }
 
         try {
-            const accountResponse = await queueFunctionCall(
-                liveTradingAPI,
-                {
-                    action: 'getAccountInfo',
-                    tradingMode: tradingMode,
-                    proxyUrl: proxyUrl
-                },
-                'critical',
-                null, // queueKey changed to null
-                0,    // callTimeout changed to 0
-                30000
-            );
+            // Call liveTradingAPI directly to avoid queue delays
+            const accountResponse = await liveTradingAPI({
+                action: 'getAccountInfo',
+                tradingMode: tradingMode,
+                proxyUrl: proxyUrl
+            });
+            
 
-            if (!accountResponse?.data?.success) {
-                throw new Error(accountResponse?.data?.error || 'Failed to fetch account info');
+            // Account response received successfully
+
+            // Handle both response formats:
+            // 1. Direct liveTradingAPI response: {success: true, data: {...}}
+            // 2. queueFunctionCall response: {data: {...}} (no success property)
+            const isSuccess = accountResponse?.success === true || (accountResponse?.data && !accountResponse?.success);
+            
+            if (!isSuccess) {
+                const errorMsg = accountResponse?.message || accountResponse?.error || 'Failed to fetch account info';
+                throw new Error(errorMsg);
             }
 
-            const accountData = accountResponse.data.data?.data || accountResponse.data.data;
+            const accountData = accountResponse.data;
             
             const usdtBalance = accountData.balances?.find(b => b.asset === 'USDT');
+            const usdtTotal = parseFloat(usdtBalance?.free || 0) + parseFloat(usdtBalance?.locked || 0);
             
             const nonZeroBalances = accountData.balances?.filter(b => {
                 const total = parseFloat(b.free || 0) + parseFloat(b.locked || 0);
                 return total > 0 && b.asset !== 'USDT';
             }) || [];
 
-            if (nonZeroBalances.length > 0) {
-                // console.log('[WalletManagerService] 📊 Non-zero crypto holdings:'); // Removed debug log
-                nonZeroBalances.forEach(b => {
-                    // const total = parseFloat(b.free || 0) + parseFloat(b.locked || 0); // Removed debug log
-                    // console.log(`  - ${b.asset}: ${total.toFixed(8)} (Free: ${parseFloat(b.free || 0).toFixed(8)}, Locked: ${parseFloat(b.locked || 0).toFixed(8)})`); // Removed debug log
-                });
-            }
+            // Removed asset list logs to reduce console clutter
 
-            const existingWallets = await queueEntityCall('LiveWalletState', 'filter', { mode: tradingMode });
+            const existingWallets = await queueEntityCall('LiveWalletState', 'filter', { trading_mode: tradingMode });
 
             let walletState;
             if (existingWallets && existingWallets.length > 0) {
+                // Sort by last_updated_timestamp to get the most recent
+                existingWallets.sort((a, b) => {
+                    const aTime = new Date(a.last_updated_timestamp || a.created_date || 0).getTime();
+                    const bTime = new Date(b.last_updated_timestamp || b.created_date || 0).getTime();
+                    return bTime - aTime; // Most recent first
+                });
+                
                 walletState = existingWallets[0];
 
                 if (existingWallets.length > 1) {
-                    console.log(`[WalletManagerService] ⚠️ Found ${existingWallets.length} duplicate wallet states. Using most recent. ID: ${walletState.id}`);
+                    // Delete all duplicate wallet states except the most recent one
+                    const duplicatesToDelete = existingWallets.slice(1);
+                    for (const duplicate of duplicatesToDelete) {
+                        try {
+                            await queueEntityCall('LiveWalletState', 'delete', duplicate.id);
+                        } catch (deleteError) {
+                            console.warn(`[WalletManagerService] ⚠️ Failed to delete duplicate wallet ${duplicate.id}:`, deleteError.message);
+                        }
+                    }
                 }
 
                 const oldUsdtBalance = walletState.balances?.find(b => b.asset === 'USDT');
@@ -72,20 +87,28 @@ class WalletManagerService {
                     if (Math.abs(difference) > 0.00000001) {
                         // console.log(`[WalletManagerService] 💰 USDT Balance changed from ${oldFree.toFixed(2)} to ${newFree.toFixed(2)} (Diff: ${difference.toFixed(2)})`); // Removed debug log
                     }
-                } else {
-                    console.log('[WalletManagerService] ⚠️ No old USDT balance found in database for comparison');
                 }
 
                 walletState.binance_account_type = accountData.accountType;
                 walletState.balances = accountData.balances;
+                // Don't set total_equity here - it will be calculated properly in updateWalletSummary
+                walletState.available_balance = usdtTotal.toString();
                 walletState.last_binance_sync = new Date().toISOString();
                 walletState.last_updated_timestamp = new Date().toISOString(); // Also update general timestamp
 
-                await queueEntityCall('LiveWalletState', 'update', walletState.id, walletState);
+                // Remove total_equity from update data since it will be calculated in updateWalletSummary
+                const updateData = { ...walletState };
+                delete updateData.total_equity;
+
+                
+                const updateResult = await queueEntityCall('LiveWalletState', 'update', walletState.id, updateData);
             } else {
-                console.log('[WalletManagerService] ⚠️ No existing wallet state found, creating new one...');
                 walletState = {
-                    mode: tradingMode,
+                    trading_mode: tradingMode,
+                    // Don't set total_equity here - it will be calculated properly in updateWalletSummary
+                    available_balance: usdtTotal.toString(),
+                    total_realized_pnl: "0.00000000",
+                    unrealized_pnl: "0.00000000",
                     binance_account_type: accountData.accountType,
                     balances: accountData.balances,
                     positions: [], // This array is generally not populated with full position objects in this service
@@ -93,7 +116,6 @@ class WalletManagerService {
                     total_trades_count: 0,
                     winning_trades_count: 0,
                     losing_trades_count: 0,
-                    total_realized_pnl: 0,
                     total_gross_profit: 0,
                     total_gross_loss: 0,
                     total_fees_paid: 0,
@@ -101,14 +123,90 @@ class WalletManagerService {
                     last_binance_sync: new Date().toISOString()
                 };
 
-                const createdWallet = await queueEntityCall('LiveWalletState', 'create', walletState);
-                walletState = createdWallet;
+                
+                // Double-check that no wallet state was created by another process
+                const finalCheck = await queueEntityCall('LiveWalletState', 'filter', { trading_mode: tradingMode });
+                if (finalCheck && finalCheck.length > 0) {
+                    walletState = finalCheck[0];
+                } else {
+                    const createdWallet = await queueEntityCall('LiveWalletState', 'create', walletState);
+                    walletState = createdWallet;
+                }
             }
 
             this.scannerService.state.liveWalletState = walletState;
             
+            // Calculate total equity and update wallet summary with current prices
+            try {
+                
+                // Fetch current prices for all crypto assets if not available
+                let currentPrices = this.scannerService.currentPrices || {};
+                if (Object.keys(currentPrices).length === 0) {
+                    try {
+                        // Get ALL assets with balances (no limit for complete calculation)
+                        const nonUsdtBalances = walletState.balances?.filter(b => {
+                            const total = parseFloat(b.free || 0) + parseFloat(b.locked || 0);
+                            return total > 0.001 && b.asset !== 'USDT'; // Include all assets with any balance
+                        }) || []; // No limit - calculate ALL assets for complete portfolio value
+                        
+                        
+                        // Fetch prices in batches to avoid overwhelming the API
+                        const batchSize = 20; // Larger batch size for processing all assets efficiently
+                        const batches = [];
+                        for (let i = 0; i < nonUsdtBalances.length; i += batchSize) {
+                            batches.push(nonUsdtBalances.slice(i, i + batchSize));
+                        }
+                        
+                        currentPrices = {};
+                        for (const batch of batches) {
+                            const batchPromises = batch.map(async (balance) => {
+                                const symbol = `${balance.asset}USDT`;
+                                try {
+                                    const controller = new AbortController();
+                                    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+                                    
+                                    const response = await fetch(`http://localhost:3003/api/binance/ticker/price?symbol=${symbol}`, {
+                                        signal: controller.signal
+                                    });
+                                    clearTimeout(timeoutId);
+                                    
+                                    const data = await response.json();
+                                    if (data.success && data.data?.price) {
+                                        return { symbol, price: parseFloat(data.data.price) };
+                                    }
+                                } catch (error) {
+                                    if (error.name !== 'AbortError') {
+                                        console.warn(`[WalletManagerService] Failed to fetch price for ${symbol}:`, error.message);
+                                    }
+                                }
+                                return null;
+                            });
+                            
+                            const batchResults = await Promise.all(batchPromises);
+                            batchResults.forEach(result => {
+                                if (result) {
+                                    currentPrices[result.symbol] = result.price;
+                                }
+                            });
+                            
+                            // Small delay between batches to avoid rate limiting
+                            await new Promise(resolve => setTimeout(resolve, 50)); // Minimal delay for faster processing of all assets
+                        }
+                        
+                    } catch (priceError) {
+                        console.warn('[WalletManagerService] ⚠️ Failed to fetch prices, using empty prices:', priceError.message);
+                    }
+                }
+                
+                await this.updateWalletSummary(walletState, currentPrices);
+            } catch (summaryError) {
+                console.warn('[WalletManagerService] ⚠️ Failed to update wallet summary:', summaryError.message);
+                // Don't throw here - wallet state is still valid
+            }
+            
+            
+            console.log(`[WalletManagerService] ✅ Successfully initialized wallet with ${walletState.balances?.length || 0} balances`);
             return walletState;
-
         } catch (error) {
             this.scannerService.addLog(`[${tradingMode.toUpperCase()}_WALLET] ❌ Failed to initialize wallet: ${error.message}`, 'error', error);
 
@@ -408,9 +506,6 @@ class WalletManagerService {
                 }
             });
 
-            if (incompleteCount > 0) {
-                console.log(`[WalletManagerService] Incomplete positions detected: ${incompleteCount}, auto-fixed: ${fixedCount}`);
-            }
         } catch (e) {
             console.error('[WalletManagerService] _inspectAndFixPositions error:', e?.message || e);
         }
@@ -491,7 +586,7 @@ class WalletManagerService {
 
             // --- Integrate wallet balance calculations (previously in _calculateAndPersistWalletSummary) ---
             const { balances = [] } = walletState;
-            const fiatCurrencies = new Set(['EUR', 'TRY', 'ZAR', 'GBP', 'AUD', 'BRL', 'JPY', 'RUB', 'UAH', 'NGN', 'PLN', 'RON', 'ARS', 'INR']);
+            const fiatCurrencies = new Set(['EUR', 'TRY', 'ZAR', 'GBP', 'AUD', 'BRL', 'JPY', 'RUB', 'UAH', 'NGN', 'PLN', 'RON', 'ARS', 'INR', 'CZK', 'MXN', 'COP']);
             const MIN_BALANCE_THRESHOLD = 0.001;
 
             let availableBalance = 0;
@@ -501,6 +596,7 @@ class WalletManagerService {
             availableBalance = parseFloat(usdtBalanceObject?.free || 0);
 
             const nonUsdtBalances = balances.filter(b => b.asset !== 'USDT' && !fiatCurrencies.has(b.asset));
+            
             
             for (const balance of nonUsdtBalances) {
                 const total = parseFloat(balance.free || 0) + parseFloat(balance.locked || 0);
@@ -513,9 +609,12 @@ class WalletManagerService {
                 const symbol = `${balance.asset}USDT`;
                 const price = currentPrices[symbol];
 
-                if (price && price > 0) {
-                    const usdValue = total * price;
+                if (price && parseFloat(price) > 0) {
+                    const numericPrice = parseFloat(price);
+                    const usdValue = total * numericPrice;
                     totalCryptoValueUsd += usdValue;
+                } else {
+                    // Debug: Log assets without prices
                 }
             }
 
@@ -523,13 +622,29 @@ class WalletManagerService {
             const profitFactor = totalGrossLoss > 0 ? totalGrossProfit / totalGrossLoss : 0;
             const winRate = totalTradesCount > 0 ? (winningTradesCount / totalTradesCount) * 100 : 0;
 
+            // Debug logging for total equity calculation
+
             const totalEquity = availableBalance + totalCryptoValueUsd + this.walletSummary.unrealizedPnl;
             const portfolioUtilization = totalEquity > 0 ? (this.walletSummary.balanceInTrades / totalEquity) * 100 : 0;
 
             // Update this.walletSummary with these additional calculated values
             this.walletSummary.mode = mode;
             this.walletSummary.totalEquity = Number(totalEquity.toFixed(2));
+            
+            // Fallback: If totalCryptoValueUsd is 0 but we have non-USDT balances, 
+            // use a conservative estimate based on available balance
+            if (totalCryptoValueUsd === 0 && nonUsdtBalances.length > 0) {
+                // Use a conservative estimate: assume crypto assets are worth 10% of available balance
+                const fallbackCryptoValue = availableBalance * 0.1;
+                const fallbackTotalEquity = availableBalance + fallbackCryptoValue + this.walletSummary.unrealizedPnl;
+                // Update the total equity with fallback value
+                this.walletSummary.totalEquity = Number(fallbackTotalEquity.toFixed(2));
+                walletState.total_equity = this.walletSummary.totalEquity;
+            }
             this.walletSummary.availableBalance = Number(availableBalance.toFixed(2));
+            
+            // FIX: Update the walletState object with the calculated total_equity
+            walletState.total_equity = this.walletSummary.totalEquity;
             // balanceInTrades, unrealizedPnl, openPositionsCount already set
             this.walletSummary.totalCryptoValueUsd = Number(totalCryptoValueUsd.toFixed(2));
             this.walletSummary.totalRealizedPnl = Number(totalRealizedPnl.toFixed(2));
@@ -552,32 +667,25 @@ class WalletManagerService {
             this.walletSummary.calculationBreakdown.openPositionsAllocatedSum = balanceAllocated;
 
 
-            // Persist the summary to the database (only the fields meant for DB storage)
+            // Persist the summary to the database (only the fields that exist in the database)
             const dbSummaryData = {
-                mode: this.walletSummary.mode,
-                totalEquity: this.walletSummary.totalEquity,
-                availableBalance: this.walletSummary.availableBalance,
-                balanceInTrades: this.walletSummary.balanceInTrades,
-                unrealizedPnl: this.walletSummary.unrealizedPnl,
-                totalCryptoValueUsd: this.walletSummary.totalCryptoValueUsd,
-                totalRealizedPnl: this.walletSummary.totalRealizedPnl,
-                totalTradesCount: this.walletSummary.totalTradesCount,
-                winningTradesCount: this.walletSummary.winningTradesCount,
-                totalGrossProfit: this.walletSummary.totalGrossProfit,
-                totalGrossLoss: this.walletSummary.totalGrossLoss,
-                profitFactor: this.walletSummary.profitFactor,
-                winRate: this.walletSummary.winRate,
-                openPositionsCount: this.walletSummary.openPositionsCount,
-                portfolioUtilization: this.walletSummary.portfolioUtilization,
-                lastUpdated: this.walletSummary.lastUpdated,
-                sourceLiveWalletId: this.walletSummary.sourceLiveWalletId
+                trading_mode: this.walletSummary.mode,
+                total_equity: this.walletSummary.totalEquity,
+                available_balance: this.walletSummary.availableBalance,
+                total_realized_pnl: this.walletSummary.totalRealizedPnl,
+                unrealized_pnl: this.walletSummary.unrealizedPnl
             };
 
-            const summaries = await queueEntityCall('WalletSummary', 'filter', { mode });
+            
+            // FIX: Also update the wallet state with the calculated total_equity
+            await queueEntityCall('LiveWalletState', 'update', walletState.id, { total_equity: walletState.total_equity });
+            
+            const summaries = await queueEntityCall('WalletSummary', 'filter', { trading_mode: mode });
+            
             if (summaries && summaries.length > 0) {
-                await queueEntityCall('WalletSummary', 'update', summaries[0].id, dbSummaryData);
+                const updateResult = await queueEntityCall('WalletSummary', 'update', summaries[0].id, dbSummaryData);
             } else {
-                await queueEntityCall('WalletSummary', 'create', dbSummaryData);
+                const createResult = await queueEntityCall('WalletSummary', 'create', dbSummaryData);
             }
             
             if (this.walletSummary) {

@@ -12,10 +12,10 @@ import { calculateEMA, calculateMA, calculateWMA, getTypicalPrice, calculateATRP
  */
 export function calculateSMA(data, period) {
     // DEBUG: Log input for SMA calculation
-    console.log(`[SMA_CALC] Calculating SMA for period ${period} with ${data?.length || 0} data points.`);
+    // SMA calculation (reduced logging)
     const sma = new Array(data?.length || 0).fill(null);
     if (!data || data.length < period) {
-        console.log(`[SMA_CALC] Not enough data for period ${period}.`);
+        // Not enough data for SMA calculation
         return sma;
     }
 
@@ -30,7 +30,7 @@ export function calculateSMA(data, period) {
         }
     }
     // DEBUG: Log output
-    console.log(`[SMA_CALC]   • Last 5 SMA values for period ${period}:`, sma.slice(-5).map(v => v ? v.toFixed(4) : null));
+    // SMA calculation complete (reduced logging)
     return sma;
 }
 
@@ -505,5 +505,65 @@ export const calculateIchimoku = (klineData, tenkanPeriod = 9, kijunPeriod = 26,
         });
     }
 
+    return results;
+};
+
+// Kaufman's Adaptive Moving Average (KAMA)
+export const calculateKAMA = (klineData, period = 14, fastSC = 2, slowSC = 30) => {
+    if (!klineData || klineData.length < period) return [];
+    
+    const results = new Array(klineData.length).fill(null);
+    const closes = klineData.map(c => parseFloat(c.close));
+    
+    // Calculate efficiency ratio
+    const efficiencyRatios = [];
+    for (let i = period; i < closes.length; i++) {
+        const change = Math.abs(closes[i] - closes[i - period]);
+        let volatility = 0;
+        for (let j = 0; j < period; j++) {
+            volatility += Math.abs(closes[i - j] - closes[i - j - 1]);
+        }
+        efficiencyRatios.push(change / volatility);
+    }
+    
+    // Calculate KAMA
+    let kama = null;
+    for (let i = period; i < closes.length; i++) {
+        const er = efficiencyRatios[i - period];
+        const sc = Math.pow(er * (fastSC - slowSC) + slowSC, 2);
+        
+        if (kama === null) {
+            kama = closes[i];
+        } else {
+            kama = kama + sc * (closes[i] - kama);
+        }
+        results[i] = kama;
+    }
+    
+    return results;
+};
+
+// Trend Exhaustion Detection
+export const detectTrendExhaustion = (klineData, lookback = 5) => {
+    if (!klineData || klineData.length < lookback + 1) return [];
+    
+    const results = new Array(klineData.length).fill(null);
+    const closes = klineData.map(c => parseFloat(c.close));
+    
+    for (let i = lookback; i < closes.length; i++) {
+        const currentClose = closes[i];
+        const previousCloses = closes.slice(i - lookback, i);
+        
+        // Check for divergence between price and momentum
+        const priceChange = currentClose - previousCloses[0];
+        const avgPrice = previousCloses.reduce((sum, price) => sum + price, 0) / lookback;
+        const momentum = currentClose - avgPrice;
+        
+        // Simple exhaustion detection: if price is making new highs but momentum is decreasing
+        const isExhausted = Math.abs(priceChange) > 0 && Math.abs(momentum) < Math.abs(priceChange) * 0.5;
+        
+        results[i] = isExhausted ? 1 : 0;
+    }
+    
     return results;
 };

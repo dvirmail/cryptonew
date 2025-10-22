@@ -44,9 +44,7 @@ const DEBUG_TRADE = {
     if (!this.enabled()) return;
     const ts = new Date().toISOString();
     try {
-      console.log(`[TRADE_DEBUG] ${ts} ${tag}`, payload);
     } catch {
-      console.log(`[TRADE_DEBUG] ${ts} ${tag}`);
     }
   }
 };
@@ -840,7 +838,7 @@ export const queueEntityCall = async (entityName, method, ...args) => {
     const result = await apiQueue.enqueue(
       async () => {
         try {
-          const { [entityName]: Entity } = await import(`@/api/entities/${entityName}`);
+          const { [entityName]: Entity } = await import(`@/api/entities`);
 
           let modifiedArgs = args;
           if (entityName === 'Trade') {
@@ -1400,8 +1398,8 @@ export const queueFunctionCall = async (...allArgs) => {
     } else if (funcName.includes('updateStrategyStats') || funcName.includes('bulkCreate')) {
       timeoutMs = 480000;
     } else if (funcName === 'liveTradingAPI' || (params && params.action === 'createOrder')) {
-      // Short, strict timeout for order placement to avoid 5-minute queue stalls
-      timeoutMs = 45000;
+      // Increased timeout for wallet initialization and API calls to handle slow Binance responses
+      timeoutMs = 120000; // Increased from 45s to 120s (2 minutes)
     } else {
       timeoutMs = 240000;
     }
@@ -1625,3 +1623,21 @@ export const queueFunctionCall = async (...allArgs) => {
 
 export { apiQueue };
 export default apiQueue;
+
+// Safe load market alerts function
+export const safeLoadMarketAlerts = async () => {
+  try {
+    const alerts = await queueEntityCall('MarketAlert', 'list');
+    return {
+      success: true,
+      data: alerts || []
+    };
+  } catch (error) {
+    console.error('[safeLoadMarketAlerts] Error:', error);
+    return {
+      success: false,
+      data: [],
+      error: error.message
+    };
+  }
+};

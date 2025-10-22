@@ -27,6 +27,8 @@ export const LivePosition = base44.entities.LivePosition;
 
 export const ScannerStats = base44.entities.ScannerStats;
 
+export const VirtualWalletState = base44.entities.VirtualWalletState;
+
 
 
 // auth sdk:

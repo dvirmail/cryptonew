@@ -1059,15 +1059,26 @@ export const evaluateHmaCondition = (candle, indicators, index, signalSettings, 
     const signals = [];
     const hmaSettings = signalSettings.hma || {};
 
-    if (!hmaSettings.enabled || !indicators.hma || !indicators.hma_10 || !indicators.data || index === 0) {
+    // Add diagnostic logging for HMA signal detection - more aggressive logging
+    if (onLog && (index < 5 || index % 1000 === 0)) {
+        onLog(`[HMA DEBUG] Candle ${index}: enabled=${hmaSettings.enabled}, hma=${!!indicators.hma}, data=${!!indicators.data}`, 'debug');
+        if (indicators.hma && indicators.hma[index] !== undefined) {
+            onLog(`[HMA DEBUG] HMA value at ${index}: ${indicators.hma[index]}`, 'debug');
+        }
+    }
+
+    // FIX: Remove check for hma_10 which doesn't exist - only hma is calculated
+    if (!hmaSettings.enabled || !indicators.hma || !indicators.data || index === 0) {
+        if (index % 1000 === 0 && onLog) {
+            onLog(`[HMA DEBUG] Skipping HMA evaluation: enabled=${hmaSettings.enabled}, hma=${!!indicators.hma}, data=${!!indicators.data}, index=${index}`, 'debug');
+        }
         return signals;
     }
 
     const currentHma = indicators.hma[index];
-    const currentHma10 = indicators.hma_10[index];
     const currentPrice = candle.close;
 
-    if (!isNumber(currentHma) || !isNumber(currentHma10) || !isNumber(currentPrice)) {
+    if (!isNumber(currentHma) || !isNumber(currentPrice)) {
         return signals;
     }
 
@@ -1114,29 +1125,8 @@ export const evaluateHmaCondition = (candle, indicators, index, signalSettings, 
         }
     }
 
-    // 3. HMA vs HMA10 Relationship
-    const hmaAboveHma10 = currentHma > currentHma10;
-    const hmaDistance = Math.abs(currentHma - currentHma10) / currentHma10;
-    
-    if (hmaAboveHma10) {
-        const strength = 35 + Math.min(30, hmaDistance * 1000);
-        signals.push({
-            type: 'hma',
-            value: 'HMA Above HMA10',
-            strength: applyRegimeAdjustment(strength, 'hma_above_hma10', marketRegime),
-            details: `HMA above HMA10 - bullish momentum`,
-            priority: 6
-        });
-    } else {
-        const strength = 35 + Math.min(30, hmaDistance * 1000);
-        signals.push({
-            type: 'hma',
-            value: 'HMA Below HMA10',
-            strength: applyRegimeAdjustment(strength, 'hma_below_hma10', marketRegime),
-            details: `HMA below HMA10 - bearish momentum`,
-            priority: 6
-        });
-    }
+    // FIX: HMA vs HMA10 logic removed since hma_10 indicator doesn't exist
+    // The HMA signal now relies solely on price position relative to HMA and HMA slope
 
     return getUniqueSignals(signals).map(s => ({ ...s, type: 'HMA', strength: Math.min(100, Math.max(0, s.strength)), candle: index }));
 };

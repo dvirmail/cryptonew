@@ -207,3 +207,49 @@ export const calculateEMAFromValues = (values, period) => {
     }
     return results;
 };
+
+// Helper function to get typical price (HLC/3)
+export const getTypicalPrice = (klineData) => {
+    if (!klineData || klineData.length === 0) return [];
+    
+    return klineData.map(candle => {
+        const high = parseFloat(candle.high);
+        const low = parseFloat(candle.low);
+        const close = parseFloat(candle.close);
+        return (high + low + close) / 3;
+    });
+};
+
+// Helper function to calculate ATR points
+export const calculateATRPoints = (klineData, period = 14) => {
+    if (!klineData || klineData.length < 2) return [];
+    
+    const trueRanges = [];
+    
+    for (let i = 1; i < klineData.length; i++) {
+        const current = klineData[i];
+        const previous = klineData[i - 1];
+        
+        const high = parseFloat(current.high);
+        const low = parseFloat(current.low);
+        const prevClose = parseFloat(previous.close);
+        
+        const tr1 = high - low;
+        const tr2 = Math.abs(high - prevClose);
+        const tr3 = Math.abs(low - prevClose);
+        
+        trueRanges.push(Math.max(tr1, tr2, tr3));
+    }
+    
+    // Calculate ATR using simple moving average of true ranges
+    const atr = [];
+    for (let i = period - 1; i < trueRanges.length; i++) {
+        let sum = 0;
+        for (let j = 0; j < period; j++) {
+            sum += trueRanges[i - j];
+        }
+        atr.push(sum / period);
+    }
+    
+    return atr;
+};

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getAutoScannerService } from '@/components/services/AutoScannerService';
+import { getFearAndGreedIndex } from '@/api/functions';
 
 const FearGreedWidget = () => {
   const [data, setData] = useState({ value: '50', classification: 'Neutral' });
@@ -7,26 +8,50 @@ const FearGreedWidget = () => {
   const [showTooltip, setShowTooltip] = useState(false);
 
   useEffect(() => {
-    const scannerService = getAutoScannerService();
-
-    const updateData = () => {
-      const fngData = scannerService.fearAndGreedData;
-      if (fngData) {
-        setData({
-          value: fngData.value,
-          classification: fngData.value_classification,
-        });
+    const fetchFearAndGreedData = async () => {
+      try {
+        console.log('[FearGreedWidget] Fetching Fear & Greed Index independently...');
+        const response = await getFearAndGreedIndex();
+        
+        if (response?.data?.data && response.data.data.length > 0) {
+          const fngData = response.data.data[0];
+          const newData = {
+            value: fngData.value,
+            classification: fngData.value_classification,
+          };
+          setData(newData);
+          setIsLoading(false);
+          console.log('[FearGreedWidget] Successfully loaded Fear & Greed data:', newData);
+        } else {
+          console.warn('[FearGreedWidget] Invalid Fear & Greed response format:', response);
+          setIsLoading(false);
+        }
+      } catch (error) {
+        console.error('[FearGreedWidget] Error fetching Fear & Greed Index:', error);
         setIsLoading(false);
       }
     };
 
-    // Initial update
-    updateData();
+    // Fetch data immediately, don't wait for scanner
+    fetchFearAndGreedData();
 
-    // Subscribe to general state changes, as F&G is fetched periodically
-    const unsubscribe = scannerService.subscribe(updateData);
+    // Also subscribe to scanner updates for periodic refresh
+    const scannerService = getAutoScannerService();
+    const unsubscribe = scannerService.subscribe(() => {
+      const fngData = scannerService.fearAndGreedData;
+      if (fngData) {
+        const newData = {
+          value: fngData.value,
+          classification: fngData.value_classification,
+        };
+        setData(newData);
+        setIsLoading(false);
+      }
+    });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const value = parseInt(data.value, 10) || 50;

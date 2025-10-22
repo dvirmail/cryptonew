@@ -628,3 +628,20 @@ export function evaluateBBWStates(bbwValues, lookbackPeriod = 100) {
 
   return results;
 }
+
+// Calculate standard deviation
+export const calculateStandardDeviation = (values, period = 20) => {
+  if (!values || values.length < period) return [];
+  
+  const results = [];
+  
+  for (let i = period - 1; i < values.length; i++) {
+    const slice = values.slice(i - period + 1, i + 1);
+    const mean = slice.reduce((sum, val) => sum + val, 0) / period;
+    const variance = slice.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / period;
+    const stdDev = Math.sqrt(variance);
+    results.push(stdDev);
+  }
+  
+  return results;
+};

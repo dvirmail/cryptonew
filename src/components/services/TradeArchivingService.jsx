@@ -1,5 +1,5 @@
 import { queueFunctionCall } from "@/components/utils/apiQueue";
-import { archiveOldTrades } from "@/api/functions";
+import { functions } from "@/api/localClient";
 
 /**
  * Service responsible for managing trade archiving operations.
@@ -55,7 +55,8 @@ class TradeArchivingService {
 
       // Use low priority and cache key like other background jobs
       const res = await queueFunctionCall(
-        archiveOldTrades,
+        'archiveOldTrades',
+        functions.archiveOldTrades,
         {},
         "low",
         "archiveOldTrades",
@@ -63,8 +64,12 @@ class TradeArchivingService {
         60_000  // timeout 60s
       );
 
+      console.log('[TradeArchivingService] Raw response:', res);
       const data = res?.data ?? res ?? {};
       const success = data?.success === true;
+      
+      console.log('[TradeArchivingService] Parsed data:', data);
+      console.log('[TradeArchivingService] Success:', success);
 
       const deletedCount = typeof data?.deletedCount === "number" ? data.deletedCount : 0;
       const remainingCount = typeof data?.remainingCount === "number" ? data.remainingCount : null;
@@ -88,6 +93,8 @@ class TradeArchivingService {
         at: new Date().toISOString(),
       };
     } catch (error) {
+      console.error('[TradeArchivingService] Error during archiving:', error);
+      console.error('[TradeArchivingService] Error stack:', error.stack);
       this.lastArchivingReport = {
         success: false,
         error: error?.message || String(error),

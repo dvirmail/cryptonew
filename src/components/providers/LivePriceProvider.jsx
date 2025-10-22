@@ -37,20 +37,29 @@ export const LivePriceProvider = ({ children }) => {
         ].slice(0, MAX_SYMBOLS_PER_REQUEST);
 
         try {
-            const response = await queueFunctionCall(getBinancePrices, { symbols: symbolsPrioritized }, 'normal', null, 5000);
+            const response = await getBinancePrices({ symbols: symbolsPrioritized });
             
-            if (response?.data?.success && Array.isArray(response.data.data)) {
+            // Handle both direct response and wrapped response formats
+            let priceArray = null;
+            if (Array.isArray(response)) {
+                priceArray = response;
+            } else if (Array.isArray(response?.data)) {
+                priceArray = response.data;
+            }
+
+            if (priceArray) {
                 const newPricesForState = {}; // This is for the new 'prices' state variable
                 setPriceData(prevData => {
                     const updatedPriceData = { ...prevData }; // Start with existing data
-                    response.data.data.forEach(item => {
+                    priceArray.forEach(item => {
                         const symbol = item.symbol.replace('/', '');
                         const price = parseFloat(item.price);
                         if (price !== null && !isNaN(price)) {
                             // This structure is explicitly defined by the outline for newPriceData.
-                            // It removes 'change' and 'lastUpdated' fields if they were previously set by scanner updates.
+                            // Now includes 24h change data from Binance API
                             updatedPriceData[symbol] = {
                                 price,
+                                change: item.change || null, // 24h change percentage from Binance
                                 timestamp: item.timestamp || null, // Assuming timestamp is provided by getBinancePrices now
                                 raw: item // Store the full raw item
                             };
@@ -60,6 +69,8 @@ export const LivePriceProvider = ({ children }) => {
                     setPrices(prev => ({ ...prev, ...newPricesForState })); // Update the new `prices` state
                     return updatedPriceData; // Update the `priceData` state
                 });
+            } else {
+                console.warn('[LivePriceProvider] Invalid response format:', response?.data);
             }
         } catch (error) {
             console.error('[LivePriceProvider] Price fetch error:', error.message);
@@ -67,7 +78,10 @@ export const LivePriceProvider = ({ children }) => {
     }, [setPrices, setPriceData]);
 
     const subscribe = useCallback((symbols) => {
-        if (!Array.isArray(symbols)) return;
+        if (!Array.isArray(symbols)) {
+            console.warn('[LivePriceProvider] subscribe called with non-array symbols:', symbols);
+            return;
+        }
         
         let addedNewSymbols = false;
         symbols.forEach(symbol => {

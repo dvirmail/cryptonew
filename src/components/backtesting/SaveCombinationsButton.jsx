@@ -41,7 +41,9 @@ const generateWarThemedName = (existingNames, coin, signals) => {
     const noun = nouns[Math.floor(Math.random() * nouns.length)];
     const signalSuffix = signals.slice(0, 3).map((s) => s.type.replace(/[^A-Z]/g, '')).join('').toUpperCase().substring(0, 6);
 
-    name = `${adj} ${noun} of ${coin.replace('/', '')}`;
+    // Use coin if available, otherwise use a default
+    const coinName = coin ? coin.replace('/', '') : 'Strategy';
+    name = `${adj} ${noun} of ${coinName}`;
     if (signalSuffix) {
       name += `-${signalSuffix}`;
     }
@@ -134,7 +136,7 @@ const getRegimeIcon = (regime) => {
 };
 
 // Strategy List Item Component - Updated to show regime properly
-const StrategyListItem = ({ strategy, isSelected, onSelect, isEnabled, onToggleEnabled }) => {
+  const StrategyListItem = ({ strategy, isSelected, onSelect, isEnabled, onToggleEnabled }) => {
   const getRegimeColor = (regime) => {
     switch (regime?.toLowerCase()) {
       case 'uptrend':
@@ -168,7 +170,10 @@ const StrategyListItem = ({ strategy, isSelected, onSelect, isEnabled, onToggleE
 
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between mb-2">
-            <h4 className="font-semibold text-sm truncate">{strategy.combinationName}</h4>
+            <h4 className="font-semibold text-sm truncate">
+              {strategy.combinationName}
+              <span className="text-muted-foreground font-normal"> ({strategy.dominantMarketRegime?.toUpperCase() || 'UNKNOWN'})</span>
+            </h4>
             {strategy.dominantMarketRegime && (
               <Badge
                 variant="outline"
@@ -221,7 +226,7 @@ const StrategyListItem = ({ strategy, isSelected, onSelect, isEnabled, onToggleE
   );
 };
 
-export default function SaveCombinationsButton({ combinations, timeframe, minProfitFactor }) {
+export default function SaveCombinationsButton({ combinations, timeframe, minProfitFactor, selectedCoins = [] }) {
   const { toast } = useToast();
   const [isSaveReviewDialogOpen, setIsSaveReviewDialogOpen] = useState(false);
   const [filteredCombinations, setFilteredCombinations] = useState([]);
@@ -230,6 +235,7 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedStrategyId, setSelectedStrategyId] = useState(null);
+  const [allStrategiesAreDuplicates, setAllStrategiesAreDuplicates] = useState(false);
 
   // NEW: State for preloaded market data
   const [marketDataCache, setMarketDataCache] = useState(new Map());
@@ -248,20 +254,30 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
     setIsPreloadingData(true);
     setDataLoadingProgress(0);
 
-    const uniqueCoins = [...new Set(strategies.map((s) => s.coin))];
+    const uniqueCoins = [...new Set(strategies.map((s) => s.coin).filter(Boolean))];
     const dataCache = new Map();
 
     //console.log(`[MARKET_DATA] Preloading data for ${uniqueCoins.length} coins:`, uniqueCoins);
 
+    // If no coins are available, skip market data fetching
+    if (uniqueCoins.length === 0) {
+      console.log(`[MARKET_DATA] No coins available for market data fetching`);
+      setMarketDataCache(dataCache);
+      setIsPreloadingData(false);
+      return;
+    }
+
     let processedCoins = 0;
 
     for (const coin of uniqueCoins) {
+      if (!coin) continue; // Skip if coin is undefined/null
+      
       try {
         //console.log(`[MARKET_DATA] Fetching data for ${coin}...`);
 
         // FIX: Use the new getKlineData parameter format with symbols array
         const response = await getKlineData({
-          symbols: [coin], // Changed from singular 'symbol' to plural 'symbols' array
+          symbols: [coin.replace('/', '')], // Remove slash for Binance API
           interval: timeframe || '4h',
           limit: 100
         });
@@ -274,14 +290,13 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
         
         if (response?.data) {
           // The response.data should now be an object with coin keys
-          const coinDataContainer = response.data[coin]; // Access data using the coin as key
+          const coinDataContainer = response.data[coin ? coin.replace('/', '') : '']; // Access data using the converted coin as key
           if (coinDataContainer && coinDataContainer.success && Array.isArray(coinDataContainer.data)) {
             klineData = coinDataContainer.data;
           }
         }
         
         // ATR DEBUG: Log the final klineData array before calculation
-        console.log(`[ATR_DEBUG] Parsed klineData for ${coin}:`, klineData);
 
         if (klineData && klineData.length > 0) {
           const latestCandle = klineData[klineData.length - 1];
@@ -349,6 +364,7 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
   const handleReviewClick = async () => {
     setLoading(true);
 
+
     // Remove the 50 strategy limit - take ALL combinations
     const allCombinations = [...combinations].sort(
       (a, b) => (b.profitabilityScore || 0) - (a.profitabilityScore || 0)
@@ -366,13 +382,26 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
 
     // Smart filtering to keep only the best version of each signal combination
     const filteredStrategies = filterForBestSignalVariations(allCombinations);
+    
+    // Debug: Log the strategies and their coin information
+    console.log('[SAVE_COMBINATIONS] 📊 Filtered strategies count:', filteredStrategies.length);
+    console.log('[SAVE_COMBINATIONS] 📊 Strategies with coin info:', filteredStrategies.map(s => ({ 
+      coin: s.coin, 
+      combinationName: s.combinationName,
+      profitFactor: s.profitFactor 
+    })));
 
     // Generate unique names for this display batch and assign unique IDs
     const namesForDisplay = new Set();
     const topPerformersWithNames = filteredStrategies.map((combo, index) => ({
       ...combo,
-      id: combo.id || `strategy-${index}-${combo.coin}-${combo.signals.map((s) => s.type).join('-')}`, // Ensure each strategy has a unique ID
-      combinationName: generateWarThemedName(namesForDisplay, combo.coin, combo.signals)
+      // Preserve the original coin information from the backtesting results
+      coin: combo.coin || 'BTC/USDT', // Only use fallback if coin is completely missing
+      id: combo.id || `strategy-${index}-${combo.coin || 'Strategy'}-${combo.signals.map((s) => s.type).join('-')}`, // Ensure each strategy has a unique ID
+      combinationName: generateWarThemedName(namesForDisplay, combo.coin || 'Strategy', combo.signals),
+      // FIX: Map the regime data correctly
+      dominantMarketRegime: combo.dominantMarketRegime || combo.marketRegime || null,
+      marketRegimeDistribution: combo.marketRegimeDistribution || combo.marketRegimePerformance || null
     }));
 
     setFilteredCombinations(topPerformersWithNames);
@@ -398,6 +427,27 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
     // NEW: Preload market data before opening the dialog
     await preloadMarketData(topPerformersWithNames);
 
+    // NEW: Check for existing strategies to prevent duplicate saves
+    try {
+      const existingStrategies = await queueEntityCall('BacktestCombination', 'list');
+      const existingSignatures = new Set(
+        existingStrategies
+          .map((strategy) => strategy.combination_signature)
+          .filter((signature) => signature && signature.trim() !== '')
+      );
+
+      // Check if all strategies are duplicates
+      const allStrategiesAreDuplicates = topPerformersWithNames.every((combo) => {
+        const signature = generateCombinationSignature(combo.signals, timeframe);
+        return existingSignatures.has(signature);
+      });
+
+      setAllStrategiesAreDuplicates(allStrategiesAreDuplicates);
+    } catch (error) {
+      console.error('Error checking for existing strategies:', error);
+      setAllStrategiesAreDuplicates(false); // Default to false if check fails
+    }
+
     // Auto-select the first strategy
     if (topPerformersWithNames.length > 0) {
       setSelectedStrategyId(topPerformersWithNames[0].id);
@@ -408,8 +458,6 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
   };
 
   const filterForBestSignalVariations = (strategies) => {
-    //console.log(`[STRATEGY_FILTER] Starting with ${strategies.length} strategies`);
-
     const signalGroups = {};
 
     strategies.forEach((strategy) => {
@@ -454,6 +502,20 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
 
   // NEW: Get market data from cache
   const getMarketData = (coin) => {
+    // If no coin is provided, return a default state without loading
+    if (!coin) {
+      return { 
+        isLoading: false, 
+        price: null, 
+        atr: null, 
+        historicalHigh: null, 
+        historicalLow: null, 
+        rangeSize: null, 
+        currentPositionInRange: null, 
+        error: 'No coin data available' 
+      };
+    }
+    
     const cachedData = marketDataCache.get(coin);
     if (!cachedData) {
       return { isLoading: true, price: null, atr: null, historicalHigh: null, historicalLow: null, rangeSize: null, currentPositionInRange: null, error: null };
@@ -516,7 +578,7 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
             signals: combo.signals || [],
             combination_signature: signature,
             signalCount: combo.signals?.length || 0,
-            combinedStrength: combo.combinedStrength || 0,
+            combinedStrength: combo.combinedStrength || (combo.signals?.reduce((sum, signal) => sum + (signal.strength || 0), 0) || 0),
             successRate: combo.successRate || 0,
             occurrences: combo.occurrences || 0,
             occurrenceDates: combo.matches?.map((m) => ({
@@ -529,8 +591,8 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
             })) || [],
             avgPriceMove: combo.netAveragePriceMove || 0,
             profitFactor: combo.profitFactor || 0,
-            dominantMarketRegime: combo.dominantMarketRegime || null,
-            marketRegimeDistribution: combo.marketRegimeDistribution || null,
+            dominantMarketRegime: combo.dominantMarketRegime || combo.marketRegime || null,
+            marketRegimeDistribution: combo.marketRegimeDistribution || combo.marketRegimePerformance || null,
             recommendedTradingStrategy: '',
             includedInScanner: true,
             combinationName: strategyConfig.combinationName || combo.combinationName || '',
@@ -566,12 +628,16 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
         if (duplicateCount > 0) {
           toast({
             title: 'No New Strategies to Save',
-            description: `All ${totalSelected} selected ${totalSelected === 1 ? 'strategy' : 'strategies'} already exist in the database (including timeframe variations).`
+            description: `All ${totalSelected} selected ${totalSelected === 1 ? 'strategy' : 'strategies'} already exist in the database (including timeframe variations).`,
+            type: 'info',
+            duration: 6000 // Show for 6 seconds
           });
         } else {
           toast({
             title: 'No Strategies Selected',
-            description: 'Please select at least one strategy to save.'
+            description: 'Please select at least one strategy to save.',
+            type: 'warning',
+            duration: 5000 // Show for 5 seconds
           });
         }
         return;
@@ -609,7 +675,8 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
       toast({
         title,
         description,
-        variant: 'default'
+        type: 'success',
+        duration: 8000 // Show for 8 seconds instead of default
       });
 
       setIsSaveReviewDialogOpen(false);
@@ -624,7 +691,7 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
       toast({
         title: 'Save Failed',
         description: errorMessage,
-        variant: 'destructive'
+        type: 'error'
       });
     } finally {
       setSaving(false);
@@ -753,7 +820,7 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
       return (
         <div className="flex items-center justify-center h-full text-muted-foreground p-6 border rounded-lg bg-gray-50 dark:bg-gray-800/30">
           <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" />
-          <p>Loading market data for {strategy.coin}...</p>
+          <p>Loading market data for {strategy.coin || 'strategy'}...</p>
         </div>
       );
     }
@@ -782,7 +849,10 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
     return (
       <div className="space-y-6 h-full overflow-y-auto pr-2">
         <div className="border-b pb-4">
-          <h3 className="text-xl font-bold break-words">{strategy.combinationName}</h3>
+          <h3 className="text-xl font-bold break-words">
+            {strategy.combinationName}
+            <span className="text-muted-foreground font-normal"> ({strategy.dominantMarketRegime?.toUpperCase() || 'UNKNOWN'})</span>
+          </h3>
           <p className="text-muted-foreground mb-3">{strategy.coin}</p>
           <div className="flex flex-wrap gap-2">
             {strategy.signals.map((signal, idx) => (
@@ -1231,9 +1301,16 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
             <Button variant="outline" onClick={() => setIsSaveReviewDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleSave} disabled={saving} className="min-w-[150px]">
+            <Button 
+              onClick={handleSave} 
+              disabled={saving || allStrategiesAreDuplicates} 
+              className="min-w-[150px]"
+            >
               {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-              Save Selected ({Object.values(combinationStrategies).filter((s) => s.enabled).length})
+              {allStrategiesAreDuplicates 
+                ? `All Strategies Already Saved (${Object.values(combinationStrategies).filter((s) => s.enabled).length})`
+                : `Save Selected (${Object.values(combinationStrategies).filter((s) => s.enabled).length})`
+              }
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -216,10 +216,20 @@ export const evaluateVolumeCondition = (candle, indicators, index, signalSetting
     const signals = [];
     const volumeSettings = signalSettings.volume || {};
     const volume = candle.volume;
-    const avgVolume = indicators.volumeSMA ? indicators.volumeSMA[index] : 0;
+    // FIX: Use volume_sma (with underscore) which is the actual indicator name
+    const avgVolume = indicators.volume_sma ? indicators.volume_sma[index] : 0;
     const spikeMultiplier = volumeSettings.spikeMultiplier || 1.5;
 
+    // Add diagnostic logging for Volume signal detection - more aggressive logging
+    if (onLog && (index < 5 || index % 1000 === 0)) {
+        onLog(`[VOLUME DEBUG] Candle ${index}: enabled=${volumeSettings.enabled}, volume=${volume}, avgVolume=${avgVolume}, spikeMultiplier=${spikeMultiplier}`, 'debug');
+        onLog(`[VOLUME DEBUG] volume_sma exists: ${!!indicators.volume_sma}, isNumber(volume): ${isNumber(volume)}, isNumber(avgVolume): ${isNumber(avgVolume)}`, 'debug');
+    }
+
     if (!isNumber(volume) || !isNumber(avgVolume) || avgVolume === 0) { // Added avgVolume === 0 check
+        if (index % 1000 === 0 && onLog) {
+            onLog(`[VOLUME DEBUG] Skipping volume evaluation: volume=${volume}, avgVolume=${avgVolume}, isNumber(volume)=${isNumber(volume)}, isNumber(avgVolume)=${isNumber(avgVolume)}`, 'debug');
+        }
         return signals;
     }
 

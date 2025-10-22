@@ -290,7 +290,6 @@ export default function Analytics() {
 
     const fetchAllAnalyticsData = useCallback(async () => {
         setAnalyticsData(prev => ({ ...prev, isLoading: true, error: null }));
-        console.log(`[DEBUG_FRONTEND] Analytics: Fetching comprehensive data for ${isLiveMode ? 'Live' : 'Testnet'} mode.`);
 
         try {
             // Fetch trades and combinations in parallel
@@ -299,27 +298,7 @@ export default function Analytics() {
                 BacktestCombination.list('-created_date', 5000) // Increased limit to ensure we get all combinations
             ]);
             
-            console.log(`[DEBUG_FRONTEND] Analytics: Retrieved ${tradesData?.length || 0} trades and ${combinationsData?.length || 0} combinations.`);
 
-            // Log sample trade for debugging
-            if (tradesData && tradesData.length > 0) {
-                console.log('[DEBUG_FRONTEND] Sample trade:', {
-                    strategy_name: tradesData[0].strategy_name,
-                    market_regime: tradesData[0].market_regime,
-                    trade_id: tradesData[0].trade_id,
-                    symbol: tradesData[0].symbol,
-                    is_event_driven_strategy: tradesData[0].is_event_driven_strategy,
-                    pnl_usdt: tradesData[0].pnl_usdt
-                });
-            }
-            
-            if (combinationsData && combinationsData.length > 0) {
-                console.log('[DEBUG_FRONTEND] Sample combination:', {
-                    combinationName: combinationsData[0].combinationName,
-                    dominantMarketRegime: combinationsData[0].dominantMarketRegime,
-                    coin: combinationsData[0].coin // Added coin for debugging
-                });
-            }
 
             // Calculate All-Time Summary Metrics from ACTUAL TRADES
             let summaryData = { totalTrades: 0, winRate: 0, totalPnL: 0, profitFactor: 0 };
@@ -337,7 +316,6 @@ export default function Analytics() {
                     totalPnL,
                     profitFactor: grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? Infinity : 0),
                 };
-                console.log('[DEBUG_FRONTEND] Analytics: Calculated summary metrics from actual trades.', summaryData);
             }
             setSummaryMetrics(summaryData);
 

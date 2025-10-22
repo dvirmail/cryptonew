@@ -1,8 +1,8 @@
 // Inspired by react-hot-toast library
 import { useState, useEffect, createContext, useContext } from "react";
 
-const TOAST_LIMIT = 20;
-const TOAST_REMOVE_DELAY = 1000000;
+const TOAST_LIMIT = 3;
+const TOAST_REMOVE_DELAY = 4000;
 
 const actionTypes = {
   ADD_TOAST: "ADD_TOAST",
@@ -134,6 +134,14 @@ function toast({ ...props }) {
     },
   });
 
+  // Auto-dismiss after the delay
+  addToRemoveQueue(id);
+  
+  // Fallback: ensure toast is dismissed even if something goes wrong
+  setTimeout(() => {
+    dispatch({ type: actionTypes.DISMISS_TOAST, toastId: id });
+  }, TOAST_REMOVE_DELAY + 1000);
+
   return {
     id,
     dismiss,
@@ -158,6 +166,13 @@ function useToast() {
     ...state,
     toast,
     dismiss: (toastId) => dispatch({ type: actionTypes.DISMISS_TOAST, toastId }),
+  };
+}
+
+// Global function to clear all toasts (for debugging)
+if (typeof window !== 'undefined') {
+  window.clearAllToasts = () => {
+    dispatch({ type: actionTypes.DISMISS_TOAST });
   };
 }
 

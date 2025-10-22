@@ -18,18 +18,6 @@ export default function WalletStatusWidget() {
 
     const [cachedSummary, setCachedSummary] = React.useState(null);
 
-    // Log data from useWallet hook
-    React.useEffect(() => {
-        /*console.log('[WalletStatusWidget] Data from useWallet hook:', {
-            totalEquity,
-            availableBalance,
-            lifetimePnl,
-            totalRealizedPnl,
-            loading,
-            error,
-            isLiveMode
-        });*/
-    }, [totalEquity, availableBalance, lifetimePnl, totalRealizedPnl, loading, error, isLiveMode]);
 
     // Effect to load cached summary on initial mount
     React.useEffect(() => {
@@ -85,26 +73,10 @@ export default function WalletStatusWidget() {
     const isLiveAvailableBalanceValid = typeof availableBalance === 'number' && !isNaN(availableBalance) && availableBalance !== 0;
     const isLiveLifetimePnlValid = typeof lifetimePnl === 'number' && !isNaN(lifetimePnl);
 
-    const displayTotalEquity = isLiveTotalEquityValid ? totalEquity : cachedSummary?.totalEquity ?? 0;
-    const displayAvailableBalance = isLiveAvailableBalanceValid ? availableBalance : cachedSummary?.availableBalance ?? 0;
-    const displayLifetimePnl = isLiveLifetimePnlValid ? lifetimePnl : cachedSummary?.lifetimePnl ?? 0;
+    const displayTotalEquity = isLiveTotalEquityValid ? totalEquity : (cachedSummary?.totalEquity ?? 0);
+    const displayAvailableBalance = isLiveAvailableBalanceValid ? availableBalance : (cachedSummary?.availableBalance ?? 0);
+    const displayLifetimePnl = isLiveLifetimePnlValid ? lifetimePnl : (cachedSummary?.lifetimePnl ?? 0);
 
-    // Log display values
-    React.useEffect(() => {
-        /*console.log('[WalletStatusWidget] Display value calculation:', {
-            isLiveTotalEquityValid,
-            isLiveAvailableBalanceValid,
-            isLiveLifetimePnlValid,
-            displayTotalEquity,
-            displayAvailableBalance,
-            displayLifetimePnl,
-            usingCache: {
-                equity: !isLiveTotalEquityValid,
-                balance: !isLiveAvailableBalanceValid,
-                pnl: !isLiveLifetimePnlValid
-            }
-        });*/
-    }, [displayTotalEquity, displayAvailableBalance, displayLifetimePnl, isLiveTotalEquityValid, isLiveAvailableBalanceValid, isLiveLifetimePnlValid]);
 
     const formatCurrency = (value) => {
         const num = Number(value) || 0;

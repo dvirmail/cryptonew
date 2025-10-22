@@ -131,23 +131,30 @@ class MarketRegimeDetector {
     return v ?? undefined;
   }
 
+  // NEW HELPER: Get value of an indicator at specific index, handling object structures if necessary
+  _getValueAt(key, index) {
+    const stream = this.indicators?.[key];
+    if (!stream || stream.length === 0 || index < 0 || index >= stream.length) return undefined;
+    const v = stream[index];
+    return v ?? undefined;
+  }
+
   // The new _detectRegime and _calculateConfidence replace the previous _calculateRawRegime and __applyGuardrails logic
-  _detectRegime() {
+  _detectRegime(targetIndex) {
         //console.log(`[REGIME_CALC] 🎯 Starting regime detection with ${this.klines.length} klines`);
         
-        // Get latest indicator values
-        const latest = this.klines.length - 1;
-        const adxData = this._getLatestValue('adx');
+        // Get indicator values for the specific candle index
+        const adxData = this._getValueAt('adx', targetIndex);
         const adx = adxData && typeof adxData.ADX === 'number' ? adxData.ADX : undefined; // Extract ADX number
-        const ema = this._getLatestValue('ema');
+        const ema = this._getValueAt('ema', targetIndex);
         // 'ma200' is typically a simple moving average, `sma` might be generic, prefer specific if possible
-        const smaValue = this._getLatestValue('ma200') || this._getLatestValue('sma'); // Assuming sma is a specific type, if not, it should be _getLatestValue('sma_someperiod')
+        const smaValue = this._getValueAt('ma200', targetIndex) || this._getValueAt('sma', targetIndex); // Assuming sma is a specific type, if not, it should be _getValueAt('sma_someperiod', targetIndex)
         const sma = typeof smaValue === 'number' ? smaValue : undefined; // Ensure it's a number
-        const macdData = this._getLatestValue('macd');
+        const macdData = this._getValueAt('macd', targetIndex);
         const macd = macdData && typeof macdData.macd === 'number' && typeof macdData.signal === 'number' ? macdData : undefined;
-        const rsi = this._getLatestValue('rsi');
-        const bbw = this._getLatestValue('bbw');
-        const currentPrice = this.klines[latest]?.close;
+        const rsi = this._getValueAt('rsi', targetIndex);
+        const bbw = this._getValueAt('bbw', targetIndex);
+        const currentPrice = this.klines[targetIndex]?.close;
         
         /*console.log(`[REGIME_CALC] 📊 Latest indicator values:`, {
             currentPrice: currentPrice?.toFixed(2),
@@ -180,7 +187,7 @@ class MarketRegimeDetector {
                 //console.log(`[REGIME_CALC] ❌ Price below EMA: +20 downtrend (${currentPrice.toFixed(2)} < ${ema.toFixed(2)})`);
             }
         } else {
-            console.log(`[REGIME_CALC] ⚠️ Missing EMA or current price data`);
+            // Missing EMA data warning removed to reduce console spam
         }
 
         if (sma !== undefined && currentPrice !== undefined) {
@@ -193,7 +200,7 @@ class MarketRegimeDetector {
                 //console.log(`[REGIME_CALC] ❌ Price below SMA: +15 downtrend (${currentPrice.toFixed(2)} < ${sma.toFixed(2)})`);
             }
         } else {
-            console.log(`[REGIME_CALC] ⚠️ Missing SMA data`);
+            // Missing SMA data warning removed to reduce console spam
         }
 
         // MACD Analysis
@@ -211,7 +218,7 @@ class MarketRegimeDetector {
                 //console.log(`[REGIME_CALC] 📉 MACD bearish: +${macdPoints.toFixed(1)} downtrend (MACD: ${macd.macd.toFixed(4)} < Signal: ${macd.signal.toFixed(4)})`);
             }
         } else {
-            console.log(`[REGIME_CALC] ⚠️ Missing MACD data`);
+            // Missing MACD data warning removed to reduce console spam
         }
 
         // RSI Analysis
@@ -230,7 +237,7 @@ class MarketRegimeDetector {
                 //console.log(`[REGIME_CALC] ↔️ RSI neutral: +${rsiPoints} ranging (RSI: ${rsi.toFixed(2)})`);
             }
         } else {
-            console.log(`[REGIME_CALC] ⚠️ Missing RSI data`);
+            // Missing RSI data warning removed to reduce console spam
         }
 
         // ADX Analysis (Trend Strength)
@@ -255,7 +262,7 @@ class MarketRegimeDetector {
                 //console.log(`[REGIME_CALC] 😴 ADX suggests weak trend: +${rangingBonus.toFixed(1)} ranging (ADX: ${adx.toFixed(2)})`);
             }
         } else {
-            console.log(`[REGIME_CALC] ⚠️ Missing ADX data`);
+            // Missing ADX data warning removed to reduce console spam
         }
 
         // Bollinger Band Width (Volatility)
@@ -277,29 +284,24 @@ class MarketRegimeDetector {
                 //console.log(`[REGIME_CALC] 😴 Low volatility suggests ranging: +${lowVolBonus.toFixed(1)} ranging (BBW: ${bbw.toFixed(4)})`);
             }
         } else {
-            console.log(`[REGIME_CALC] ⚠️ Missing BBW data`);
+            // Missing BBW data warning removed to reduce console spam
         }
 
-        // Final scoring
-        /*console.log(`[REGIME_CALC] 📊 Final scores:`, {
-            uptrend: uptrendScore.toFixed(1),
-            downtrend: downtrendScore.toFixed(1),
-            ranging: rangingScore.toFixed(1)
-        });*/
-
+        // Final scoring - REDUCED LOGGING TO PREVENT CRASH
         let regime;
         if (uptrendScore > downtrendScore && uptrendScore > rangingScore) {
             regime = 'uptrend';
-            //console.log(`[REGIME_CALC] ✅ UPTREND wins with ${uptrendScore.toFixed(1)} points`);
         } else if (downtrendScore > uptrendScore && downtrendScore > rangingScore) {
             regime = 'downtrend';
-            //console.log(`[REGIME_CALC] ✅ DOWNTREND wins with ${downtrendScore.toFixed(1)} points`);
         } else if (rangingScore > uptrendScore && rangingScore > downtrendScore) {
             regime = 'ranging';
-            //console.log(`[REGIME_CALC] ✅ RANGING wins with ${rangingScore.toFixed(1)} points`);
         } else {
             regime = 'neutral';
-            //console.log(`[REGIME_CALC] ⚖️ NEUTRAL - scores too close or tied`);
+        }
+
+        // Only log every 100th calculation to prevent log overflow
+        if (Math.random() < 0.01) { // 1% chance to log
+            // Sample scores logging removed to reduce console spam
         }
 
         return regime;
@@ -385,12 +387,12 @@ class MarketRegimeDetector {
     ];
   }
 
-  getRegime() { // Removed index parameter as per outline. Operates on latest candle.
+  getRegime(index) { // FIXED: Accept index parameter to analyze specific candle
     //console.log(`[REGIME_MAIN] 🚀 Starting complete regime analysis...`);
-    const targetIndex = this.klines.length - 1; // Always operate on the latest candle
+    const targetIndex = index !== undefined ? index : this.klines.length - 1; // Use provided index or latest candle
 
     try {
-        const regime = this._detectRegime();
+        const regime = this._detectRegime(targetIndex);
         const confidence = this._calculateConfidence(regime); // This confidence is 0-1, will be converted to 0-100 for storage/return
 
         // Update regime history (adapting existing logic)

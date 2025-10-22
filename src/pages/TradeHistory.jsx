@@ -123,10 +123,8 @@ export default function TradeHistory() {
   const fetchTrades = useCallback(async () => {
     setIsLoading(true);
     try {
-      console.log('[DEBUG_FRONTEND] TradeHistory: Fetching trades from Trade entity');
       const allTrades = await queueEntityCall('Trade', 'filter', {}, '-exit_timestamp', 1000);
 
-      console.log(`[DEBUG_FRONTEND] TradeHistory: Retrieved ${allTrades?.length || 0} trades from Trade entity`);
 
       setTrades(allTrades || []);
     } catch (error) {

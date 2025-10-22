@@ -26,7 +26,9 @@ export default class ConfigurationService {
         useWinStrategySize: true,
         signalMatchingMode: "conviction_based",
         maxBalancePercentRisk: 100, // NEW: Default to 100% (no restriction)
-        local_proxy_url: ""
+        local_proxy_url: "http://localhost:3003",
+        isLiveTradingEnabled: false, // NEW: Default to testnet mode
+        isTestnetTradingEnabled: true // NEW: Default to testnet mode
       };
       settings = await queueEntityCall("ScanSettings", "create", defaults);
       s.addLog("[Config] Created default ScanSettings record with maxBalancePercentRisk=100%", "system");
@@ -37,7 +39,15 @@ export default class ConfigurationService {
         s.addLog("[Config] Initialized maxBalancePercentRisk to 100% for existing settings", "system");
       }
       if (!settings.local_proxy_url) {
-        settings.local_proxy_url = "";
+        settings.local_proxy_url = "http://localhost:3003";
+      }
+      if (typeof settings.isLiveTradingEnabled !== 'boolean') {
+        settings.isLiveTradingEnabled = false;
+        s.addLog("[Config] Initialized isLiveTradingEnabled to false for existing settings", "system");
+      }
+      if (typeof settings.isTestnetTradingEnabled !== 'boolean') {
+        settings.isTestnetTradingEnabled = true;
+        s.addLog("[Config] Initialized isTestnetTradingEnabled to true for existing settings", "system");
       }
     }
 

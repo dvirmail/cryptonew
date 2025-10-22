@@ -125,17 +125,17 @@ const BacktestSummary = ({ results, signalCombinations }) => {
       stats.successRate = stats.occurrences > 0 ? (stats.successful / stats.occurrences) * 100 : 0;
       stats.avgPriceMove = stats.occurrences > 0 ? ((stats.grossProfit - stats.grossLoss) / stats.occurrences) : 0;
       
-      // FIXED: Apply the same improved profit factor calculation
+      // FIXED: More realistic profit factor calculation with caps
       if (stats.grossLoss === 0) {
-        if (stats.grossProfit > 0 && stats.occurrences === stats.successful) {
-          stats.profitFactor = 999.99; // Perfect strategy with no losses
-        } else if (stats.grossProfit > 0) {
-          stats.profitFactor = 100.0; // High but finite
+        if (stats.grossProfit > 0 && stats.occurrences === stats.successful && stats.grossProfit > 1.0) {
+          // Use minimum realistic loss (0.5%) to calculate PF for zero loss strategies
+          const minRealisticLoss = 0.5; // 0.5% minimum realistic loss
+          stats.profitFactor = Math.min(stats.grossProfit / minRealisticLoss, 20.0); // Cap at 20x for realism
         } else {
           stats.profitFactor = 1.0;
         }
       } else {
-        stats.profitFactor = Math.min(stats.grossProfit / stats.grossLoss, 999.99);
+        stats.profitFactor = Math.min(stats.grossProfit / stats.grossLoss, 20.0); // Cap at 20x for realism
       }
       
       //console.log(`[REGIME_CALC_DEBUG] ${regime.toUpperCase()} Regime:`);

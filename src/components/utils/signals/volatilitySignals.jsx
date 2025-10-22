@@ -1,12 +1,12 @@
 
 import { get, isNil, mean, min, max, std } from 'lodash';
-import { applyRegimeAdjustment, findDivergence } from './divergenceUtils';
+import { applyRegimeAdjustment } from './divergenceUtils';
 
 // Define default signal settings. This object is used to provide default values for signal parameters
 // if they are not explicitly provided in the signalSettings object passed to evaluation functions.
 const defaultSignalSettings = {
     bbw: {
-        threshold: 0.1, // Default threshold for BBW squeeze detection. Often a percentage or absolute value.
+        threshold: 2.0, // BBW threshold as percentage (2% is a reasonable squeeze threshold)
         period: 20 // Default period for Bollinger Bands Width calculation (if applicable for BBW itself)
     },
     // Other indicators might have their own default settings here.
@@ -361,12 +361,6 @@ export const evaluateAtrCondition = (candle, indicators, index, signalSettings, 
 export function evaluateBbwCondition(candle, indicators, index, signalSettings, marketRegime, onLog = () => {}) {
     const signals = [];
     const settings = { ...defaultSignalSettings.bbw, ...signalSettings.bbw };
-    const signalType = 'BBW';
-
-    // Log parameters only once per run for clarity, using a typical start index.
-    if (index === (indicators.bbw?.findIndex(v => v !== undefined) || -1) + 10) { 
-        onLog(`[${signalType} DEBUG] Initializing evaluation. Threshold: ${settings.threshold}, Period: ${settings.period}`, 'debug');
-    }
 
     const currentBbw = indicators.bbw?.[index];
     const prevBbw = indicators.bbw?.[index - 1];
@@ -375,19 +369,11 @@ export function evaluateBbwCondition(candle, indicators, index, signalSettings, 
         return signals; // Not enough data, skip silently.
     }
 
-    // Build a detailed log message for every 50th candle to sample the data without overwhelming the logs.
-    let logMessage;
-    if (index % 50 === 0) {
-        logMessage = `[${signalType} DEBUG] Candle #${index}: Val=${currentBbw.toFixed(5)}, Prev=${prevBbw.toFixed(5)}, Threshold=${settings.threshold}. `;
-    }
-
     // Squeeze Start Condition: A transition from above the threshold to below it.
     const isSqueezeStart = currentBbw < settings.threshold && prevBbw >= settings.threshold;
     if (isSqueezeStart) {
         const strength = 75;
         signals.push({ type: 'bbw', value: `squeeze_start`, strength: strength, isEvent: true });
-        // Always log when a signal is found
-        onLog(`[${signalType} DEBUG] Candle #${index}: Val=${currentBbw.toFixed(5)}, Prev=${prevBbw.toFixed(5)} -> SQUEEZE START triggered (Strength: ${strength})`, 'debug');
     }
 
     // Squeeze Release Condition: A transition from below the threshold to above it.
@@ -395,19 +381,12 @@ export function evaluateBbwCondition(candle, indicators, index, signalSettings, 
     if (isSqueezeRelease) {
         const strength = 80;
         signals.push({ type: 'bbw', value: 'squeeze_release', strength: strength, isEvent: true });
-        onLog(`[${signalType} DEBUG] Candle #${index}: Val=${currentBbw.toFixed(5)}, Prev=${prevBbw.toFixed(5)} -> SQUEEZE RELEASE triggered (Strength: ${strength})`, 'debug');
     }
     
     // In Squeeze State: The current value is below the threshold.
     const isInSqueeze = currentBbw < settings.threshold;
     if (isInSqueeze) {
         signals.push({ type: 'bbw', value: 'in_squeeze', strength: 60, isEvent: false });
-    }
-
-    // If we have a periodic log message constructed and no event signal was found, log it.
-    if (logMessage && !isSqueezeStart && !isSqueezeRelease) {
-        logMessage += (isInSqueeze ? 'State: In Squeeze.' : 'State: Not in Squeeze.');
-        onLog(logMessage, 'debug');
     }
     
     return signals;
@@ -583,15 +562,34 @@ export const evaluateDonchianCondition = (candle, indicators, index, signalSetti
 export const evaluateTtmSqueeze = (candle, indicators, index, signalSettings, marketRegime, onLog, debugMode) => {
     const signals = [];
     const ttmSettings = signalSettings.ttm_squeeze;
+    
+    // CRITICAL DEBUG: Log every 1000th candle to see if function is being called
+    if (onLog && index % 1000 === 0) {
+        onLog(`[TTM_SQUEEZE DEBUG] Function called for candle ${index}`, 'debug');
+        if (indicators.ttm_squeeze && indicators.ttm_squeeze[index] !== undefined) {
+            onLog(`[TTM_SQUEEZE DEBUG] TTM_Squeeze value: ${JSON.stringify(indicators.ttm_squeeze[index])}`, 'debug');
+        }
+    }
+    
     if (!ttmSettings || !ttmSettings.enabled) return signals;
 
     const squeezeData = indicators.ttm_squeeze;
-    if (!squeezeData || index < ttmSettings.minSqueezeDuration) return signals;
+    if (!squeezeData || index < ttmSettings.minSqueezeDuration) {
+        if (onLog && index % 1000 === 0) {
+            onLog(`[TTM_SQUEEZE DEBUG] Skipping: squeezeData=${!!squeezeData}, index=${index}, minDuration=${ttmSettings.minSqueezeDuration}`, 'debug');
+        }
+        return signals;
+    }
 
     const squeezeState = squeezeData[index];
     const prevSqueezeState = squeezeData[index - 1];
 
-    if (!squeezeState || !prevSqueezeState) return signals;
+    if (!squeezeState || !prevSqueezeState) {
+        if (onLog && index % 1000 === 0) {
+            onLog(`[TTM_SQUEEZE DEBUG] Missing data: squeezeState=${!!squeezeState}, prevSqueezeState=${!!prevSqueezeState}`, 'debug');
+        }
+        return signals;
+    }
 
     let squeezeDuration = 0;
     if (prevSqueezeState.isSqueeze) {
@@ -607,6 +605,13 @@ export const evaluateTtmSqueeze = (candle, indicators, index, signalSettings, ma
     // DIAGNOSTIC LOGGING
     if (onLog && debugMode && indicators.data && index > indicators.data.length - 50) { // Added indicators.data check for safety
         onLog(`[TTM EVAL DEBUG] i:${index} | Squeezed: ${squeezeState.isSqueeze} | Prev Squeezed: ${prevSqueezeState.isSqueeze} | Duration: ${squeezeDuration} | Momentum: ${squeezeState.momentum.toFixed(4)}`, 'debug');
+    }
+    
+    // CRITICAL DEBUG: Log TTM_Squeeze values every 1000th candle
+    if (onLog && index % 1000 === 0) {
+        onLog(`[TTM_SQUEEZE DEBUG] Current: isSqueeze=${squeezeState.isSqueeze}, momentum=${squeezeState.momentum}`, 'debug');
+        onLog(`[TTM_SQUEEZE DEBUG] Previous: isSqueeze=${prevSqueezeState.isSqueeze}, momentum=${prevSqueezeState.momentum}`, 'debug');
+        onLog(`[TTM_SQUEEZE DEBUG] Squeeze duration: ${squeezeDuration}, minDuration: ${ttmSettings.minSqueezeDuration}`, 'debug');
     }
 
     // Signal fires on the FIRST candle the squeeze is released

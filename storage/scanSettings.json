@@ -1,0 +1,25 @@
+[
+  {
+    "id": "settings_1761164978543_y4ko45yri",
+    "scanFrequency": 60000,
+    "minimumCombinedStrength": 250,
+    "maxPositions": 1,
+    "riskPerTrade": 2,
+    "portfolioHeatMax": 80,
+    "minimumTradeValue": 10,
+    "defaultPositionSize": 100,
+    "useWinStrategySize": true,
+    "minimumRegimeConfidence": 60,
+    "minimumConvictionScore": 50,
+    "signalMatchingMode": "conviction_based",
+    "blockTradingInDowntrend": false,
+    "resetStatsOnModeSwitch": false,
+    "created_date": "2025-10-22T20:29:38.543Z",
+    "updated_date": "2025-10-22T20:29:55.872Z",
+    "isLiveTradingEnabled": false,
+    "isTestnetTradingEnabled": true,
+    "local_proxy_url": "http://localhost:3003",
+    "maxBalancePercentRisk": 100,
+    "maxBalanceInvestCapUSDT": 500
+  }
+]

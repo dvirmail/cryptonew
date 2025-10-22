@@ -3,7 +3,7 @@ import React, { createContext, useState, useContext, useEffect, useCallback } fr
 import { getAutoScannerService } from '@/components/services/AutoScannerService';
 import { useToast } from "@/components/ui/use-toast";
 import { queueFunctionCall, queueEntityCall } from '@/components/utils/apiQueue';
-import { testBinanceKeys } from '@/api/functions';
+import { functions } from '@/api/localClient';
 import { ScanSettings } from '@/api/entities';
 
 const TradingModeContext = createContext(null);
@@ -25,47 +25,58 @@ export const TradingModeProvider = ({ children }) => {
   const { toast } = useToast();
 
   // Function to check Binance API keys
-  const checkApiKeys = useCallback(async () => {
+  const checkApiKeys = useCallback(async (silent = false) => {
     setIsCheckingKeys(true);
     let currentLiveKeysValid = false;
     let currentTestnetKeysValid = false;
     try {
-      const settingsList = await queueEntityCall('ScanSettings', 'list');
-      const settings = settingsList?.[0];
-
-      if (!settings) {
-        console.warn('No ScanSettings found in database. Cannot check API keys.');
-        toast({
-          title: "API Key Check Warning",
-          description: "No scanner settings found to check API keys. Please configure settings.",
-          variant: "warning",
-        });
+      // Check localStorage for API keys (local development setup)
+      const savedKeys = localStorage.getItem('binanceApiKeys');
+      if (!savedKeys) {
+        console.warn('No API keys found in localStorage. Cannot check API keys.');
+        if (!silent) {
+          toast({
+            title: "API Key Check Warning",
+            description: "No API keys found. Please configure your Binance API keys in Settings.",
+            variant: "warning",
+          });
+        }
         setAreLiveKeysValid(false);
         setAreTestnetKeysValid(false);
         return;
       }
 
+      const keys = JSON.parse(savedKeys);
+
       // Check live keys
-      if (settings.binanceApiKey && settings.binanceApiSecret) {
-        const liveKeyTestResult = await queueFunctionCall(testBinanceKeys.name, settings.binanceApiKey, settings.binanceApiSecret, false);
+      if (keys.liveApiKey && keys.liveApiSecret) {
+        const liveKeyTestResult = await functions.testBinanceKeys({
+          mode: 'live',
+          proxyUrl: 'http://localhost:3003'
+        });
         currentLiveKeysValid = liveKeyTestResult.success;
       }
       setAreLiveKeysValid(currentLiveKeysValid);
 
       // Check testnet keys
-      if (settings.binanceTestnetApiKey && settings.binanceTestnetApiSecret) {
-        const testnetKeyTestResult = await queueFunctionCall(testBinanceKeys.name, settings.binanceTestnetApiKey, settings.binanceTestnetApiSecret, true);
+      if (keys.testnetApiKey && keys.testnetApiSecret) {
+        const testnetKeyTestResult = await functions.testBinanceKeys({
+          mode: 'testnet',
+          proxyUrl: 'http://localhost:3003'
+        });
         currentTestnetKeysValid = testnetKeyTestResult.success;
       }
       setAreTestnetKeysValid(currentTestnetKeysValid);
 
     } catch (error) {
       console.error('Error checking API keys:', error);
-      toast({
-        title: "API Key Check Failed",
-        description: `Failed to check Binance API keys: ${error.message}`,
-        variant: "destructive",
-      });
+      if (!silent) {
+        toast({
+          title: "API Key Check Failed",
+          description: `Failed to check Binance API keys: ${error.message}`,
+          variant: "destructive",
+        });
+      }
       setAreLiveKeysValid(false);
       setAreTestnetKeysValid(false);
     } finally {
@@ -86,22 +97,21 @@ export const TradingModeProvider = ({ children }) => {
         const settings = settingsList?.[0];
 
         if (settings) {
+          // Check if trading mode flags exist, otherwise default to testnet
           if (settings.isLiveTradingEnabled) {
             initialMode = 'live';
           } else if (settings.isTestnetTradingEnabled) {
             initialMode = 'testnet';
-          }
-
-          // Check live keys
-          if (settings.binanceApiKey && settings.binanceApiSecret) {
-            const liveKeyTestResult = await queueFunctionCall(testBinanceKeys.name, settings.binanceApiKey, settings.binanceApiSecret, false);
-            currentLiveKeysValid = liveKeyTestResult.success;
-          }
-
-          // Check testnet keys
-          if (settings.binanceTestnetApiKey && settings.binanceTestnetApiSecret) {
-            const testnetKeyTestResult = await queueFunctionCall(testBinanceKeys.name, settings.binanceTestnetApiKey, settings.binanceTestnetApiSecret, true);
-            currentTestnetKeysValid = testnetKeyTestResult.success;
+          } else {
+            // No trading mode flags found, default to testnet and add them
+            initialMode = 'testnet';
+            console.log('No trading mode flags found in ScanSettings. Defaulting to testnet and adding flags.');
+            
+            // Update the settings with trading mode flags
+            await queueEntityCall('ScanSettings', 'update', settings.id, {
+              isLiveTradingEnabled: false,
+              isTestnetTradingEnabled: true
+            });
           }
         } else {
           console.warn('No ScanSettings found in database. Initializing to testnet.');
@@ -110,6 +120,30 @@ export const TradingModeProvider = ({ children }) => {
             description: "No scanner settings found. Defaulting to Testnet mode.",
             variant: "warning",
           });
+        }
+
+        // Check API keys from localStorage (local development setup)
+        const savedKeys = localStorage.getItem('binanceApiKeys');
+        if (savedKeys) {
+          const keys = JSON.parse(savedKeys);
+          
+          // Check live keys
+          if (keys.liveApiKey && keys.liveApiSecret) {
+            const liveKeyTestResult = await functions.testBinanceKeys({
+              mode: 'live',
+              proxyUrl: 'http://localhost:3003'
+            });
+            currentLiveKeysValid = liveKeyTestResult.success;
+          }
+
+          // Check testnet keys
+          if (keys.testnetApiKey && keys.testnetApiSecret) {
+            const testnetKeyTestResult = await functions.testBinanceKeys({
+              mode: 'testnet',
+              proxyUrl: 'http://localhost:3003'
+            });
+            currentTestnetKeysValid = testnetKeyTestResult.success;
+          }
         }
 
         // Apply initial mode and key validity
@@ -145,7 +179,7 @@ export const TradingModeProvider = ({ children }) => {
     initializeTradingMode();
 
     // Set up interval for key checks
-    const interval = setInterval(checkApiKeys, 5 * 60 * 1000); // Check keys every 5 minutes
+    const interval = setInterval(() => checkApiKeys(true), 5 * 60 * 1000); // Check keys every 5 minutes (silent)
     return () => clearInterval(interval);
   }, [checkApiKeys, scannerService, toast]);
 
@@ -187,6 +221,7 @@ export const TradingModeProvider = ({ children }) => {
         isTestnetTradingEnabled: newMode === 'testnet',
       };
 
+      console.log(`[TradingModeProvider] Updating trading mode to ${newMode}`, settingsUpdate);
       await queueEntityCall('ScanSettings', 'update', currentSettings.id, settingsUpdate);
 
       // This is crucial: we also update the settings in the running scanner service instance

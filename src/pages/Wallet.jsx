@@ -54,6 +54,12 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
     const pnlPercentage = position.entry_value_usdt > 0 ? (pnl / position.entry_value_usdt) * 100 : 0;
     const pnlColor = pnl >= 0 ? 'text-green-500' : 'text-red-500';
     const PnlIcon = pnl >= 0 ? TrendingUp : TrendingDown;
+    
+    // Color coding for current price and value based on performance
+    const currentPriceColor = currentPrice > position.entry_price ? 'text-green-600' : 
+                             currentPrice < position.entry_price ? 'text-red-600' : 'text-gray-600';
+    const valueColor = currentPrice > position.entry_price ? 'text-green-600' : 
+                      currentPrice < position.entry_price ? 'text-red-600' : 'text-gray-600';
 
     const [timeLeftDisplay, setTimeLeftDisplay] = useState('N/A');
 
@@ -62,19 +68,22 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
         try {
             return format(new Date(timestamp), 'MMM dd HH:mm');
         } catch (e) {
-            return 'Invalid Date';
+            return 'N/A';
         }
     };
 
     useEffect(() => {
         const calculateTimeLeft = () => {
-            if (!position.time_exit_hours || !position.entry_timestamp) {
+            const entryTimestamp = position.entry_timestamp || position.created_date;
+            const timeExitHours = position.time_exit_hours || 24; // Default 24 hours if not set
+            
+            if (!entryTimestamp) {
                 return 'N/A';
             }
             
             try {
-                const entryTime = new Date(position.entry_timestamp);
-                const exitTime = new Date(entryTime.getTime() + (position.time_exit_hours * 60 * 60 * 1000));
+                const entryTime = new Date(entryTimestamp);
+                const exitTime = new Date(entryTime.getTime() + (timeExitHours * 60 * 60 * 1000));
                 const now = new Date();
                 const timeLeftMs = exitTime.getTime() - now.getTime();
 
@@ -84,7 +93,6 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
                     const days = Math.floor((totalSeconds % (3600 * 24 * 365)) / (3600 * 24));
                     const hours = Math.floor((totalSeconds % (3600 * 24)) / 3600);
                     const minutes = Math.floor((totalSeconds % 3600) / 60);
-                    const seconds = totalSeconds % 60;
 
                     let overdueString = '';
                     if (days > 0) {
@@ -94,11 +102,11 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
                     } else if (minutes > 0) {
                         overdueString = `${minutes}m`;
                     } else {
-                        overdueString = `${seconds}s`;
+                        overdueString = `${Math.floor(totalSeconds)}s`;
                     }
 
                     return (
-                        <span className="text-red-500 font-medium">
+                        <span className="text-red-500 font-medium text-xs">
                             Overdue by {overdueString}
                         </span>
                     );
@@ -132,7 +140,7 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
         }, 1000);
 
         return () => clearInterval(intervalId);
-    }, [position.time_exit_hours, position.entry_timestamp, position.position_id, position.symbol, position]);
+    }, [position.time_exit_hours, position.entry_timestamp, position.created_date, position.position_id, position.symbol, position]);
 
     const getStopLossInfo = () => {
         const items = [];
@@ -143,31 +151,35 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
             return ((price - position.entry_price) / position.entry_price) * 100;
         };
 
-        if (typeof position.stop_loss_price === 'number') {
-            const slPct = pctFromEntry(position.stop_loss_price);
-            items.push(
-                <div key="sl" className="flex items-center gap-2">
-                    <span className="text-red-600 font-medium text-xs">SL</span>
-                    <span className="text-xs">${fmt(position.stop_loss_price)}</span>
-                    {typeof slPct === 'number' && (
-                        <span className="text-red-500 text-xs">({slPct.toFixed(2)}%)</span>
-                    )}
-                </div>
-            );
-        }
+        // Default SL/TP if not set
+        const defaultSL = position.entry_price * 0.95; // 5% below entry
+        const defaultTP = position.entry_price * 1.05; // 5% above entry
+        
+        const slPrice = typeof position.stop_loss_price === 'number' ? position.stop_loss_price : defaultSL;
+        const tpPrice = typeof position.take_profit_price === 'number' ? position.take_profit_price : defaultTP;
+        
+        const slPct = pctFromEntry(slPrice);
+        const tpPct = pctFromEntry(tpPrice);
 
-        if (typeof position.take_profit_price === 'number') {
-            const tpPct = pctFromEntry(position.take_profit_price);
-            items.push(
-                <div key="tp" className="flex items-center gap-2">
-                    <span className="text-green-600 font-medium text-xs">TP</span>
-                    <span className="text-xs">${fmt(position.take_profit_price)}</span>
-                    {typeof tpPct === 'number' && (
-                        <span className="text-green-500 text-xs">({tpPct.toFixed(2)}%)</span>
-                    )}
-                </div>
-            );
-        }
+        items.push(
+            <div key="sl" className="flex items-center gap-1">
+                <span className="text-red-600 font-medium text-xs">SL</span>
+                <span className="text-xs">${fmt(slPrice)}</span>
+                {typeof slPct === 'number' && (
+                    <span className="text-red-500 text-xs">({slPct.toFixed(2)}%)</span>
+                )}
+            </div>
+        );
+
+        items.push(
+            <div key="tp" className="flex items-center gap-1">
+                <span className="text-green-600 font-medium text-xs">TP</span>
+                <span className="text-xs">${fmt(tpPrice)}</span>
+                {typeof tpPct === 'number' && (
+                    <span className="text-green-500 text-xs">({tpPct.toFixed(2)}%)</span>
+                )}
+            </div>
+        );
 
         const trailingActive = !!position.is_trailing || position.status === 'trailing';
         const hasTrailingOrder = !!position.trailing_stop_order_id;
@@ -175,27 +187,14 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
         const trailingConfigured = trailingActive || hasTrailingOrder || hasTrailingStop;
 
         items.push(
-            <div key="trailing" className="flex items-center gap-2 flex-wrap">
+            <div key="trailing" className="flex items-center gap-1">
                 <span className={`font-medium text-xs ${
                     trailingActive ? 'text-blue-700' : (trailingConfigured ? 'text-gray-700' : 'text-gray-400')
                 }`}>
                     {trailingActive ? 'Trailing: Active' : (trailingConfigured ? 'Trailing: Armed' : 'Trailing: Off')}
                 </span>
-                {hasTrailingOrder && (
-                    <span className="text-[10px] text-gray-500">order #{String(position.trailing_stop_order_id).slice(-6)}</span>
-                )}
-                {hasTrailingStop && (
-                    <span className="text-xs">Stop ${fmt(position.trailing_stop_price)}</span>
-                )}
-                {typeof position.trailing_peak_price === 'number' && (
-                    <span className="text-xs">Peak ${fmt(position.trailing_peak_price)}</span>
-                )}
             </div>
         );
-
-        if (items.length === 0) {
-            return <span className="text-gray-400 text-xs">No exit parameters</span>;
-        }
 
         return (
             <div className="flex flex-col gap-1 text-xs">
@@ -211,22 +210,26 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
                 <div className="text-xs text-gray-500">{position.strategy_name}</div>
             </TableCell>
             <TableCell>{formatPrice(position.entry_price)}</TableCell>
-            <TableCell>{formatPrice(currentPrice || 0)}</TableCell>
+            <TableCell className={currentPriceColor}>
+                {formatPrice(currentPrice || 0)}
+            </TableCell>
             <TableCell>{position.quantity_crypto.toFixed(4)}</TableCell>
-            <TableCell>{formatPrice(position.entry_value_usdt)}</TableCell>
+            <TableCell className={valueColor}>
+                {formatPrice(position.entry_value_usdt)}
+            </TableCell>
             <TableCell className={pnlColor}>
-                <div className="flex items-center">
-                    <PnlIcon className="h-4 w-4 mr-1" />
-                    {formatPrice(pnl)} ({pnlPercentage.toFixed(2)}%)
+                <div className="flex items-center text-xs">
+                    {pnl >= 0 ? '↗️' : '↘️'}
+                    <span className="ml-1">{formatPrice(pnl)} ({pnlPercentage.toFixed(2)}%)</span>
                 </div>
             </TableCell>
             <TableCell>
-                <Badge variant={position.status === 'open' ? 'success' : 'secondary'}>
+                <Badge variant={position.status === 'open' ? 'success' : 'secondary'} className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">
                     {position.status}
                 </Badge>
             </TableCell>
             <TableCell className="text-xs">
-                {formatDateTime(position.entry_timestamp)}
+                {formatDateTime(position.entry_timestamp || position.created_date)}
             </TableCell>
             <TableCell className="text-xs">
                 {timeLeftDisplay}
@@ -241,7 +244,7 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
                             <div>
                                 <Button
                                     size="sm"
-                                    className={`text-white ${pnl >= 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
+                                    className={`text-white ${pnl >= 0 ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'} text-xs px-3 py-1 rounded`}
                                     onClick={() => onClosePosition(position, currentPrice)}
                                     disabled={isClosing || !scannerInitialized || !currentPrice}
                                 >
@@ -278,6 +281,7 @@ const WalletPage = () => {
         balances,
         recentTrades,
         loading,
+        backgroundSyncing,
         refreshWallet,
         scannerInitialized
     } = useWallet();
@@ -424,9 +428,9 @@ const WalletPage = () => {
             let errorTitle = "Close Failed";
             let errorDescription = error.message || "An unexpected error occurred.";
 
-            if (errorDescription.includes('below minimum') || errorDescription.includes('minQty')) {
-                errorTitle = "Quantity Too Small";
-                errorDescription = `Cannot close: The position size is too small to meet Binance's minimum trading requirements for ${position.symbol}.`;
+            if (errorDescription.includes('dust_or_below_threshold') || errorDescription.includes('below minimum') || errorDescription.includes('minQty')) {
+                errorTitle = "Position Too Small";
+                errorDescription = `This position is too small to trade on Binance (minimum $5 value required). Cannot close position.`;
             } else if (errorDescription.includes('notional') || errorDescription.includes('MIN_NOTIONAL')) {
                 errorTitle = "Trade Value Too Small";
                 errorDescription = `Cannot close: The total value of this trade is below Binance's minimum for ${position.symbol}.`;
@@ -479,7 +483,7 @@ const WalletPage = () => {
         try {
             const scannerService = getAutoScannerService();
 
-            await scannerService.initializeLiveWallet();
+            await scannerService.reinitializeWalletFromBinance();
 
             await refreshWallet(true);
 
@@ -603,6 +607,12 @@ const WalletPage = () => {
                                 </Tooltip>
                             </TooltipProvider>
                         </div>
+                        {backgroundSyncing && (
+                            <div className="mt-2 flex items-center justify-center text-sm text-blue-600">
+                                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                Auto-syncing with Binance...
+                            </div>
+                        )}
                     </CardHeader>
                     <CardContent>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">

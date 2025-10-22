@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { base44 } from '@/api/base44Client';
 
-import { VirtualWalletState } from '@/api/entities/VirtualWalletState';
+import { VirtualWalletState } from '@/api/entities';
 import { BacktestCombination } from '@/api/entities';
 import { Trade } from '@/api/entities';
 import { HistoricalPerformance } from '@/api/entities';

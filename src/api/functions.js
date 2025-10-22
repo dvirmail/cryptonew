@@ -89,3 +89,5 @@ export const walletReconciliation = base44.functions.walletReconciliation;
 
 export const purgeGhostPositions = base44.functions.purgeGhostPositions;
 
+export const fetchKlineData = base44.functions.fetchKlineData;
+
