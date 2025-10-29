@@ -13,7 +13,20 @@
     "preview": "vite preview",
     "setup": "npm install && cd ../functions && npm install",
     "kill-proxy": "lsof -ti:3003 | xargs kill -9 2>/dev/null || echo 'No processes found on port 3003'",
-    "check-ports": "lsof -i:3003,5174 || echo 'All ports are free'"
+    "check-ports": "lsof -i:3003,5174 || echo 'All ports are free'",
+    "start": "npm run dev",
+    "start:backend": "node proxy-server.cjs",
+    "start:frontend": "vite",
+    "start:all": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "install:all": "npm install",
+    "db:setup": "echo 'Please run database setup manually using DBeaver or psql'",
+    "db:migrate": "echo 'Database migrations run automatically on server startup'",
+    "clean": "rm -rf node_modules package-lock.json && npm install",
+    "reset": "npm run kill-proxy && npm run clean && npm install",
+    "test:connection": "node -e \"console.log('Testing database connection...'); const { Pool } = require('pg'); const pool = new Pool({host:'localhost',port:5432,database:'cryptosentinel',user:'cryptouser',password:'cryptopass123'}); pool.query('SELECT NOW()').then(r => {console.log('✅ Database connected:', r.rows[0]); pool.end();}).catch(e => {console.log('❌ Database error:', e.message); pool.end();});\"",
+    "check:node": "node --version && npm --version",
+    "check:postgres": "psql --version || echo 'PostgreSQL not found'",
+    "check:all": "npm run check:node && npm run check:postgres && npm run check-ports"
   },
   "dependencies": {
     "@hookform/resolvers": "^4.1.2",
