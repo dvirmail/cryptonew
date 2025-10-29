@@ -37,8 +37,8 @@ export default class PerformanceMetricsService {
     }
     this.lastMomentumCalculation = now;
 
-    // Trigger Fear & Greed fetch from scanner (scanner manages this data)
-    this.scanner._fetchFearAndGreedIndex();
+    // Fear & Greed Index is managed by the main scanner service
+    // No need to fetch it here as it's already being fetched in background operations
 
     try {
       const unrealizedWeight = 0.30;
@@ -50,7 +50,7 @@ export default class PerformanceMetricsService {
       const signalQualityWeight = 0.05;
 
       let unrealizedComponent = 50;
-      const activeWalletState = this.scanner.state.liveWalletState;
+      const activeWalletState = this.scanner.walletManagerService?.getCurrentWalletState();
       const openPositions = activeWalletState?.positions || [];
       if (openPositions.length > 0) {
         let totalUnrealizedPnlUSDT = 0;
@@ -58,7 +58,7 @@ export default class PerformanceMetricsService {
         let positionsWithPrice = 0;
 
         for (const pos of openPositions) {
-          const symbolNoSlash = pos.symbol.replace('/', '');
+          const symbolNoSlash = (pos.symbol || '').replace('/', '');
           const currentPrice = this.scanner.currentPrices?.[symbolNoSlash];
           if (currentPrice && typeof currentPrice === 'number' && currentPrice > 0) {
             const unrealizedPnlUSDT = pos.direction === 'long'

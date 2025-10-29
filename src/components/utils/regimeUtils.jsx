@@ -19,32 +19,58 @@ export const initializeRegimeTracker = (onLogCallback) => {
 };
 
 export const getRegimeMultiplier = (marketRegime, signalType, signalDirection) => {
-    // A simple multiplier system based on regime. Can be expanded.
+    // Add defensive programming to handle non-string signalType
+    if (!signalType || typeof signalType !== 'string') {
+        console.error('[regime_debug] ❌ Invalid signalType:', { signalType, type: typeof signalType });
+        return 1.0; // Return neutral multiplier for invalid signalType
+    }
+    
+    // Normalize signal type to lowercase for consistent comparison
+    const normalizedSignalType = signalType.toLowerCase();
+    
+    // Normalize signal direction for consistency
+    const normalizedDirection = signalDirection?.toLowerCase();
+    
     switch (marketRegime) {
         case 'Bullish Trend':
-            if (signalDirection === 'bullish') return 1.2; // Boost bullish signals
-            if (signalDirection === 'bearish') return 0.8; // Dampen bearish signals
+        case 'Uptrend':
+            if (normalizedDirection === 'bullish' || normalizedDirection === 'uptrend') return 1.2; // Boost bullish signals
+            if (normalizedDirection === 'bearish' || normalizedDirection === 'downtrend') return 0.8; // Dampen bearish signals
+            // Trend-following signals stronger in uptrends
+            if (['macd', 'ema', 'ma200', 'psar', 'adx', 'tema', 'dema', 'hma', 'wma'].includes(normalizedSignalType)) return 1.15;
             break;
+            
         case 'Bearish Trend':
-            if (signalDirection === 'bullish') return 0.8; // Dampen bullish signals
-            if (signalDirection === 'bearish') return 1.2; // Boost bearish signals
+        case 'Downtrend':
+            if (normalizedDirection === 'bullish' || normalizedDirection === 'uptrend') return 0.8; // Dampen bullish signals
+            if (normalizedDirection === 'bearish' || normalizedDirection === 'downtrend') return 1.2; // Boost bearish signals
+            // Trend-following signals stronger in downtrends
+            if (['macd', 'ema', 'ma200', 'psar', 'adx', 'tema', 'dema', 'hma', 'wma'].includes(normalizedSignalType)) return 1.15;
             break;
+            
         case 'Ranging':
-            // In ranging markets, mean-reversion signals are stronger
-            if (signalType === 'rsi' || signalType === 'stochastic' || signalType === 'bollinger') {
-                return 1.15;
-            }
-            // Trend-following signals are weaker
-            if (signalType === 'macd' || signalType === 'ema') {
-                return 0.85;
-            }
+        case 'Ranging / Sideways':
+            // Mean-reversion signals stronger in ranging markets
+            if (['rsi', 'stochastic', 'bollinger', 'williamsr', 'cci', 'roc'].includes(normalizedSignalType)) return 1.15;
+            // Trend-following signals weaker
+            if (['macd', 'ema', 'ma200', 'psar', 'adx', 'tema', 'dema', 'hma', 'wma'].includes(normalizedSignalType)) return 0.85;
             break;
+            
         case 'Volatile':
-            // Breakout signals could be stronger, reversal signals riskier
-            if (signalType === 'bollinger' || signalType === 'donchian') { // Breakout-style signals
-                return 1.2;
-            }
+        case 'High Volatility':
+            // Breakout signals stronger in volatile markets
+            if (['bollinger', 'donchian', 'atr', 'bbw', 'keltner'].includes(normalizedSignalType)) return 1.2;
+            // Reversal signals riskier in volatile markets
+            if (['rsi', 'stochastic', 'williamsr'].includes(normalizedSignalType)) return 0.9;
             break;
+            
+        case 'Low Volatility':
+            // Mean-reversion signals stronger in low volatility
+            if (['rsi', 'stochastic', 'bollinger', 'williamsr'].includes(normalizedSignalType)) return 1.1;
+            // Breakout signals weaker
+            if (['donchian', 'atr', 'bbw'].includes(normalizedSignalType)) return 0.9;
+            break;
+            
         default:
             // For 'unknown' or any other unhandled regime, return a neutral multiplier.
             return 1.0;

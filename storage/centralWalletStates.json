@@ -1,0 +1,25 @@
+[
+  {
+    "id": "cws_testnet_1761509439475_tow7tgvfq",
+    "trading_mode": "testnet",
+    "available_balance": "0.00000000",
+    "balance_in_trades": 0,
+    "total_equity": "0.00000000",
+    "total_realized_pnl": 2.4462599999999575,
+    "unrealized_pnl": "0.00000000",
+    "open_positions_count": 0,
+    "last_binance_sync": "2025-10-26T20:11:43.815Z",
+    "balances": [],
+    "positions": [],
+    "status": "synced",
+    "created_date": "2025-10-26T20:10:39.475Z",
+    "updated_date": "2025-10-29T18:27:39.365Z",
+    "total_trades_count": 6,
+    "winning_trades_count": 3,
+    "losing_trades_count": 3,
+    "total_gross_profit": 3.50237999999998,
+    "total_gross_loss": 1.0561200000000222,
+    "total_fees_paid": 1.28538526,
+    "last_updated_timestamp": "2025-10-29T18:27:39.365Z"
+  }
+]

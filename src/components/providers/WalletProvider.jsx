@@ -1,8 +1,8 @@
-
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { queueEntityCall } from '@/components/utils/apiQueue';
 import { getAutoScannerService } from '@/components/services/AutoScannerService';
 import { useTradingMode } from './TradingModeProvider';
+import centralWalletStateManager from '@/components/services/CentralWalletStateManager';
 
 const WalletContext = createContext();
 
@@ -16,25 +16,33 @@ export const useWallet = () => {
 
 export const WalletProvider = ({ children }) => {
     const { tradingMode } = useTradingMode();
-    const [walletSummary, setWalletSummary] = useState(null);
-    const [liveWalletState, setLiveWalletState] = useState(null);
-    const [livePositions, setLivePositions] = useState([]);
+    const [centralState, setCentralState] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [backgroundSyncing, setBackgroundSyncing] = useState(false);
+    const [scannerInitialized, setScannerInitialized] = useState(false);
 
-    const [totalEquity, setTotalEquity] = useState(0);
-    const [availableBalance, setAvailableBalance] = useState(0);
-    const [balanceInTrades, setBalanceInTrades] = useState(0);
-    const [unrealizedPnl, setUnrealizedPnl] = useState(0);
-    const [openPositionsCount, setOpenPositionsCount] = useState(0);
-
+    // Performance history states
     const [dailyPnl, setDailyPnl] = useState(0);
     const [hourlyPnl, setHourlyPnl] = useState(0);
     const [dailyPerformanceHistory, setDailyPerformanceHistory] = useState([]);
     const [hourlyPerformanceHistory, setHourlyPerformanceHistory] = useState([]);
     const [recentTrades, setRecentTrades] = useState([]);
-    const [scannerInitialized, setScannerInitialized] = useState(false);
+
+    // Performance optimization: Debounce state updates
+    const updateTimeoutRef = useRef(null);
+    const lastUpdateRef = useRef(0);
+
+    // Computed values from central state
+    const totalEquity = centralState?.total_equity || 0;
+    const availableBalance = centralState?.available_balance || 0;
+    const balanceInTrades = centralState?.balance_in_trades || 0;
+    const unrealizedPnl = centralState?.unrealized_pnl || 0;
+    const openPositionsCount = centralState?.open_positions_count || 0;
+    const lifetimePnl = centralState?.total_realized_pnl || 0;
+    
+    // Extract arrays from central state
+    const balances = centralState?.balances || [];
+    const positions = centralState?.positions || [];
 
     const periodPnl = useMemo(() => {
         if (!recentTrades || recentTrades.length === 0) return 0;
@@ -51,326 +59,266 @@ export const WalletProvider = ({ children }) => {
         return relevantTrades.reduce((sum, trade) => sum + (trade.pnl_usdt || 0), 0);
     }, [recentTrades]);
 
-    const lifetimePnl = useMemo(() => {
-        const pnl = walletSummary?.totalRealizedPnl || walletSummary?.total_realized_pnl || 0;
-        return pnl;
-    }, [walletSummary]);
 
-    const fetchWalletData = useCallback(async (bypassCache = false) => {
-        if (!tradingMode) {
-            setLoading(false);
-            return;
+    // Debounced state update function
+    const debouncedSetCentralState = useCallback((newState) => {
+        const now = Date.now();
+        
+        // Clear existing timeout
+        if (updateTimeoutRef.current) {
+            clearTimeout(updateTimeoutRef.current);
         }
-
-        setLoading(true);
-        setError(null);
-
-        try {
-            // 1. Parallel fetch of critical data for faster loading
-            const [summariesFromDb, walletStates] = await Promise.all([
-                queueEntityCall('WalletSummary', 'filter', { trading_mode: tradingMode }, '-updated_date', 1, { timeoutMs: 15000 }),
-                queueEntityCall('LiveWalletState', 'filter', { trading_mode: tradingMode }, null, null, { timeoutMs: 15000 }).catch(error => {
-                    console.error('[WalletProvider] Error fetching LiveWalletState:', error);
-                    return [];
-                })
-            ]);
-            
-            let latestSummary = null;
-            let openPositions = [];
-
-            if (summariesFromDb && summariesFromDb.length > 0) {
-                latestSummary = summariesFromDb[0];
-            }
-            
-            // If no LiveWalletState found, trigger automatic background sync
-            if (!walletStates || walletStates.length === 0) {
-                // Trigger automatic background sync without blocking UI
-                setTimeout(async () => {
-                    try {
-                        setBackgroundSyncing(true);
-                        const { getAutoScannerService } = await import('@/components/services/AutoScannerService');
-                        const scannerService = getAutoScannerService();
-                        await scannerService.reinitializeWalletFromBinance();
-                        // Refresh wallet data after sync completes
-                        fetchWalletData();
-                    } catch (error) {
-                        console.error('[WalletProvider] Automatic background sync failed:', error);
-                    } finally {
-                        setBackgroundSyncing(false);
-                    }
-                }, 1000); // Start sync 1 second after UI loads
-            }
-            
-            let currentLiveWalletState = null;
-            if (walletStates && walletStates.length > 0) {
-                currentLiveWalletState = walletStates[0];
-                setLiveWalletState(currentLiveWalletState);
-                
-                // DEBUG: Add logging to understand the filter parameters
-                console.log('[WalletProvider] 🔍 Fetching positions with filter:', {
-                    wallet_id: currentLiveWalletState.id,
-                    trading_mode: tradingMode,
-                    status: ['open', 'trailing']
-                });
-                
-                openPositions = await queueEntityCall(
-                    'LivePosition',
-                    'filter',
-                    {
-                        wallet_id: currentLiveWalletState.id,
-                        trading_mode: tradingMode,
-                        status: ['open', 'trailing']
-                    },
-                    null,
-                    null,
-                    { timeoutMs: 15000 }
-                );
-                
-                console.log('[WalletProvider] 📊 Found positions:', {
-                    count: openPositions?.length || 0,
-                    positions: openPositions?.map(p => ({
-                        id: p.id,
-                        position_id: p.position_id,
-                        symbol: p.symbol,
-                        status: p.status,
-                        trading_mode: p.trading_mode,
-                        wallet_id: p.wallet_id
-                    })) || []
-                });
-                
-                // FALLBACK: If no positions found with strict filter, try broader search
-                if (!openPositions || openPositions.length === 0) {
-                    console.log('[WalletProvider] 🔄 No positions found with strict filter, trying broader search...');
-                    
-                    // Try without status filter
-                    const allPositions = await queueEntityCall(
-                        'LivePosition',
-                        'filter',
-                        {
-                            wallet_id: currentLiveWalletState.id,
-                            trading_mode: tradingMode
-                        },
-                        null,
-                        null,
-                        { timeoutMs: 15000 }
-                    );
-                    
-                    console.log('[WalletProvider] 📊 All positions for wallet:', {
-                        count: allPositions?.length || 0,
-                        positions: allPositions?.map(p => ({
-                            id: p.id,
-                            position_id: p.position_id,
-                            symbol: p.symbol,
-                            status: p.status,
-                            trading_mode: p.trading_mode,
-                            wallet_id: p.wallet_id
-                        })) || []
-                    });
-                    
-                    // Filter to only open/trailing positions
-                    const filteredPositions = (allPositions || []).filter(p => 
-                        p.status === 'open' || p.status === 'trailing'
-                    );
-                    
-                    console.log('[WalletProvider] ✅ Filtered positions:', {
-                        count: filteredPositions.length,
-                        positions: filteredPositions.map(p => ({
-                            id: p.id,
-                            position_id: p.position_id,
-                            symbol: p.symbol,
-                            status: p.status
-                        }))
-                    });
-                    
-                    setLivePositions(filteredPositions);
-                    setOpenPositionsCount(filteredPositions.length);
-                } else {
-                    setLivePositions(openPositions || []);
-                    const actualOpenPositionsCount = openPositions?.length || 0;
-                    setOpenPositionsCount(actualOpenPositionsCount);
-                } 
-                
-            } else {
-                setLiveWalletState(null);
-                setLivePositions([]);
-                setOpenPositionsCount(0);
-            }
-
-            // If no WalletSummary was found, try to use LiveWalletState data
-            if (!latestSummary && currentLiveWalletState) {
-                // Create a mock summary from LiveWalletState data
-                latestSummary = {
-                    totalEquity: parseFloat(currentLiveWalletState.total_equity || 0),
-                    availableBalance: parseFloat(currentLiveWalletState.available_balance || 0),
-                    total_equity: currentLiveWalletState.total_equity,
-                    available_balance: currentLiveWalletState.available_balance,
-                    total_realized_pnl: currentLiveWalletState.total_realized_pnl || "0",
-                    unrealized_pnl: currentLiveWalletState.unrealized_pnl || "0",
-                    balance_in_trades: "0",
-                    open_positions_count: 0
-                };
-            }
-
-            // Now set wallet values from either WalletSummary or LiveWalletState
-            if (latestSummary) {
-                setWalletSummary(latestSummary);
-                const totalEquityValue = parseFloat(latestSummary.totalEquity || latestSummary.total_equity || 0);
-                const availableBalanceValue = parseFloat(latestSummary.availableBalance || latestSummary.available_balance || 0);
-                setTotalEquity(totalEquityValue);
-                setAvailableBalance(availableBalanceValue);
-                setBalanceInTrades(parseFloat(latestSummary.balanceInTrades || latestSummary.balance_in_trades || 0));
-                setUnrealizedPnl(parseFloat(latestSummary.unrealizedPnl || latestSummary.unrealized_pnl || 0));
-                // Don't set openPositionsCount here - it will be set when positions are fetched
-            } else {
-                setWalletSummary(null);
-                setTotalEquity(0);
-                setAvailableBalance(0);
-                setBalanceInTrades(0);
-                setUnrealizedPnl(0);
-                setOpenPositionsCount(0);
-            }
-
-            // Set loading to false immediately after setting wallet values for fast UI
+        
+        // If this is a rapid update (within 100ms), debounce it
+        if (now - lastUpdateRef.current < 100) {
+            updateTimeoutRef.current = setTimeout(() => {
+                setCentralState(newState);
+                setLoading(false);
+                lastUpdateRef.current = Date.now();
+            }, 100);
+        } else {
+            // Update immediately for non-rapid updates
+            setCentralState(newState);
             setLoading(false);
+            lastUpdateRef.current = now;
+        }
+    }, []);
 
-            // 3. Fetch non-critical data in background (don't block UI)
-            Promise.all([
-                // Historical performance data (reduced limits for faster loading)
+    // Initialize central wallet state manager
+    useEffect(() => {
+        const initializeCentralWallet = async () => {
+            if (!tradingMode) return;
+            
+            try {
+                setLoading(true);
+                setError(null);
+                
+                await centralWalletStateManager.initialize(tradingMode);
+                
+                // Subscribe to state changes with debounced updates
+                const unsubscribe = centralWalletStateManager.subscribe(debouncedSetCentralState);
+                
+                // Check if scanner is initialized
+                const scannerService = getAutoScannerService();
+                if (scannerService) {
+                    setScannerInitialized(scannerService.state?.isInitialized || false);
+                }
+                
+                return unsubscribe;
+            } catch (error) {
+                console.error('[WalletProvider] ❌ Failed to initialize central wallet state:', error);
+                setError(error.message);
+                setLoading(false);
+            }
+        };
+
+        let unsubscribe;
+        initializeCentralWallet().then(unsub => {
+            unsubscribe = unsub;
+        });
+
+        return () => {
+            if (unsubscribe) {
+                unsubscribe();
+            }
+        };
+    }, [tradingMode]);
+
+    // Fetch performance history data
+    const fetchPerformanceHistory = useCallback(async () => {
+        if (!tradingMode) return;
+        
+        try {
+            console.log(`[WalletProvider] 🚀 Starting background data fetch for performance history...`, {
+                tradingMode: tradingMode,
+                timestamp: new Date().toISOString()
+            });
+            
+            const [dailyRecords, hourlyRecords, trades] = await Promise.all([
                 queueEntityCall('HistoricalPerformance', 'filter', {
                     mode: tradingMode,
                     period_type: 'daily'
-                }, '-snapshot_timestamp', 30, { timeoutMs: 30000 }), // 30 second timeout
+                }, '-snapshot_timestamp', 30, { timeoutMs: 15000 }).catch(() => []),
                 
                 queueEntityCall('HistoricalPerformance', 'filter', {
                     mode: tradingMode,
                     period_type: 'hourly'
-                }, '-snapshot_timestamp', 24, { timeoutMs: 30000 }), // 30 second timeout
+                }, '-snapshot_timestamp', 168, { timeoutMs: 15000 }).catch(() => []),
                 
-                // Recent trades (reduced limit)
-                queueEntityCall('Trade', 'filter', { trading_mode: tradingMode }, '-exit_timestamp', 100, { timeoutMs: 30000 }) // 30 second timeout
-            ]).then(([dailyRecords, hourlyRecords, trades]) => {
-                setDailyPerformanceHistory(Array.isArray(dailyRecords) ? dailyRecords.sort((a, b) => 
-                    new Date(a.snapshot_timestamp).getTime() - new Date(b.snapshot_timestamp).getTime()
-                ) : []);
-                setHourlyPerformanceHistory(Array.isArray(hourlyRecords) ? hourlyRecords.sort((a, b) => 
-                    new Date(a.snapshot_timestamp).getTime() - new Date(b.snapshot_timestamp).getTime()
-                ) : []);
-                
-                const mostRecentDaily = dailyRecords && dailyRecords.length > 0 ? dailyRecords[0] : null;
-                const mostRecentHourly = hourlyRecords && hourlyRecords.length > 0 ? hourlyRecords[0] : null;
-                
-                setDailyPnl(mostRecentDaily?.period_pnl || 0);
-                setHourlyPnl(mostRecentHourly?.period_pnl || 0);
-                setRecentTrades(Array.isArray(trades) ? trades : []);
-            }).catch(error => {
-                console.error('[WalletProvider] Error fetching background data:', error);
-            });
-
-            // Removed localStorage caching to prevent stale data issues
-
-        } catch (err) {
-            console.error('[WalletProvider] Error fetching wallet data:', err);
-            setError(err.message);
+                queueEntityCall('Trade', 'filter', {
+                    trading_mode: tradingMode
+                }, '-created_date', 100, { timeoutMs: 15000 }).catch(() => [])
+            ]);
             
-            // Removed localStorage caching to prevent stale data issues
-        } finally {
-            // Loading is now set to false earlier for faster UI
+            console.log('[WalletProvider] 📊 Performance data fetched:', {
+                dailyRecordsCount: dailyRecords?.length || 0,
+                hourlyRecordsCount: hourlyRecords?.length || 0,
+                tradesCount: trades?.length || 0,
+                tradingMode: tradingMode,
+                dailyRecords: dailyRecords,
+                hourlyRecords: hourlyRecords
+            });
+            
+            setDailyPerformanceHistory(dailyRecords || []);
+            setHourlyPerformanceHistory(hourlyRecords || []);
+            setRecentTrades(trades || []);
+            
+            // Calculate PnL values
+            const dailyPnlValue = dailyRecords?.reduce((sum, record) => sum + (record.pnl_usdt || 0), 0) || 0;
+            const hourlyPnlValue = hourlyRecords?.reduce((sum, record) => sum + (record.pnl_usdt || 0), 0) || 0;
+            
+            setDailyPnl(dailyPnlValue);
+            setHourlyPnl(hourlyPnlValue);
+            
+            console.log('[WalletProvider] 📈 Performance history state updated:', {
+                dailyPerformanceHistoryLength: dailyRecords?.length || 0,
+                hourlyPerformanceHistoryLength: hourlyRecords?.length || 0,
+                dailyRecordsSample: dailyRecords?.slice(0, 3) || [],
+                hourlyRecordsSample: hourlyRecords?.slice(0, 3) || []
+            });
+            
+            console.log('[WalletProvider] ✅ Performance data state updated:', {
+                dailyPerformanceHistoryLength: dailyRecords?.length || 0,
+                hourlyPerformanceHistoryLength: hourlyRecords?.length || 0,
+                recentTradesLength: trades?.length || 0,
+                dailyPnl: dailyPnlValue,
+                hourlyPnl: hourlyPnlValue
+            });
+            
+        } catch (error) {
+            console.error('[WalletProvider] ❌ Error fetching performance history:', error);
         }
     }, [tradingMode]);
 
+    // Fetch performance history on mount and periodically
     useEffect(() => {
-        const scanner = getAutoScannerService();
+        if (!tradingMode) return;
         
-        const unsubscribe = scanner.subscribeToWalletUpdates(() => {
-            console.log('[WalletProvider] 🔔 Received wallet update notification, refreshing data...');
-            // Only refresh if scanner is initialized
-            if (scannerInitialized) {
-                fetchWalletData(true); // Force refresh from database
-            }
-        });
+        fetchPerformanceHistory();
+        
+        // Set up periodic refresh every 5 minutes
+        const interval = setInterval(fetchPerformanceHistory, 5 * 60 * 1000);
+        
+        return () => clearInterval(interval);
+    }, [fetchPerformanceHistory]);
 
-        const unsubscribeScanner = scanner.subscribe((state) => {
-            if (state.isInitialized !== scannerInitialized) {
-                setScannerInitialized(state.isInitialized);
-                
-                if (state.isInitialized && scanner.positionManager) {
-                    const pmPositions = [...scanner.positionManager.positions];
-                    setLivePositions(pmPositions);
-                    setOpenPositionsCount(pmPositions.length);
+    // Monitor scanner initialization
+    useEffect(() => {
+        const checkScannerStatus = () => {
+            const scannerService = getAutoScannerService();
+            if (scannerService) {
+                const isInitialized = scannerService.state?.isInitialized || false;
+                if (isInitialized !== scannerInitialized) {
+                    setScannerInitialized(isInitialized);
                 }
             }
-        });
-
-        return () => { 
-            if (unsubscribe) unsubscribe(); 
-            if (unsubscribeScanner) unsubscribeScanner();
         };
-    }, [fetchWalletData, scannerInitialized]);
 
-    useEffect(() => {
-        // Load wallet data immediately, don't wait for scanner
-        fetchWalletData();
+        const interval = setInterval(checkScannerStatus, 1000);
+        return () => clearInterval(interval);
+    }, [scannerInitialized]);
+
+    // Force refresh function for external calls
+    const forceRefresh = useCallback(async () => {
+        if (!tradingMode) return;
         
-        // Only set up periodic refresh if scanner is initialized
-        let refreshInterval = null;
-        if (scannerInitialized) {
-            refreshInterval = setInterval(() => {
-                fetchWalletData(true);
-            }, 15000); // 15 seconds to reduce load
+        try {
+            await centralWalletStateManager.syncWithBinance(tradingMode);
+            await fetchPerformanceHistory();
+        } catch (error) {
+            console.error('[WalletProvider] ❌ Force refresh failed:', error);
         }
-        
-        return () => {
-            if (refreshInterval) {
-                clearInterval(refreshInterval);
-            }
-        };
-    }, [tradingMode, fetchWalletData, scannerInitialized]);
+    }, [tradingMode, fetchPerformanceHistory]);
 
-    const refreshWallet = useCallback(async () => {
-        await fetchWalletData(true);
-    }, [fetchWalletData]);
-
-    // Sync openPositionsCount with actual livePositions array
+    // Expose force refresh globally for debugging
     useEffect(() => {
-        setOpenPositionsCount(livePositions.length);
-    }, [livePositions]);
+        if (typeof window !== 'undefined') {
+            window.forceWalletRefresh = forceRefresh;
+        }
+    }, [forceRefresh]);
 
-    const value = {
-        walletSummary,
+    // Create walletSummary object for backward compatibility
+    const walletSummary = useMemo(() => ({
         totalEquity,
         availableBalance,
-        totalRealizedPnl: walletSummary?.totalRealizedPnl || walletSummary?.total_realized_pnl || 0,
-        periodPnl,
-        lifetimePnl,
-        unrealizedPnl,
         balanceInTrades,
+        unrealizedPnl,
+        openPositionsCount,
+        lifetimePnl,
+        balances,
+        positions,
+        lastUpdated: centralState?.last_updated_timestamp || new Date().toISOString()
+    }), [totalEquity, availableBalance, balanceInTrades, unrealizedPnl, openPositionsCount, lifetimePnl, balances, positions, centralState]);
+
+    // Performance optimization: Memoize context value with shallow comparison
+    const contextValue = useMemo(() => {
+        const value = {
+            // Core wallet data from central state
+            totalEquity,
+            availableBalance,
+            balanceInTrades,
+            unrealizedPnl,
+            openPositionsCount,
+            lifetimePnl,
+            
+            // Raw data arrays
+            balances,
+            positions,
+            
+            // Performance data
+            dailyPnl,
+            hourlyPnl,
+            dailyPerformanceHistory,
+            hourlyPerformanceHistory,
+            recentTrades,
+            periodPnl,
+            
+            // State
+            loading,
+            error,
+            scannerInitialized,
+            
+            // Central state (for debugging)
+            centralState,
+            
+            // Backward compatibility
+            walletSummary,
+            
+            // Actions
+            forceRefresh
+        };
+        
+        // Only log context value changes, not every render
+        if (process.env.NODE_ENV === 'development') {
+            // Removed verbose logging
+        }
+        
+        return value;
+    }, [
+        totalEquity,
+        availableBalance,
+        balanceInTrades,
+        unrealizedPnl,
+        openPositionsCount,
+        lifetimePnl,
+        balances,
+        positions,
         dailyPnl,
         hourlyPnl,
         dailyPerformanceHistory,
         hourlyPerformanceHistory,
-        winRate: walletSummary?.winRate || walletSummary?.win_rate || 0,
-        profitFactor: walletSummary?.profitFactor || walletSummary?.profit_factor || 0,
-        winningTradesCount: walletSummary?.winningTradesCount || walletSummary?.winning_trades_count || 0,
-        totalTradesCount: walletSummary?.totalTradesCount || walletSummary?.total_trades_count || 0,
-        totalGrossProfit: walletSummary?.totalGrossProfit || walletSummary?.total_gross_profit || 0,
-        totalGrossLoss: walletSummary?.totalGrossLoss || walletSummary?.total_gross_loss || 0,
-        
-        openPositionsCount,
-        
-        liveWalletState,
-        positions: livePositions,
-        balances: liveWalletState?.balances || [],
         recentTrades,
-        
+        periodPnl,
         loading,
         error,
-        backgroundSyncing,
         scannerInitialized,
-        refreshWallet
-    };
+        centralState,
+        walletSummary,
+        forceRefresh
+    ]);
 
     return (
-        <WalletContext.Provider value={value}>
+        <WalletContext.Provider value={contextValue}>
             {children}
         </WalletContext.Provider>
     );

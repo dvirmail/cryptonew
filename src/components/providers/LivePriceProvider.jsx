@@ -2,6 +2,7 @@
 import React, { createContext, useState, useEffect, useCallback, useRef } from 'react';
 import { queueFunctionCall } from '@/components/utils/apiQueue';
 import { getBinancePrices } from '@/api/functions'; // Added top-level import for direct use in useCallback
+import priceCacheService from '@/components/services/PriceCacheService';
 
 const POLL_INTERVAL = 15000;
 const EXTERNAL_PRICE_FRESHNESS_THRESHOLD = 12000; // Only use scanner prices if they are less than 12 seconds old.
@@ -19,6 +20,7 @@ export const LivePriceProvider = ({ children }) => {
     const isFetchingRef = useRef(false); // Kept but new fetchPrices doesn't use it for its internal logic
     const pollerRef = useRef(null);
     const lastScannerPriceUpdateRef = useRef(0); // Kept but new fetchPrices doesn't use it for its internal logic
+    const unsubscribeRef = useRef(null);
 
     const fetchPrices = useCallback(async () => {
         const symbolsToFetch = Array.from(subscribedSymbolsRef.current);
@@ -131,16 +133,25 @@ export const LivePriceProvider = ({ children }) => {
         }
     }, [setPrices]);
 
+    // Subscribe to global price coordinator instead of polling
     useEffect(() => {
-        // The original `useEffect` defined `fetchPrices` locally. Now it uses the `useCallback` version.
-        // The scanner freshness check and `isFetchingRef` logic from the original `useEffect`'s `fetchPrices`
-        // is now removed, as per the new `fetchPrices` outline.
-        pollerRef.current = fetchPrices;
-        const intervalId = setInterval(fetchPrices, POLL_INTERVAL);
-        fetchPrices(); // Initial fetch
-
-        return () => clearInterval(intervalId);
-    }, [fetchPrices]); // Added fetchPrices as a dependency
+        if (subscribedSymbolsRef.current.size > 0) {
+            // Subscribe to global price updates
+            unsubscribeRef.current = priceCacheService.subscribeToGlobalUpdates(() => {
+                return Array.from(subscribedSymbolsRef.current);
+            });
+            
+            // Start global coordinator if not already running
+            priceCacheService.startGlobalPriceCoordinator(POLL_INTERVAL);
+        }
+        
+        return () => {
+            if (unsubscribeRef.current) {
+                unsubscribeRef.current();
+                unsubscribeRef.current = null;
+            }
+        };
+    }, [subscribedSymbolsRef.current.size]);
 
     const contextValue = React.useMemo(() => ({
         priceData,

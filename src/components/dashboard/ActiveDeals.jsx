@@ -7,33 +7,8 @@ import { useWallet } from '@/components/providers/WalletProvider';
 import { useLivePrices } from '@/components/utils/useLivePrices';
 import { useToast } from '@/components/ui/use-toast';
 
-// IMPORTANT: This is a MOCK positionManager for demonstration purposes.
-// In a real application, you would import an actual service or API client.
-// Example: import * as positionManager from '@/services/positionManager';
-const positionManager = {
-    manualClosePosition: async (id, symbol, entryPrice, quantity, currentPrice) => {
-        console.warn("Using MOCK positionManager.manualClosePosition. Replace with actual implementation in production.");
-        // Simulate an asynchronous API call
-        return new Promise(resolve => setTimeout(() => {
-            const success = Math.random() > 0.5; // Simulate success/failure
-            if (success) {
-                resolve({ success: true, message: `Mock: Position ${symbol} closed successfully.` });
-            } else {
-                const errorType = Math.random();
-                if (errorType < 0.4) {
-                    // Simulate an error requiring reconciliation (e.g., insufficient balance)
-                    resolve({ success: false, error: "Mock: Binance - Insufficient balance detected.", requiresReconciliation: true });
-                } else if (errorType < 0.7) {
-                    // Simulate another specific Binance error
-                    resolve({ success: false, error: "Mock: Binance - Order rejected by exchange rules." });
-                } else {
-                    // Simulate a generic error
-                    resolve({ success: false, error: "Mock: A generic error occurred during position closure." });
-                }
-            }
-        }, 1500)); // Simulate network latency
-    }
-};
+// Import the real positionManager from the scanner service
+import { getAutoScannerService } from '@/components/services/AutoScannerService';
 
 
 export default function ActiveDeals() {
@@ -70,16 +45,19 @@ export default function ActiveDeals() {
         setIsClosing(prev => ({ ...prev, [position.id]: true }));
 
         try {
+            // Get the real positionManager from the scanner service
+            const scannerService = getAutoScannerService();
+            const positionManager = scannerService.positionManager;
+
+            if (!positionManager) {
+                throw new Error('PositionManager not available. Please ensure the scanner service is initialized.');
+            }
+
             // Ensure current price is available for closing order, fallback to entry price if not
             const priceForClosing = currentPrices[position.symbol.replace('/', '')] || position.entry_price;
 
-            const result = await positionManager.manualClosePosition(
-                position.id,
-                position.symbol,
-                position.entry_price, // entry_price might be needed for audit/record
-                position.quantity_crypto,
-                priceForClosing // Use the most current price for the closing order
-            );
+            // Call the real manualClosePosition function with the correct parameters
+            const result = await positionManager.manualClosePosition(position, priceForClosing);
 
             if (result.success) {
                 toast({
@@ -147,11 +125,11 @@ export default function ActiveDeals() {
             <CardContent className="p-0">
                 <ScrollArea className="h-80">
                     <div className="p-4 space-y-4">
-                        {deals.length > 0 ? deals.map((deal) => {
+                        {deals.length > 0 ? deals.map((deal, index) => {
                             const { pnl, pnlPercentage } = calculatePnl(deal);
                             const pnlColor = pnl >= 0 ? 'text-green-500' : 'text-red-500';
                             return (
-                                <div key={deal.position_id} className="flex justify-between items-center">
+                                <div key={`${deal.position_id || deal.id || 'unknown'}-${index}`} className="flex justify-between items-center">
                                     <div className="font-medium text-gray-900 dark:text-white">{deal.symbol}</div>
                                     <div className="text-right">
                                         <div className={`font-semibold ${pnlColor}`}>{pnl.toFixed(2)} USDT</div>

@@ -1,0 +1,53 @@
+[
+  {
+    "id": "1",
+    "name": "RSI Bollinger Strategy",
+    "description": "Combines RSI oversold signals with Bollinger Band lower touches",
+    "category": "momentum",
+    "timeframes": ["1h", "4h"],
+    "signal_conditions": {
+      "rsi": {
+        "enabled": true,
+        "oversoldValue": 30,
+        "period": 14
+      },
+      "bollinger": {
+        "enabled": true,
+        "period": 20,
+        "stdDev": 2
+      }
+    },
+    "is_active": true,
+    "created_date": "2024-01-15T10:00:00Z",
+    "updated_date": "2024-01-15T10:00:00Z"
+  },
+  {
+    "id": "2",
+    "name": "Multi-Signal Momentum",
+    "description": "Advanced strategy using MACD, Volume, and Stochastic signals",
+    "category": "trend",
+    "timeframes": ["4h", "1d"],
+    "signal_conditions": {
+      "macd": {
+        "enabled": true,
+        "fastPeriod": 12,
+        "slowPeriod": 26,
+        "signalPeriod": 9
+      },
+      "volume": {
+        "enabled": true,
+        "threshold": 200,
+        "maPeriod": 20
+      },
+      "stochastic": {
+        "enabled": true,
+        "kPeriod": 14,
+        "dPeriod": 3,
+        "oversold": 20
+      }
+    },
+    "is_active": true,
+    "created_date": "2024-01-14T16:00:00Z",
+    "updated_date": "2024-01-14T16:00:00Z"
+  }
+]

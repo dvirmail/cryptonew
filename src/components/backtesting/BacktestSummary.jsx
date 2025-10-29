@@ -91,7 +91,7 @@ const BacktestSummary = ({ results, signalCombinations }) => {
 
   const {
     totalMatches, successfulMatches, successRate, totalCombinationsTested, coinsTested,
-    coinsSuccessfullyProcessed,
+    coinsSuccessfullyProcessed, totalReturn, annualizedReturn,
   } = results;
 
   const totalOccurrences = signalCombinations.reduce((sum, combo) => sum + (combo.occurrences || 0), 0);
@@ -190,6 +190,20 @@ const BacktestSummary = ({ results, signalCombinations }) => {
             icon={<DollarSign />}
             tooltipText="The average net price movement across all successful and failed strategy occurrences."
             colorClass="text-blue-500"
+          />
+          <StatCard
+            title="Total Return"
+            value={`${(totalReturn || 0).toFixed(2)}%`}
+            icon={<TrendingUp />}
+            tooltipText="The total return across all strategy occurrences."
+            colorClass="text-green-500"
+          />
+          <StatCard
+            title="Annualized Return"
+            value={`${(annualizedReturn || 0).toFixed(2)}%`}
+            icon={<Percent />}
+            tooltipText="The annualized return rate based on the total return and time period."
+            colorClass="text-purple-500"
           />
         </CardContent>
       </Card>

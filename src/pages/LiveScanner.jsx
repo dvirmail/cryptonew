@@ -28,7 +28,8 @@ import {
 import { ScanSettings } from "@/api/entities";
 import { BacktestCombination } from "@/api/entities";
 import { User } from "@/api/entities";
-import { LiveWalletState } from "@/api/entities";
+import { CentralWalletState } from "@/api/entities";
+import centralWalletStateManager from "@/components/services/CentralWalletStateManager";
 import { liveScannerService } from "@/components/services/liveScannerService";
 import { testBinanceKeys } from "@/api/functions";
 import { Link } from "react-router-dom";
@@ -67,12 +68,19 @@ export default function LiveScanner() {
 
   const fetchLiveWalletData = useCallback(async () => {
     try {
-      const liveWalletStates = await LiveWalletState.list();
-      if (liveWalletStates.length > 0) {
-        const walletData = liveWalletStates[0];
-        setLiveWallet(walletData);
-        // Update available balance from liveWallet as it's the most current source
-        setAvailableBalance(walletData.available_balance_usdt || 0);
+      // Use CentralWalletStateManager instead of LiveWalletState
+      const centralState = centralWalletStateManager.getCurrentState();
+      if (centralState) {
+        setLiveWallet(centralState);
+        setAvailableBalance(centralState.available_balance || 0);
+      } else {
+        // Initialize if not ready
+        await centralWalletStateManager.initialize('testnet');
+        const state = centralWalletStateManager.getCurrentState();
+        if (state) {
+          setLiveWallet(state);
+          setAvailableBalance(state.available_balance || 0);
+        }
       }
     } catch (error) {
       console.error("Error fetching live wallet:", error);
@@ -521,7 +529,22 @@ export default function LiveScanner() {
               </div>
 
               <div>
-                <Label htmlFor="defaultPositionSize">Default Position Size (USDT)</Label>
+                <Label htmlFor="basePositionSize">Base Position Size (USDT)</Label>
+                <Input
+                  id="basePositionSize"
+                  type="number"
+                  min="10"
+                  max="10000"
+                  step="10"
+                  value={config.basePositionSize || 100}
+                  onChange={(e) => handleConfigChange('basePositionSize', parseFloat(e.target.value))}
+                  className="mt-1"
+                />
+                <p className="text-xs text-gray-500 mt-1">Base position size for LPM system adjustments</p>
+              </div>
+
+              <div>
+                <Label htmlFor="defaultPositionSize">Fixed Position Size (USDT)</Label>
                 <Input
                   id="defaultPositionSize"
                   type="number"

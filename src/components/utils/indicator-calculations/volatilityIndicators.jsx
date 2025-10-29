@@ -2,7 +2,8 @@
 /**
  * Volatility-based technical indicators
  */
-import { calculateEMA } from './helpers'; // Modified: calculateATR is now defined in this file
+import { calculateEMA } from './helpers';
+import { calculateATR as unifiedCalculateATR } from '../atrUnified';
 
 // Helper function to calculate Simple Moving Average (SMA)
 // This is needed because the updated calculateBollingerBands uses calculateMA.
@@ -110,66 +111,7 @@ export function calculateBBW(klines, period = 20, multiplier = 2) {
   return results;
 }
 
-// FIXED: Created a robust, self-contained ATR calculation function to prevent 'undefined call' errors.
-export const calculateATR = (klines, period = 14) => {
-    if (!klines || klines.length < period) {
-        return [];
-    }
-
-    const atrValues = [];
-    let previousAtr = null;
-
-    for (let i = 0; i < klines.length; i++) {
-        const currentCandle = klines[i];
-        
-        // Safety check for malformed candle data
-        if (!currentCandle || typeof currentCandle.high === 'undefined' || typeof currentCandle.low === 'undefined' || typeof currentCandle.close === 'undefined') {
-            atrValues.push(null);
-            continue;
-        }
-        
-        const prevCandle = i > 0 ? klines[i - 1] : null;
-
-        const high = parseFloat(currentCandle.high);
-        const low = parseFloat(currentCandle.low);
-        const close = parseFloat(currentCandle.close);
-        // If prevCandle is null or its close is undefined, use high as a fallback for the first True Range calculation.
-        const prevClose = prevCandle && typeof prevCandle.close !== 'undefined' ? parseFloat(prevCandle.close) : high;
-
-        const tr1 = high - low;
-        const tr2 = Math.abs(high - prevClose);
-        const tr3 = Math.abs(low - prevClose);
-        const trueRange = Math.max(tr1, tr2, tr3);
-
-        if (i < period - 1) {
-            atrValues.push(null); // Not enough data for initial ATR period
-        } else if (i === period - 1) {
-            // Calculate initial ATR as simple average of the first 'period' True Ranges
-            let sumOfTr = 0;
-            for (let j = 0; j < period; j++) {
-                const c = klines[j];
-                const pc = j > 0 ? klines[j - 1] : null;
-                const h = parseFloat(c.high);
-                const l = parseFloat(c.low);
-                // If pc is null or its close is undefined, use h as a fallback for the first candle's prevClose
-                const pCl = pc && typeof pc.close !== 'undefined' ? parseFloat(pc.close) : h;
-                sumOfTr += Math.max(h - l, Math.abs(h - pCl), Math.abs(l - pCl));
-            }
-            previousAtr = sumOfTr / period;
-            atrValues.push(previousAtr);
-        } else {
-            if (previousAtr !== null) {
-                const currentAtr = ((previousAtr * (period - 1)) + trueRange) / period;
-                atrValues.push(currentAtr);
-                previousAtr = currentAtr;
-            } else {
-                // This case should not be reached with the corrected logic above
-                atrValues.push(null);
-            }
-        }
-    }
-    return atrValues;
-};
+// ATR function removed - use unifiedCalculateATR directly
 
 export const calculateKeltnerChannels = (data, period = 20, atrPeriod = 10, multiplier = 2) => {
     if (!data || data.length < Math.max(period, atrPeriod)) {
@@ -177,7 +119,7 @@ export const calculateKeltnerChannels = (data, period = 20, atrPeriod = 10, mult
     }
 
     const ema = calculateEMA(data, period);
-    const atr = calculateATR(data, atrPeriod);
+    const atr = unifiedCalculateATR(data, atrPeriod, { debug: false, validateData: true });
     const results = [];
 
     for (let i = 0; i < data.length; i++) {

@@ -1,25 +1,44 @@
 [
   {
-    "id": "settings_1761164978543_y4ko45yri",
+    "id": "default",
+    "test": true,
     "scanFrequency": 60000,
-    "minimumCombinedStrength": 250,
+    "updated_date": "2025-10-28T23:30:28.967Z",
+    "isLiveTradingEnabled": false,
+    "isTestnetTradingEnabled": true,
+    "minimumCombinedStrength": 300,
     "maxPositions": 1,
     "riskPerTrade": 2,
-    "portfolioHeatMax": 80,
+    "portfolioHeatMax": 20,
     "minimumTradeValue": 10,
     "defaultPositionSize": 100,
-    "useWinStrategySize": true,
+    "useWinStrategySize": false,
     "minimumRegimeConfidence": 60,
     "minimumConvictionScore": 50,
     "signalMatchingMode": "conviction_based",
     "blockTradingInDowntrend": false,
     "resetStatsOnModeSwitch": false,
-    "created_date": "2025-10-22T20:29:38.543Z",
-    "updated_date": "2025-10-22T20:29:55.872Z",
-    "isLiveTradingEnabled": false,
-    "isTestnetTradingEnabled": true,
     "local_proxy_url": "http://localhost:3003",
-    "maxBalancePercentRisk": 100,
+    "maxBalancePercentRisk": 80,
     "maxBalanceInvestCapUSDT": 500
+  },
+  {
+    "id": "settings_1761690080618_xzlu4x20r",
+    "isRunning": true,
+    "created_date": "2025-10-28T22:21:20.618Z",
+    "updated_date": "2025-10-28T22:21:20.618Z"
+  },
+  {
+    "id": "settings_1761690340567_3r9u8sk6c",
+    "isRunning": true,
+    "test": true,
+    "created_date": "2025-10-28T22:25:40.567Z",
+    "updated_date": "2025-10-28T22:25:40.567Z"
+  },
+  {
+    "id": "settings_1761694004531_ozwhgtt5j",
+    "maxBalanceInvestCapUSDT": 500,
+    "created_date": "2025-10-28T23:26:44.531Z",
+    "updated_date": "2025-10-28T23:26:44.531Z"
   }
 ]

@@ -139,9 +139,69 @@ function AppLayout({ children, currentPageName }) {
     if (typeof window !== 'undefined') {
       const scannerService = getAutoScannerService();
       
+      console.log('[Layout] 🔍 Scanner service state check:');
+      console.log('[Layout] 🔍 isInitialized:', scannerService.getState().isInitialized);
+      console.log('[Layout] 🔍 isRunning:', scannerService.getState().isRunning);
+      console.log('[Layout] 🔍 _isAutoStartBlocked:', scannerService._isAutoStartBlocked);
+      
       // Ensure the service is initialized if it hasn't been yet
       if (!scannerService.getState().isInitialized) {
-          scannerService.initialize();
+          console.log('[Layout] 🚀 Initializing scanner service...');
+          scannerService.initialize().then(() => {
+              console.log('[Layout] ✅ Scanner service initialization completed');
+              console.log('[Layout] 🔍 Post-init state check:');
+              console.log('[Layout] 🔍 isInitialized:', scannerService.getState().isInitialized);
+              console.log('[Layout] 🔍 isRunning:', scannerService.getState().isRunning);
+              console.log('[Layout] 🔍 _isAutoStartBlocked:', scannerService._isAutoStartBlocked);
+              
+              // Force unblock auto-start after initialization
+              if (scannerService._isAutoStartBlocked) {
+                  console.log('[Layout] 🔓 Force unblocking auto-start after initialization...');
+                  scannerService._isAutoStartBlocked = false;
+                  console.log('[Layout] ✅ Auto-start unblocked successfully');
+              }
+              
+              // Try to start the scanner if it's not running
+              if (!scannerService.getState().isRunning) {
+                  console.log('[Layout] 🚀 Attempting to start scanner after initialization...');
+                  // Use LifecycleService as the single orchestrator for scanner starts
+                  const lifecycleService = scannerService.lifecycleService;
+                  if (lifecycleService && lifecycleService.start) {
+                      lifecycleService.start().catch(error => {
+                          console.error('[Layout] ❌ Failed to start scanner after initialization:', error);
+                      });
+                  } else {
+                      console.error('[Layout] ❌ LifecycleService not available for scanner start');
+                  }
+              } else {
+                  console.log('[Layout] ℹ️ Scanner is already running, no need to start');
+                  
+                  // Check if the scanner is actually performing its main cycle
+                  console.log('[Layout] 🔍 Checking if scanner main cycle is active...');
+                  const lifecycleService = scannerService.lifecycleService;
+                  if (lifecycleService && lifecycleService.countdownInterval) {
+                      console.log('[Layout] ✅ Scanner main cycle is active (countdownInterval exists)');
+                  } else {
+                      console.log('[Layout] ⚠️ Scanner main cycle is NOT active (no countdownInterval)');
+                      console.log('[Layout] ℹ️ Scanner reports as running but no countdownInterval - this is expected during startup');
+                  }
+              }
+          }).catch(error => {
+              console.error('[Layout] ❌ Scanner service initialization failed:', error);
+          });
+      } else {
+          console.log('[Layout] ✅ Scanner service already initialized');
+          // Check if scanner should be running but isn't
+          if (scannerService.getState().isInitialized && !scannerService.getState().isRunning) {
+              console.log('[Layout] 🔍 Scanner initialized but not running - this should be handled by the initialization block above');
+              // Unblock auto-start first
+              if (scannerService.setAutoStartBlocked) {
+                  console.log('[Layout] 🔓 Unblocking auto-start...');
+                  scannerService.setAutoStartBlocked(false);
+              }
+          } else {
+              console.log('[Layout] ℹ️ Scanner is already running or not initialized');
+          }
       }
 
       // Handler for scanner state updates (e.g., performance momentum)
@@ -168,7 +228,7 @@ function AppLayout({ children, currentPageName }) {
         // For simplicity, keeping it as is, assuming registerNotifier handles duplicates or is fine.
       };
     }
-  }, [toast, updatePricesFromScanner]); // Dependencies: toast and the price update function
+  }, []); // Empty dependency array - run once on mount
 
   useEffect(() => {
     const loadUser = async () => {
@@ -341,7 +401,14 @@ function AppLayout({ children, currentPageName }) {
         `}>
           {/* Sidebar Header for Mobile */}
           <div className="flex items-center justify-between p-4 h-[69px] border-b dark:border-gray-700 lg:hidden">
-            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Menu</h2>
+            <div className="flex items-center space-x-2">
+              <img 
+                src="/logo.svg" 
+                alt="CryptoSentinel Logo" 
+                className="h-6 w-6"
+              />
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Menu</h2>
+            </div>
             <Button variant="ghost" size="icon" onClick={() => setIsMobileMenuOpen(false)}>
               <X className="h-5 w-5" />
             </Button>
@@ -442,6 +509,11 @@ function AppLayout({ children, currentPageName }) {
 
               {/* Center Group: App Name & Mode Badge */}
               <div className="flex items-center space-x-2">
+                <img 
+                  src="/logo.svg" 
+                  alt="CryptoSentinel Logo" 
+                  className="h-8 w-8"
+                />
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
                   CryptoSentinel
                 </h1>

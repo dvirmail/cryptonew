@@ -288,9 +288,43 @@
                                             ${timeLeft}
                                         </td>
                                         <td>
-                                            SL: $${(position.entry_price * 0.95).toFixed(2)} (-5.00%)<br>
-                                            TP: $${(position.entry_price * 1.05).toFixed(2)} (+5.00%)<br>
-                                            <span style="color: #3b82f6;">Trailing: Off</span>
+                                            ${(() => {
+                                                // Check if SL/TP values are realistic and log warnings if not
+                                                const isRealisticPrice = (price, entryPrice) => {
+                                                    if (typeof price !== 'number' || typeof entryPrice !== 'number') return false;
+                                                    return price > 0 && price < entryPrice * 10 && price > entryPrice * 0.1;
+                                                };
+                                                
+                                                // Use actual SL/TP prices and log warnings if unrealistic
+                                                const slPrice = position.stop_loss_price;
+                                                const tpPrice = position.take_profit_price;
+                                                
+                                                // Log warnings for unrealistic values
+                                                if (typeof slPrice === 'number' && !isRealisticPrice(slPrice, position.entry_price)) {
+                                                    console.warn('[PositionsViewer] ⚠️ WARNING: Unrealistic stop loss price:', {
+                                                        stopLossPrice: slPrice,
+                                                        entryPrice: position.entry_price,
+                                                        symbol: position.symbol,
+                                                        impact: 'SL/TP values are not logical - check ATR data and multipliers'
+                                                    });
+                                                }
+                                                
+                                                if (typeof tpPrice === 'number' && !isRealisticPrice(tpPrice, position.entry_price)) {
+                                                    console.warn('[PositionsViewer] ⚠️ WARNING: Unrealistic take profit price:', {
+                                                        takeProfitPrice: tpPrice,
+                                                        entryPrice: position.entry_price,
+                                                        symbol: position.symbol,
+                                                        impact: 'SL/TP values are not logical - check ATR data and multipliers'
+                                                    });
+                                                }
+                                                
+                                                const slPct = ((slPrice - position.entry_price) / position.entry_price * 100).toFixed(2);
+                                                const tpPct = ((tpPrice - position.entry_price) / position.entry_price * 100).toFixed(2);
+                                                
+                                                return `SL: $${slPrice.toFixed(2)} (${slPct}%)<br>
+                                                        TP: $${tpPrice.toFixed(2)} (${tpPct}%)<br>
+                                                        <span style="color: #3b82f6;">Trailing: ${position.is_trailing ? 'Active' : 'Off'}</span>`;
+                                            })()}
                                         </td>
                                         <td>
                                             <button style="background: #10b981; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">

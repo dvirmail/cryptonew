@@ -7,6 +7,7 @@
 // Import calculation functions
 import { calculateMACD, calculateTEMA, calculateDEMA, calculateHMA, calculateMARibbon, calculateADX, calculatePSAR, calculateIchimoku, calculateKAMA, detectTrendExhaustion } from './indicator-calculations/trendIndicators';
 import { calculateRSI, calculateStochastic, calculateWilliamsR, calculateCCI, calculateROC, calculateAwesomeOscillator, calculateCMO } from './indicator-calculations/momentumIndicators';
+import { calculateATR as unifiedCalculateATR } from './atrUnified.jsx'; // Import unified ATR function
 import {
     calculateBollingerBands,
     calculateBBW,
@@ -53,6 +54,8 @@ import { get, memoize } from 'lodash';
 import { fetchKlineData as fetchKlineDataFromApi, fetchMultiplePrices as fetchMultiplePricesFromApi } from './ApiManager';
 // NEW: Import MarketRegimeDetector (assuming it's in a peer file or similar utility path)
 import MarketRegimeDetector from './MarketRegimeDetector';
+import { SIGNAL_WEIGHTS, CORE_SIGNAL_TYPES } from './signalSettings';
+import { getRegimeMultiplier } from './regimeUtils';
 
 // Debug limiter (disabled to silence logs)
 let imDebugCount = 0;
@@ -191,57 +194,312 @@ export const getAvailablePairs = async () => {
   }
 };
 
+// ATR function removed - use unifiedCalculateATR directly
+
 /**
- * Calculates the Average True Range (ATR) for a given set of kline data.
- * This function expects klineData in the formatted object format:
- * `{time, open, high, low, close, volume}`
- * @param {Array<Object>} klineData - Array of kline objects.
- * @param {number} period - The period for ATR calculation (default: 14).
- * @returns {Array<number|null>} An array of ATR values, padded with nulls at the start for insufficient data.
-*/
-export const calculateATR = (klineData, period = 14) => {
-  // FIX: Handle both array-of-arrays and array-of-objects formats
-  if (!klineData || klineData.length < period) {
-    // Return an array of nulls for insufficient data, matching input length
-    return Array(klineData ? klineData.length : 0).fill(null);
-  }
 
   const trueRanges = [];
+  let maxReasonablePrice = 0;
+  
+  // [TR_DEBUG] First pass: find reasonable price range to filter out corrupted data
+  for (let i = 0; i < klineData.length; i++) {
+    const high = parseFloat(Array.isArray(klineData[i]) ? klineData[i][2] : klineData[i].high);
+    const low = parseFloat(Array.isArray(klineData[i]) ? klineData[i][3] : klineData[i].low);
+    
+    if (!isNaN(high) && !isNaN(low) && high > 0 && low > 0) {
+      maxReasonablePrice = Math.max(maxReasonablePrice, high);
+    }
+  }
+  
+  // [TR_DEBUG] Log price analysis results
+  console.log('[TR_DEBUG] 💰 Price analysis results:', {
+    maxReasonablePrice: maxReasonablePrice,
+    totalCandles: klineData.length,
+    priceThreshold: maxReasonablePrice * 10,
+    // Check for extreme prices that might indicate data corruption
+    extremeHighs: klineData.filter(candle => {
+      const high = parseFloat(Array.isArray(candle) ? candle[2] : candle.high);
+      return !isNaN(high) && high > maxReasonablePrice * 2;
+    }).length,
+    extremeLows: klineData.filter(candle => {
+      const low = parseFloat(Array.isArray(candle) ? candle[3] : candle.low);
+      return !isNaN(low) && low > maxReasonablePrice * 2;
+    }).length
+  });
+  
+  // Set a reasonable threshold (10x the highest reasonable price)
+  const priceThreshold = maxReasonablePrice * 10;
+  
   for (let i = 0; i < klineData.length; i++) {
     // Universal data access for both array and object formats
     const high = parseFloat(Array.isArray(klineData[i]) ? klineData[i][2] : klineData[i].high);
     const low = parseFloat(Array.isArray(klineData[i]) ? klineData[i][3] : klineData[i].low);
-    const close = i > 0 ? parseFloat(Array.isArray(klineData[i - 1]) ? klineData[i - 1][4] : klineData[i - 1].close) : null;
+    const previousClose = i > 0 ? parseFloat(Array.isArray(klineData[i - 1]) ? klineData[i - 1][4] : klineData[i - 1].close) : null;
+
+    // DEBUG: Log problematic values
+    if (i < 5 || i > klineData.length - 5) {
+      console.log(`[ATR_DEBUG] Candle ${i}:`, {
+        high, low, previousClose,
+        rawHigh: Array.isArray(klineData[i]) ? klineData[i][2] : klineData[i].high,
+        rawLow: Array.isArray(klineData[i]) ? klineData[i][3] : klineData[i].low,
+        rawPreviousClose: i > 0 ? (Array.isArray(klineData[i - 1]) ? klineData[i - 1][4] : klineData[i - 1].close) : null
+      });
+    }
 
     // Check for NaN values which would break the calculation
-    if (isNaN(high) || isNaN(low) || (i > 0 && close !== null && isNaN(close))) {
+    if (isNaN(high) || isNaN(low) || (i > 0 && previousClose !== null && isNaN(previousClose))) {
       trueRanges.push(0); // Push 0 if data is invalid to avoid breaking the loop
       continue;
     }
 
-    const tr1 = high - low;
-    const tr2 = close !== null ? Math.abs(high - close) : 0;
-    const tr3 = close !== null ? Math.abs(low - close) : 0;
+    // [TR_DEBUG] CRITICAL FIX: Filter out corrupted price data
+    if (high > priceThreshold || low > priceThreshold || high <= 0 || low <= 0) {
+      console.warn(`[TR_DEBUG] 🚫 FILTERING corrupted price data at candle ${i}:`, {
+        position: i,
+        high: high,
+        low: low,
+        previousClose: previousClose,
+        highThreshold: high > priceThreshold,
+        lowThreshold: low > priceThreshold,
+        priceThreshold: priceThreshold,
+        maxReasonablePrice: maxReasonablePrice,
+        highPercentage: maxReasonablePrice > 0 ? ((high / maxReasonablePrice) * 100).toFixed(2) + '%' : 'N/A',
+        lowPercentage: maxReasonablePrice > 0 ? ((low / maxReasonablePrice) * 100).toFixed(2) + '%' : 'N/A',
+        rawCandle: klineData[i],
+        impact: 'Using previous valid true range or 0'
+      });
+      // Use the previous valid true range or 0 if this is the first candle
+      trueRanges.push(trueRanges.length > 0 ? trueRanges[trueRanges.length - 1] : 0);
+      continue;
+    }
 
-    trueRanges.push(Math.max(tr1, tr2, tr3));
+    // DETAILED TRUE RANGE DEBUGGING
+    const tr1 = high - low;
+    const tr2 = previousClose !== null ? Math.abs(high - previousClose) : 0;
+    const tr3 = previousClose !== null ? Math.abs(low - previousClose) : 0;
+
+    // [TR_DEBUG] Log every True Range calculation for positions around 220
+    if (i >= 215 && i <= 225) {
+      console.log(`[TR_DEBUG] 🔍 True Range calculation at position ${i}:`, {
+        position: i,
+        high: high,
+        low: low,
+        previousClose: previousClose,
+        tr1: tr1,
+        tr2: tr2,
+        tr3: tr3,
+        rawCandle: klineData[i],
+        rawPreviousCandle: i > 0 ? klineData[i - 1] : null,
+        dataFormat: Array.isArray(klineData[i]) ? 'array' : 'object',
+        priceThreshold: priceThreshold,
+        maxReasonablePrice: maxReasonablePrice
+      });
+    }
+
+    // ADDITIONAL VALIDATION: Check for extreme price gaps that indicate data corruption
+    if (previousClose !== null) {
+      const priceGapUp = Math.abs(high - previousClose);
+      const priceGapDown = Math.abs(low - previousClose);
+      const maxReasonableGap = maxReasonablePrice * 0.15; // Max 15% gap (more appropriate for Bitcoin volatility)
+      
+      // [TR_DEBUG] Log gap analysis for positions around 220
+      if (i >= 215 && i <= 225) {
+        console.log(`[TR_DEBUG] 📊 Gap analysis at position ${i}:`, {
+          position: i,
+          priceGapUp: priceGapUp,
+          priceGapDown: priceGapDown,
+          maxReasonableGap: maxReasonableGap,
+          gapUpPercentage: ((priceGapUp / previousClose) * 100).toFixed(2) + '%',
+          gapDownPercentage: ((priceGapDown / previousClose) * 100).toFixed(2) + '%',
+          isGapExtreme: priceGapUp > maxReasonableGap || priceGapDown > maxReasonableGap
+        });
+      }
+      
+      // More sophisticated gap validation: check both absolute and percentage thresholds
+      const gapUpPercentage = (priceGapUp / previousClose) * 100;
+      const gapDownPercentage = (priceGapDown / previousClose) * 100;
+      const isGapExtremeAbsolute = priceGapUp > maxReasonableGap || priceGapDown > maxReasonableGap;
+      const isGapExtremePercentage = gapUpPercentage > 15 || gapDownPercentage > 15; // More than 15% gap is suspicious
+      
+      if (isGapExtremeAbsolute && isGapExtremePercentage) {
+        console.warn(`[TR_DEBUG] 🚫 FILTERING extreme price gap at candle ${i}:`, {
+          position: i,
+          priceGapUp: priceGapUp,
+          priceGapDown: priceGapDown,
+          maxReasonableGap: maxReasonableGap,
+          high: high,
+          low: low,
+          previousClose: previousClose,
+          gapUpPercentage: gapUpPercentage.toFixed(2) + '%',
+          gapDownPercentage: gapDownPercentage.toFixed(2) + '%',
+          isGapExtremeAbsolute: isGapExtremeAbsolute,
+          isGapExtremePercentage: isGapExtremePercentage,
+          impact: 'Using previous valid true range or 0'
+        });
+        // Use the previous valid true range or 0 if this is the first candle
+        trueRanges.push(trueRanges.length > 0 ? trueRanges[trueRanges.length - 1] : 0);
+        continue;
+      }
+    }
+
+    const trueRange = Math.max(tr1, tr2, tr3);
+    
+    // [TR_DEBUG] Log the final True Range calculation for positions around 220
+    if (i >= 215 && i <= 225) {
+      console.log(`[TR_DEBUG] ✅ Final True Range at position ${i}:`, {
+        position: i,
+        trueRange: trueRange,
+        tr1: tr1,
+        tr2: tr2,
+        tr3: tr3,
+        maxComponent: tr1 === trueRange ? 'tr1 (high-low)' : tr2 === trueRange ? 'tr2 (high-prevClose)' : 'tr3 (low-prevClose)',
+        trueRangePercentage: previousClose ? ((trueRange / previousClose) * 100).toFixed(2) + '%' : 'N/A'
+      });
+    }
+    
+    // CRITICAL FIX: Filter out extreme True Range values that indicate data corruption
+    // Use a more sophisticated approach: check if True Range is reasonable relative to price level
+    const maxReasonableTrueRange = maxReasonablePrice * 0.25; // Max 25% of highest price (more appropriate for Bitcoin volatility)
+    const trueRangePercentage = previousClose ? (trueRange / previousClose) * 100 : 0;
+    
+    // Only filter if True Range is both absolutely extreme AND represents an unreasonable percentage
+    const isExtremeAbsolute = trueRange > maxReasonableTrueRange;
+    const isExtremePercentage = trueRangePercentage > 10; // More than 10% of price is suspicious
+    
+    if (isExtremeAbsolute && isExtremePercentage) {
+      console.warn(`[ATR_DEBUG] 🚫 FILTERING extreme True Range at candle ${i}:`, {
+        trueRange: trueRange,
+        maxReasonableTrueRange: maxReasonableTrueRange,
+        trueRangePercentage: trueRangePercentage.toFixed(2) + '%',
+        high: high,
+        low: low,
+        previousClose: previousClose,
+        tr1: tr1,
+        tr2: tr2,
+        tr3: tr3,
+        isExtremeAbsolute: isExtremeAbsolute,
+        isExtremePercentage: isExtremePercentage,
+        impact: 'Using previous valid true range or 0'
+      });
+      // Use the previous valid true range or 0 if this is the first candle
+      trueRanges.push(trueRanges.length > 0 ? trueRanges[trueRanges.length - 1] : 0);
+      continue;
+    }
+    
+    trueRanges.push(trueRange);
+
+    // DEBUG: Log extreme true range values
+    if (trueRange > 1000) {
+      console.warn(`[ATR_DEBUG] ⚠️ EXTREME True Range detected at candle ${i}:`, {
+        trueRange: trueRange,
+        high: high,
+        low: low,
+        previousClose: previousClose,
+        tr1: tr1,
+        tr2: tr2,
+        tr3: tr3,
+        candle: klineData[i],
+        impact: 'This indicates potentially corrupted price data - ATR will not be capped'
+      });
+    }
   }
 
   const atrValues = [];
   if (trueRanges.length < period) return Array(klineData.length).fill(null);
 
-  // Calculate initial ATR (Simple Moving Average of first 'period' True Ranges)
+  // FIXED: Use proper ATR calculation with consistent smoothing
+  // First ATR value is simple average of first period True Ranges
   let sumFirstTR = 0;
   for (let i = 0; i < period; i++) {
     sumFirstTR += trueRanges[i];
   }
-  atrValues.push(sumFirstTR / period);
+  const firstATR = sumFirstTR / period;
+  atrValues.push(firstATR);
 
-  // Calculate subsequent ATR values using Wilder's smoothing method
+  // Calculate subsequent ATR values using Wilder's smoothing method consistently
   for (let i = period; i < trueRanges.length; i++) {
     const prevATR = atrValues[atrValues.length - 1];
     const currentTR = trueRanges[i];
+    // Wilder's smoothing: ATR = (Previous ATR * (n-1) + Current TR) / n
     const currentATR = (prevATR * (period - 1) + currentTR) / period;
+    
     atrValues.push(currentATR);
+
+    // DEBUG: Log ATR calculation at each position
+    if (i % 10 === 0 || i === trueRanges.length - 1) { // Log every 10th position and the last one
+      console.log(`[ATR_DEBUG] 📍 ATR calculated at position ${i}:`, {
+        position: i,
+        currentATR: currentATR.toFixed(6),
+        prevATR: prevATR.toFixed(6),
+        currentTR: currentTR.toFixed(6),
+        trueRange: trueRanges[i].toFixed(6),
+        period: period,
+        progress: `${((i - period + 1) / (trueRanges.length - period)) * 100}%`
+      });
+    }
+
+    // DEBUG: Log extreme ATR values with detailed calculations
+    if (currentATR > 1000) {
+      console.warn(`[ATR_DEBUG] ⚠️ EXTREME ATR calculated at position ${i}:`, {
+        currentATR: currentATR,
+        prevATR: prevATR,
+        currentTR: currentTR,
+        trueRange: trueRanges[i],
+        period: period,
+        calculation: `(${prevATR} * ${period - 1} + ${currentTR}) / ${period} = ${currentATR}`,
+        currentATRChange: currentATR - prevATR,
+        currentATRChangePercent: ((currentATR - prevATR) / prevATR * 100).toFixed(2) + '%'
+      });
+    }
+  }
+
+  // [TR_DEBUG] Log True Range analysis summary
+  console.log('[TR_DEBUG] 📊 True Range Analysis Summary:', {
+    totalCandles: klineData.length,
+    validTrueRanges: trueRanges.length,
+    filteredOutCount: klineData.length - trueRanges.length,
+    maxTrueRange: Math.max(...trueRanges),
+    avgTrueRange: trueRanges.reduce((a, b) => a + b, 0) / trueRanges.length,
+    extremeTrueRanges: trueRanges.filter(tr => tr > maxReasonablePrice * 0.1).length,
+    // Check for patterns in extreme values
+    extremePositions: trueRanges.map((tr, idx) => ({ position: idx, trueRange: tr }))
+      .filter(item => item.trueRange > maxReasonablePrice * 0.1)
+      .slice(0, 10) // Show first 10 extreme positions
+  });
+
+  // DEBUG: Log final ATR results and validate
+  const finalATR = atrValues[atrValues.length - 1];
+  const maxReasonableATR = maxReasonablePrice * 0.05; // Max 5% of highest price
+  
+  // DEBUG: Log ATR calculation summary with position details
+  console.log(`[ATR_DEBUG] 📊 ATR Calculation Summary:`, {
+    period: period,
+    totalCandles: klineData.length,
+    validTrueRanges: trueRanges.length,
+    finalATR: finalATR,
+    maxReasonableATR: maxReasonableATR,
+    maxReasonablePrice: maxReasonablePrice,
+    isATRReasonable: finalATR <= maxReasonableATR,
+    atrPercentage: finalATR ? (finalATR / maxReasonablePrice) * 100 : 0,
+    // NEW: Add position-specific ATR calculations
+    atrPositions: {
+      initialPeriod: period - 1, // First valid ATR position
+      finalPosition: klineData.length - 1, // Last position
+      totalCalculatedPositions: atrValues.length,
+      positionRange: `${period - 1} to ${klineData.length - 1}`
+    }
+  });
+  
+  if (finalATR > maxReasonableATR) {
+    console.warn('[ATR_DEBUG] ⚠️ FINAL ATR is extremely high (not capped):', {
+      finalATR: finalATR,
+      maxReasonableATR: maxReasonableATR,
+      maxTrueRange: Math.max(...trueRanges),
+      avgTrueRange: trueRanges.reduce((a, b) => a + b, 0) / trueRanges.length,
+      sampleTrueRanges: trueRanges.slice(-5),
+      maxReasonablePrice,
+      impact: 'ATR values are not capped - extreme values may indicate data issues'
+    });
   }
 
   // Pad the beginning of the ATR array with nulls to match the length of klineData
@@ -647,7 +905,7 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
     }
 
     logMessage('[atr_debug] Attempting ATR calculation...', 'debug');
-    indicators.atr = safeCalculate('ATR', calculateATR, klines, period);
+    indicators.atr = safeCalculate('ATR', unifiedCalculateATR, klines, period);
 
     // Existing debug log for ATR, now enhanced
     const len = indicators.atr?.length || 0;
@@ -680,7 +938,10 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
     indicators.bbw = safeCalculate('Bollinger Band Width', calculateBBW, klines);
     if (indicators.bbw) {
         indicators.volatilityRegime = indicators.bbw.map(val => val < 0.05 ? 'low' : (val > 0.15 ? 'high' : 'medium'));
-        indicators.squeeze = indicators.bbw.map(val => val < 0.02);
+        indicators.squeeze = indicators.bbw.map(val => ({
+            squeeze_on: val < 0.02,
+            squeeze_off: val >= 0.02
+        }));
         indicators.volatilityClustering = safeCalculate('Volatility Clustering', calculateMA, indicators.bbw.map(v => ({ close: v || 0 })), 5);
         if (indicators.bbw.length > 0) {
             indicators.bbwStates = safeCalculate('BBW States', evaluateBBWStates, indicators.bbw, s?.volatilityLookback || defaultSignalSettings.bbw.volatilityLookback);
@@ -922,6 +1183,37 @@ export {
   calculateWMA
 };
 
+// Calculate weighted combined strength with regime adjustments and core signal bonuses
+function calculateWeightedCombinedStrength(matchedSignals, marketRegime = 'neutral') {
+    let weightedSum = 0;
+    let totalWeight = 0;
+    let coreSignalsCount = 0;
+    
+    for (const signal of matchedSignals) {
+        const signalType = signal.type?.toLowerCase();
+        const weight = SIGNAL_WEIGHTS[signalType] || 1.0;
+        const isCore = CORE_SIGNAL_TYPES.includes(signalType);
+        
+        // Apply both weight and regime adjustment
+        const regimeMultiplier = getRegimeMultiplier(marketRegime, signalType, signal.category);
+        const finalStrength = signal.strength * weight * regimeMultiplier;
+        
+        weightedSum += finalStrength;
+        totalWeight += weight;
+        
+        if (isCore) coreSignalsCount++;
+    }
+    
+    // Core signal bonus (10 points per core signal, max 50 points)
+    const coreBonus = Math.min(coreSignalsCount * 10, 50);
+    
+    // Signal diversity bonus (bonus for having multiple different signal types)
+    const uniqueTypes = new Set(matchedSignals.map(s => s.type?.toLowerCase()));
+    const diversityBonus = uniqueTypes.size > 3 ? 5 : 0;
+    
+    return weightedSum + coreBonus + diversityBonus;
+}
+
 // Evaluate signal conditions for a strategy
 export const evaluateSignalConditions = (strategy, indicators, klinesForEval) => {
   try {
@@ -971,7 +1263,8 @@ export const evaluateSignalConditions = (strategy, indicators, klinesForEval) =>
 
       if (isMatch) {
         matchedSignals.push({
-          name: signalName,
+          type: signalName,
+          name: signalName, // Keep both for compatibility
           strength: strength,
           config: signalConfig
         });
@@ -980,8 +1273,8 @@ export const evaluateSignalConditions = (strategy, indicators, klinesForEval) =>
       }
     }
 
-    // Calculate combined strength
-    const combinedStrength = signalCount > 0 ? totalStrength / signalCount : 0;
+    // Calculate weighted combined strength using the new system
+    const combinedStrength = calculateWeightedCombinedStrength(matchedSignals, 'neutral');
     const isMatch = signalCount >= (strategy.minSignals || 1) && combinedStrength >= (strategy.minStrength || 50);
 
     return {
@@ -1035,7 +1328,7 @@ export default {
   calculateBBW,
   calculateKeltnerChannels,
   calculateDonchian,
-  calculateATR,
+  calculateATR: unifiedCalculateATR,
   detectVolatilityRegimeChange,
   detectSqueezeBreakout,
   detectVolatilityClustering,

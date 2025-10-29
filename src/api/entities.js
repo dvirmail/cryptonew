@@ -15,8 +15,6 @@ export const ScanSettings = base44.entities.ScanSettings;
 
 export const OptedOutCombination = base44.entities.OptedOutCombination;
 
-export const LiveWalletState = base44.entities.LiveWalletState;
-
 export const HistoricalPerformance = base44.entities.HistoricalPerformance;
 
 export const ScannerSession = base44.entities.ScannerSession;
@@ -25,9 +23,10 @@ export const WalletSummary = base44.entities.WalletSummary;
 
 export const LivePosition = base44.entities.LivePosition;
 
+export const CentralWalletState = base44.entities.CentralWalletState;
+
 export const ScannerStats = base44.entities.ScannerStats;
 
-export const VirtualWalletState = base44.entities.VirtualWalletState;
 
 
 

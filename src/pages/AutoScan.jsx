@@ -37,8 +37,8 @@ export default function AutoScan() {
         totalScans: 0,
         signalsFound: 0,
         tradesExecuted: 0,
-        averageScanTimeMs: null,
-        lastScanTimeMs: null,
+        averageScanTimeMs: null, // Keep as null to indicate no scans yet
+        lastScanTimeMs: null, // Keep as null to indicate no scans yet
         averageSignalStrength: null,
         lastCycleAverageSignalStrength: null,
         lastUpdated: new Date().toISOString()
@@ -347,10 +347,7 @@ export default function AutoScan() {
         const service = scannerService.current;
         service.setSessionId(sessionIdRef.current);
 
-        // NEW: Block the service's internal persisted auto-start; UI will orchestrate a single start after init
-        if (typeof service.setAutoStartBlocked === 'function') {
-            service.setAutoStartBlocked(true);
-        }
+        // Auto-start is now handled by Layout.jsx - no need to block it here
 
         service.registerToastNotifier(toast);
 
@@ -406,51 +403,9 @@ export default function AutoScan() {
                     clearTimeout(startAfterInitTimerRef.current);
                 }
 
-                // Longer debounce to let state fully settle
-                startAfterInitTimerRef.current = setTimeout(async () => {
-                    // Get the absolute latest state before attempting start
-                    const currentServiceState = service.getState();
-                    const currentIsGloballyActive = Boolean(currentServiceState.isGloballyActive);
-                    const currentLeader = currentServiceState.leaderSessionId;
-                    
-                    // Check if another tab is already the active leader
-                    if (currentIsGloballyActive && currentLeader && service.sessionId !== currentLeader) {
-                        hasAutoStartedRef.current = true;
-                        toast({
-                            title: "Start Skipped",
-                            description: "Another tab is already running the scanner.",
-                            variant: "default"
-                        });
-                        return;
-                    }
-
-                    try {
-                        const started = await service.start();
-                        hasAutoStartedRef.current = true;
-
-                        if (started) {
-                            toast({
-                                title: "Scanner Started",
-                                description: "Started automatically after initialization.",
-                                variant: "default"
-                            });
-                        } else {
-                            toast({
-                                title: "Start Failed",
-                                description: "Failed to acquire session leadership during auto-start.",
-                                variant: "destructive"
-                            });
-                        }
-                    } catch (error) {
-                        console.error('[AutoScan.js] Auto-start error:', error);
-                        hasAutoStartedRef.current = true;
-                        toast({
-                            title: "Start Error",
-                            description: `Auto-start error: ${error.message}`,
-                            variant: "destructive"
-                        });
-                    }
-                }, 2000); // Increased to 2000ms to prevent rapid session cycling during development
+                // Auto-start is now handled by Layout.jsx - no need for duplicate logic here
+                console.log('[AutoScan] ✅ Scanner initialized - auto-start handled by Layout.jsx');
+                hasAutoStartedRef.current = true;
             }
         };
         
@@ -587,27 +542,95 @@ export default function AutoScan() {
     }, []);
 
     const handleSaveConfig = useCallback(async () => {
+        console.log('🔥 [AutoScan] handleSaveConfig called!');
+        console.log('🔥 [AutoScan] config:', config);
+        console.log('🔥 [AutoScan] saving:', saving);
         if (!config || saving) return;
         setSaving(true);
         try {
+            console.log('🔥 [AutoScan] Fetching existing settings...');
             const settings = await queueEntityCall('ScanSettings', 'list');
+            console.log('🔥 [AutoScan] Existing settings:', settings);
             
             const configToSave = { ...config };
+            console.log('🔥 [AutoScan] Config to save:', configToSave);
 
             if (settings.length > 0) {
-                await queueEntityCall('ScanSettings', 'update', settings[0].id, configToSave);
+                console.log('🔥 [AutoScan] Updating existing settings with ID:', settings[0].id);
+                try {
+                    // FIXED: Use direct API call instead of hanging queueEntityCall
+                    console.log('🔥 [AutoScan] Using direct API call (bypassing queue)...');
+                    const directResponse = await fetch(`http://localhost:3003/api/scanSettings/${settings[0].id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(configToSave)
+                    });
+                    const directResult = await directResponse.json();
+                    console.log('🔥 [AutoScan] Direct API call result:', directResult);
+                    
+                    if (!directResult.success) {
+                        throw new Error(`API call failed: ${directResult.error || 'Unknown error'}`);
+                    }
+                    
+                    console.log('🔥 [AutoScan] Database update completed successfully');
+                } catch (error) {
+                    console.error('🔥 [AutoScan] Database update failed:', error);
+                    throw error;
+                }
             } else {
-                await queueEntityCall('ScanSettings', 'create', configToSave);
+                console.log('🔥 [AutoScan] Creating new settings...');
+                try {
+                    // FIXED: Use direct API call instead of hanging queueEntityCall
+                    console.log('🔥 [AutoScan] Using direct API call for create (bypassing queue)...');
+                    const directResponse = await fetch('http://localhost:3003/api/scanSettings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(configToSave)
+                    });
+                    const directResult = await directResponse.json();
+                    console.log('🔥 [AutoScan] Direct API create result:', directResult);
+                    
+                    if (!directResult.success) {
+                        throw new Error(`API create failed: ${directResult.error || 'Unknown error'}`);
+                    }
+                    
+                    console.log('🔥 [AutoScan] Database create completed successfully');
+                } catch (error) {
+                    console.error('🔥 [AutoScan] Database create failed:', error);
+                    throw error;
+                }
             }
 
+            console.log('🔥 [AutoScan] Database operations completed, now getting scanner service...');
             const service = scannerService.current;
+            console.log('🔥 [AutoScan] Scanner service:', service);
+            console.log('🔥 [AutoScan] Scanner service type:', typeof service);
+            console.log('🔥 [AutoScan] Scanner service has updateSettings:', typeof service?.updateSettings);
             const wasRunning = service.getState().isRunning;
+            console.log('🔥 [AutoScan] Was running:', wasRunning);
             
             if (wasRunning) {
+                console.log('🔥 [AutoScan] Stopping scanner...');
                 service.stop(); 
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                await service.updateSettings(configToSave);
-                await service.start();
+                console.log('🔥 [AutoScan] Calling service.updateSettings...');
+                console.log('🔥 [AutoScan] About to call service.updateSettings with:', configToSave);
+                try {
+                    console.log('🔥 [AutoScan] Calling service.updateSettings NOW...');
+                    await service.updateSettings(configToSave);
+                    console.log('🔥 [AutoScan] service.updateSettings completed successfully');
+                } catch (error) {
+                    console.error('🔥 [AutoScan] service.updateSettings failed:', error);
+                    throw error;
+                }
+                console.log('🔥 [AutoScan] Starting scanner...');
+                // Use LifecycleService as the single orchestrator for scanner starts
+                const lifecycleService = service.lifecycleService;
+                if (lifecycleService && lifecycleService.start) {
+                    await lifecycleService.start();
+                } else {
+                    await service.start();
+                }
                 
                 toast({
                     title: "Configuration Updated & Scanner Restarted",
@@ -615,7 +638,16 @@ export default function AutoScan() {
                     variant: "default"
                 });
             } else {
-                await service.updateSettings(configToSave);
+                console.log('🔥 [AutoScan] Scanner not running, calling service.updateSettings...');
+                console.log('🔥 [AutoScan] About to call service.updateSettings with:', configToSave);
+                try {
+                    console.log('🔥 [AutoScan] Calling service.updateSettings NOW...');
+                    await service.updateSettings(configToSave);
+                    console.log('🔥 [AutoScan] service.updateSettings completed successfully');
+                } catch (error) {
+                    console.error('🔥 [AutoScan] service.updateSettings failed:', error);
+                    throw error;
+                }
                 
                 toast({
                     title: "Configuration Saved",
@@ -623,32 +655,42 @@ export default function AutoScan() {
                     variant: "default"
                 });
             }
+            console.log('🔥 [AutoScan] Setting config and performing key check...');
             setConfig(configToSave);
             // Do a silent key check after save so users can save even if keys are missing
             try {
+                console.log('🔥 [AutoScan] Starting key check...');
                 await Promise.race([
                     checkBinanceKeys(scannerService.current.getTradingMode(), { silent: true }),
                     new Promise((_, reject) => setTimeout(() => reject(new Error('Key check timeout')), 10000))
                 ]);
+                console.log('🔥 [AutoScan] Key check completed');
             } catch (error) {
-                console.warn('Key check failed or timed out during save:', error.message);
+                console.warn('🔥 [AutoScan] Key check failed or timed out during save:', error.message);
             } 
+            console.log('🔥 [AutoScan] Save process completed successfully!');
         } catch (error) {
-            console.error('Error saving configuration:', error);
+            console.error('🔥 [AutoScan] Error saving configuration:', error);
             toast({
                 title: "Error",
                 description: "Failed to save scanner configuration",
                 variant: "destructive"
             });
         } finally {
+            console.log('🔥 [AutoScan] Setting saving to false...');
             setSaving(false);
+            console.log('🔥 [AutoScan] Saving state reset complete');
         }
     }, [config, saving, toast, checkBinanceKeys]);
 
     const handleStart = useCallback(async () => {
         const service = scannerService.current;
-        if (!service) return; // Removed binanceKeysValid check
-        const started = await service.start();
+        if (!service) {
+            return;
+        }
+        // Use LifecycleService as the single orchestrator for scanner starts
+        const lifecycleService = service.lifecycleService;
+        const started = lifecycleService ? await lifecycleService.start() : await service.start();
         if (started) {
             updateSessionStatus({ isLeader: true, isGloballyActive: true, message: "This tab is the leader." });
             toast({

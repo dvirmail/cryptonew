@@ -1,4 +1,5 @@
 import { get } from 'lodash';
+import { getRegimeMultiplier } from '../regimeUtils';
 
 /**
  * Advanced Divergence Detection Utility
@@ -398,38 +399,12 @@ function calculateDivergenceConfidence(priceMove, oscillatorMove, distance) {
 /**
  * Helper function for regime adjustment (used in other files)
  */
-export function applyRegimeAdjustment(baseStrength, signalType, marketRegime) {
-    if (!marketRegime || typeof marketRegime !== 'object') {
+export function applyRegimeAdjustment(baseStrength, marketRegime, signalType) {
+    if (!marketRegime || typeof marketRegime !== 'string') {
         return baseStrength;
     }
 
-    // Get regime multiplier based on market regime
-    const regimeMultiplier = getRegimeMultiplier(marketRegime);
+    // Get regime multiplier based on market regime and signal type
+    const regimeMultiplier = getRegimeMultiplier(marketRegime, signalType);
     return Math.min(baseStrength * regimeMultiplier, 100);
-}
-
-/**
- * Get regime multiplier based on market regime
- */
-function getRegimeMultiplier(marketRegime) {
-    if (!marketRegime || !marketRegime.regime) {
-        return 1.0; // Default multiplier
-    }
-
-    const regime = marketRegime.regime.toLowerCase();
-    
-    // Adjust multipliers based on regime
-    switch (regime) {
-        case 'trending':
-        case 'bullish':
-        case 'bearish':
-            return 1.1; // Boost signals in trending markets
-        case 'sideways':
-        case 'ranging':
-            return 0.95; // Slightly reduce in ranging markets
-        case 'volatile':
-            return 0.9; // Reduce in highly volatile markets
-        default:
-            return 1.0;
-    }
 }

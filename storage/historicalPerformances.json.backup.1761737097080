@@ -1,0 +1,38 @@
+[
+  {
+    "id": "perf_1761665540417_29nsh2w6g",
+    "mode": "testnet",
+    "snapshot_timestamp": "2025-10-29T00:00:00.000Z",
+    "period_type": "daily",
+    "period_pnl": 0,
+    "period_trade_count": 0,
+    "period_winning_trades": 0,
+    "period_gross_profit": 0,
+    "period_gross_loss": 0,
+    "cumulative_realized_pnl": -5530328.247826805,
+    "cumulative_trade_count": 57680,
+    "cumulative_winning_trades": 2152,
+    "cumulative_gross_profit": 1779.2364819999914,
+    "cumulative_gross_loss": 5532107.4843088,
+    "created_date": "2025-10-28T15:32:20.417Z",
+    "updated_date": "2025-10-29T11:24:22.395Z"
+  },
+  {
+    "id": "perf_1761665647661_rp7738pbl",
+    "mode": "testnet",
+    "snapshot_timestamp": "2025-10-28T15:00:00.000Z",
+    "period_type": "hourly",
+    "period_pnl": 0,
+    "period_trade_count": 0,
+    "period_winning_trades": 0,
+    "period_gross_profit": 0,
+    "period_gross_loss": 0,
+    "cumulative_realized_pnl": 0,
+    "cumulative_trade_count": 0,
+    "cumulative_winning_trades": 0,
+    "cumulative_gross_profit": 0,
+    "cumulative_gross_loss": 0,
+    "created_date": "2025-10-28T15:34:07.662Z",
+    "updated_date": "2025-10-28T15:34:07.662Z"
+  }
+]

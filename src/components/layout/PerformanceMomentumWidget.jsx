@@ -7,8 +7,9 @@ import { useWallet } from '@/components/providers/WalletProvider';
 import { formatUSDT } from '@/components/utils/priceFormatter';
 
 // Add helpers at top-level (kept internal to the widget)
-const MOMENTUM_CONVICTION_THRESHOLD = 60; // match SignalDetectionEngine
-const MOMENTUM_CONVICTION_ADJUSTMENT_FACTOR = 0.75;
+// REDESIGNED: 50 is the neutral point where LPM has no impact on conviction
+const NEUTRAL_LPM_SCORE = 50; // LPM = 50 means no impact on conviction
+const LPM_ADJUSTMENT_FACTOR = 0.5; // Each point deviation from 50 affects conviction by 0.5
 
 function computeDynamicConvictionThreshold(baseMin = 0, momentum) {
   const base = Number(baseMin ?? 0);
@@ -19,22 +20,19 @@ function computeDynamicConvictionThreshold(baseMin = 0, momentum) {
   // If momentum is not a finite number, return the base (clamped) as no adjustment can be made
   if (!Number.isFinite(m)) return Math.min(100, Math.max(0, base));
 
-  let dynamic = base;
-  if (m < MOMENTUM_CONVICTION_THRESHOLD) {
-    const deficit = MOMENTUM_CONVICTION_THRESHOLD - m;
-    dynamic = base + deficit * MOMENTUM_CONVICTION_ADJUSTMENT_FACTOR;
-  }
+  // NEW LOGIC: 50 is neutral, deviation from 50 affects conviction
+  const deviation = m - NEUTRAL_LPM_SCORE; // Range: -50 to +50
+  const adjustment = deviation * LPM_ADJUSTMENT_FACTOR; // Range: -25 to +25
+  const dynamic = base - adjustment; // Higher LPM = lower conviction needed
   
-  // Ensure dynamic conviction does not fall below the base minimum, and clamp to 100
-  dynamic = Math.max(base, dynamic);
-  dynamic = Math.min(100, dynamic);
-  return dynamic;
+  // Clamp between base and 100 (conviction can't exceed 100)
+  return Math.min(100, Math.max(base, dynamic));
 }
 
 // Simple BreakdownRow component without complex tooltips
 const BreakdownRow = ({ label, score, weight, details, tooltip }) => {
   const getBarColor = (score) => {
-    if (score === null) return '#6b7280'; // gray-500
+    if (score === null || isNaN(score)) return '#6b7280'; // gray-500
     if (score > 70) return '#10b981'; // emerald-500
     if (score > 50) return '#f59e0b'; // amber-500
     return '#ef4444'; // red-500
@@ -51,13 +49,13 @@ const BreakdownRow = ({ label, score, weight, details, tooltip }) => {
           <div
             className="h-full rounded-full transition-all duration-300"
             style={{
-              width: `${score ?? 0}%`,
+              width: `${score != null && !isNaN(score) ? Math.max(0, Math.min(100, score)) : 0}%`,
               backgroundColor: getBarColor(score)
             }}
           />
         </div>
         <div className="text-right min-w-[60px]">
-          <div className="font-bold text-gray-900">{score ?? '--'}</div>
+          <div className="font-bold text-gray-900">{score != null && !isNaN(score) ? Math.round(score) : '--'}</div>
           <div className="text-xs text-gray-500">({Math.round((weight || 0) * 100)}%)</div>
         </div>
       </div>
@@ -105,7 +103,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
   }
 
   const getMomentumNarrative = (currentScore) => {
-    if (currentScore === null) return "Awaiting Data...";
+    if (currentScore === null || isNaN(currentScore)) return "Awaiting Data...";
     if (currentScore > 80) return "Very Strong Momentum";
     if (currentScore > 65) return "Strong Momentum";
     if (currentScore > 55) return "Positive Momentum";
@@ -117,7 +115,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
 
   const narrative = getMomentumNarrative(score);
   // NEW: robust level positioning values
-  const clamped = Math.max(0, Math.min(100, Number(score) || 0));
+  const clamped = score != null && !isNaN(score) ? Math.max(0, Math.min(100, Number(score))) : 0;
   const indicatorTop = 100 - clamped; // percentage from top for absolute positioning
 
   return (
@@ -154,7 +152,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
           </div>
 
           <span className="text-xs font-bold mt-1 text-gray-700 dark:text-gray-300">
-            {score}
+            {score != null && !isNaN(score) ? Math.round(score) : '--'}
           </span>
         </div>
       </div>
@@ -181,21 +179,27 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                     label="Unrealized P&L"
                     score={breakdown.unrealized.score}
                     weight={breakdown.unrealized.weight}
-                    tooltip="Live P&L of all open positions. The most significant leading factor."
+                    tooltip="Live P&L of all open positions. Higher scores indicate profitable open trades. The most significant leading factor (23% weight)."
                   />
-                  {/* ADD: show actual Unrealized P&L value and percent below the score */}
+                  {/* Enhanced: show actual Unrealized P&L value and percent below the score */}
                   <div className="mt-1 ml-4 text-[10px] sm:text-xs text-gray-600 dark:text-gray-300">
-                    {formatUSDT(unrealizedValue)} ({isFinite(unrealizedPct) ? unrealizedPct.toFixed(1) : '0.0'}%)
+                    {breakdown.unrealized.details || `${formatUSDT(unrealizedValue)} (${isFinite(unrealizedPct) ? unrealizedPct.toFixed(1) : '0.0'}%)`}
                   </div>
                 </>
               )}
               {breakdown.realized && (
-                <BreakdownRow
-                  label="Realized P&L"
-                  score={breakdown.realized.score}
-                  weight={breakdown.realized.weight}
-                  tooltip="Performance of last 100 closed trades. Reflects historical strategy effectiveness."
-                />
+                <>
+                  <BreakdownRow
+                    label="Realized P&L"
+                    score={breakdown.realized.score}
+                    weight={breakdown.realized.weight}
+                    tooltip="Performance of last 100 closed trades with recency weighting. Higher scores indicate recent profitable trades. Equal weight to unrealized P&L (23% weight)."
+                  />
+                  {/* Enhanced: show actual Realized P&L details below the score */}
+                  <div className="mt-1 ml-4 text-[10px] sm:text-xs text-gray-600 dark:text-gray-300">
+                    {breakdown.realized.details || 'No recent trades'}
+                  </div>
+                </>
               )}
               {breakdown.regime && (
                 <BreakdownRow
@@ -203,7 +207,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                   score={breakdown.regime.score}
                   weight={breakdown.regime.weight}
                   details={breakdown.regime.details}
-                  tooltip="Current market trend. Score is penalized if regime is unfavorable for strategies."
+                  tooltip="Current market trend analysis. Higher scores for confirmed uptrends, lower for downtrends or ranging markets. 15% weight."
                 />
               )}
               {breakdown.volatility && (
@@ -212,7 +216,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                   score={breakdown.volatility.score}
                   weight={breakdown.volatility.weight}
                   details={breakdown.volatility.details}
-                  tooltip="Trend strength (ADX). Higher scores indicate a stronger, less choppy trend."
+                  tooltip="Trend strength measured by ADX and Bollinger Band Width. Higher scores indicate stronger, less choppy trends. 10% weight."
                 />
               )}
               {breakdown.opportunityRate && (
@@ -221,7 +225,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                   score={breakdown.opportunityRate.score}
                   weight={breakdown.opportunityRate.weight}
                   details={breakdown.opportunityRate.details}
-                  tooltip="Rate of new, high-quality trade signals being found. Indicates a target-rich environment."
+                  tooltip="Rate of new high-quality trade signals being found. Indicates a target-rich trading environment. 15% weight."
                 />
               )}
               {breakdown.fearAndGreed && (
@@ -230,7 +234,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                   score={breakdown.fearAndGreed.score}
                   weight={breakdown.fearAndGreed.weight}
                   details={breakdown.fearAndGreed.details}
-                  tooltip="Contrarian sentiment indicator. 'Extreme Fear' boosts score, 'Extreme Greed' lowers it."
+                  tooltip="Contrarian sentiment indicator. 'Extreme Fear' boosts score (good buying opportunity), 'Extreme Greed' lowers it. 10% weight."
                 />
               )}
               {breakdown.signalQuality && (
@@ -239,7 +243,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                   score={breakdown.signalQuality.score}
                   weight={breakdown.signalQuality.weight}
                   details={breakdown.signalQuality.details}
-                  tooltip="The average strength of all active strategies in your system."
+                  tooltip="Average strength of all active strategies. Higher scores indicate strategies are finding stronger signals. 4% weight."
                 />
               )}
             </div>
@@ -249,7 +253,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
               <div className="mt-4 pt-4 border-t border-gray-200">
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold text-lg text-gray-900">Final Score</span>
-                  <span className="font-bold text-2xl text-gray-900">{score} / 100</span>
+                  <span className="font-bold text-2xl text-gray-900">{score != null && !isNaN(score) ? Math.round(score) : '--'} / 100</span>
                 </div>
                 <div className="text-center">
                   <span className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${

@@ -17,14 +17,6 @@ export default class StrategyManagerService {
 
     const strategiesList = await queueEntityCall('BacktestCombination', 'list');
 
-    /*console.log('[POSITIONS_TIME_DEBUG] Raw strategies loaded from database:', {
-        totalStrategies: strategiesList?.length || 0,
-        sampleStrategy: strategiesList?.[0] ? {
-            combinationName: strategiesList[0].combinationName,
-            estimatedExitTimeMinutes_raw: strategiesList[0].estimatedExitTimeMinutes,
-            estimatedExitTimeMinutes_type: typeof strategiesList[0].estimatedExitTimeMinutes
-        } : null
-    });*/
 
     let totalStrategies = strategiesList?.length || 0;
     let filteredOptedOut = 0;
@@ -111,20 +103,14 @@ export default class StrategyManagerService {
           combinedStrength: match.combinedStrength || 0,
           minCoreSignalStrength: match.minCoreSignalStrength || 80,
           strategyDirection: match.strategyDirection || 'long',
-          takeProfitAtrMultiplier: match.takeProfitAtrMultiplier || 3,
-          stopLossAtrMultiplier: match.stopLossAtrMultiplier || 2.5,
+          takeProfitAtrMultiplier: match.takeProfitAtrMultiplier || 1.5, // Realistic ATR multiplier for take profit (reduced from 3.0)
+          stopLossAtrMultiplier: match.stopLossAtrMultiplier || 1.0, // Realistic ATR multiplier for stop loss (reduced from 2.5)
           estimatedExitTimeMinutes: match.estimatedExitTimeMinutes || null, // Keep in MINUTES
           enableTrailingTakeProfit: match.enableTrailingTakeProfit !== false,
           profitabilityScore: profitabilityScore,
           realTradeCount: realTradeCount
         };
 
-        /*console.log('[POSITIONS_TIME_DEBUG] Processed strategy:', {
-            combinationName: processedStrategy.combinationName,
-            estimatedExitTimeMinutes_database: match.estimatedExitTimeMinutes,
-            estimatedExitTimeMinutes_processed: processedStrategy.estimatedExitTimeMinutes,
-            estimatedExitTimeMinutes_type: typeof processedStrategy.estimatedExitTimeMinutes
-        });*/
 
         return processedStrategy;
       })
@@ -192,6 +178,15 @@ export default class StrategyManagerService {
   // as implied by the outline's original 'this.scannerService' and 'this.signalDetectionEngine' references.
   // It also assumes 'context' will contain 'strategies', 'symbols', and 'settings' when called.
   async evaluateStrategies(context) {
+    console.log('[StrategyManagerService] 🔍 evaluateStrategies called with context:', {
+      strategiesCount: context?.strategies?.length,
+      symbolsCount: context?.symbols?.length,
+      settings: context?.settings?.minimumCombinedStrength,
+      marketRegime: context?.marketRegime?.regime,
+      currentPrices: Object.keys(context?.currentPrices || {}),
+      cycleStats: context?.cycleStats
+    });
+    
     // Get current momentum score from scanner service state
     // We're aliasing 'this.scanner' to 'scannerService' for consistency with the outline's naming convention,
     // assuming 'this.scanner' is the service object handling state.
@@ -203,16 +198,27 @@ export default class StrategyManagerService {
     // earlier in the `evaluateStrategies` method. We'll extract them from `context`.
     const { strategies, symbols, settings } = context;
 
+    console.log('[StrategyManagerService] 🔍 Extracted from context:', {
+      strategies: strategies?.length,
+      symbols: symbols?.length,
+      settings: settings?.minimumCombinedStrength,
+      momentum: momentum
+    });
+
     // When invoking the signal detection engine, pass the momentum score via options.
     // We're assuming 'this.scanner' (our 'scannerService') has a 'signalDetectionEngine' property.
     if (!scannerService.signalDetectionEngine) {
         throw new Error("SignalDetectionEngine not found on the scanner service. Cannot evaluate strategies.");
     }
     
+    console.log('[StrategyManagerService] 🔍 Calling signalDetectionEngine.scanForSignals...');
+    
     const results = await scannerService.signalDetectionEngine.scanForSignals(
       { strategies, symbols, settings, ...context },
       { performanceMomentumScore: momentum }
     );
+
+    console.log('[StrategyManagerService] 🔍 signalDetectionEngine.scanForSignals returned:', results);
 
     return results;
   }

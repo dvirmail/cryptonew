@@ -193,33 +193,52 @@ const BacktestManager = ({
     let allDebugData = [];
     let allRegimeSummaries = [];
 
+    console.log(`[BACKTEST_MANAGER] 🚀 Starting backtest with coins:`, coins);
+    console.log(`[BACKTEST_MANAGER] 🚀 Timeframes:`, timeframes);
+    console.log(`[BACKTEST_MANAGER] 🚀 Total steps: ${coins.length * timeframes.length}`);
+
     const totalSteps = coins.length * timeframes.length;
     let currentStep = 0;
 
-    for (const coin of coins) {
-      for (const timeframe of timeframes) {
+    // MAJOR OPTIMIZATION: Batch fetch all coins for each timeframe
+    for (const timeframe of timeframes) {
+      console.log(`[BACKTEST_MANAGER] 🚀 Batch fetching data for ${coins.length} coins on ${timeframe}`);
+      
+      // Fetch all coins for this timeframe in a single batch request
+      const symbolsToFetch = coins.map(coin => coin.replace('/', ''));
+      const klineResponse = await getKlineData({
+        symbols: symbolsToFetch,
+        interval: timeframe,
+        limit: parseInt(dataLookback, 10),
+      });
+
+      if (!klineResponse.success || !klineResponse.data) {
+        throw new Error(klineResponse.error || 'Failed to fetch batch kline data.');
+      }
+
+      // Process each coin from the batch response
+      for (const coin of coins) {
         currentStep++;
         const progressPercentage = (currentStep / totalSteps) * 100;
         setProgress(progressPercentage);
-        setCurrentTask(`Fetching data for ${coin} on ${timeframe}...`);
+        setCurrentTask(`Running analysis for ${coin} on ${timeframe}...`);
         log(`--- Starting backtest for ${coin} on ${timeframe} ---`);
 
         try {
-          const klineResponse = await getKlineData({
-            symbol: coin.replace('/', ''),
-            interval: timeframe,
-            limit: parseInt(dataLookback, 10),
-          });
-
-          if (klineResponse.error || !klineResponse.data) {
-            throw new Error(klineResponse.error?.message || 'Failed to fetch kline data.');
+          const symbolKey = coin.replace('/', '');
+          const symbolData = klineResponse.data[symbolKey];
+          
+          console.log(`[BACKTEST_MANAGER] 🔍 Symbol data for ${symbolKey}:`, symbolData);
+          
+          if (!symbolData || !symbolData.success || !symbolData.data) {
+            console.log(`[BACKTEST_MANAGER] ❌ Failed to fetch symbol data for ${symbolKey}:`, symbolData?.error);
+            throw new Error(symbolData?.error || 'Failed to fetch kline data for this symbol.');
           }
 
-          setCurrentTask(`Running analysis for ${coin} on ${timeframe}...`);
-          log(`Fetched ${klineResponse.data.length} candles. Initializing engine.`);
+          log(`Fetched ${symbolData.data.length} candles. Initializing engine.`);
 
           const engine = new BacktestingEngine({
-            historicalData: klineResponse.data,
+            historicalData: symbolData.data,
             signalSettings: sanitizedSignalSettings, // Use sanitized signals here
             minPriceMove,
             requiredSignals,
@@ -238,9 +257,13 @@ const BacktestManager = ({
 
           const { matches, debugData, regimeSummary } = await engine.runBacktest();
           log(`Found ${matches.length} potential signal occurrences.`);
+          
+          console.log(`[BACKTEST_MANAGER] 📊 Found ${matches.length} matches for ${coin} on ${timeframe}`);
+          console.log(`[BACKTEST_MANAGER] 📊 Total matches so far: ${allMatches.length}`);
 
           if (matches.length > 0) {
             allMatches.push(...matches);
+            console.log(`[BACKTEST_MANAGER] 📊 Added ${matches.length} matches for ${coin} on ${timeframe}. Total now: ${allMatches.length}`);
           }
           if (debugData) {
             allDebugData.push({ coin, timeframe, data: debugData });
@@ -250,6 +273,9 @@ const BacktestManager = ({
           }
 
         } catch (error) {
+          console.log(`[BACKTEST_MANAGER] ❌ Error during backtest for ${coin} on ${timeframe}:`, error);
+          console.log(`[BACKTEST_MANAGER] ❌ Error message: ${error.message}`);
+          console.log(`[BACKTEST_MANAGER] ❌ Error stack:`, error.stack);
           log(`Error during backtest for ${coin} on ${timeframe}: ${error.message}`, 'error');
           toast({
             title: `Backtest Error (${coin}/${timeframe})`,
@@ -262,6 +288,12 @@ const BacktestManager = ({
 
     setCurrentTask('Aggregating results...');
     log('--- Aggregating all results ---');
+    
+    console.log(`[BACKTEST_MANAGER] 📊 Final total matches: ${allMatches.length}`);
+    console.log(`[BACKTEST_MANAGER] 📊 Matches by coin:`, allMatches.reduce((acc, match) => {
+      acc[match.coin] = (acc[match.coin] || 0) + 1;
+      return acc;
+    }, {}));
 
     const groupedByCombination = allMatches.reduce((acc, match) => {
       // Use a consistent key for grouping

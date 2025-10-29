@@ -307,7 +307,7 @@ const DEFAULT_BACKTEST_SETTINGS = {
   timeExitStrategy: "balanced",
   requiredSignalsForBacktest: 2,
   maxSignals: 5,
-  minCombinedStrength: 150,
+  minCombinedStrength: 120, // Adjusted for advanced signal strength calculation (2-3x higher values)
   minProfitFactor: 1.0,
   activeResultsTab: "summary",
   activeOverallTab: "results",
@@ -1194,13 +1194,26 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
     if (finalMatches.length > 0 && finalCombinations.length > 0) { // MODIFIED: Check finalCombinations as well
       setBacktestOverallProgress({ overall: 99, currentCoin: "", coinProgress: 100, stage: "Finalizing results..." });
 
+      // Calculate total return and annualized return
+      const totalReturn = finalMatches.length > 0 ? 
+        finalMatches.reduce((sum, match) => sum + (match.priceMove || 0), 0) : 0;
+      
+      // Calculate annualized return (assuming daily data)
+      const daysInData = finalMatches.length > 0 ? 
+        Math.max(1, (Math.max(...finalMatches.map(m => new Date(m.time).getTime())) - 
+                   Math.min(...finalMatches.map(m => new Date(m.time).getTime()))) / (1000 * 60 * 60 * 24)) : 1;
+      const annualizedReturn = daysInData > 0 ? 
+        Math.pow(1 + (totalReturn / 100), 365.25 / daysInData) - 1 : 0;
+
       const aggregatedSummary = {
           totalMatches: finalMatches.length,
           successfulMatches: finalMatches.filter(m => m.successful).length,
           totalCombinationsTested: finalCombinations.length, // This reflects the unique combinations that met criteria
           coinsTested: selectedCoins.join(', '),
           coinsSuccessfullyProcessed: coinsSuccessfullyProcessed,
-          successRate: finalMatches.length > 0 ? (finalMatches.filter(m => m.successful).length / finalMatches.length) * 100 : 0
+          successRate: finalMatches.length > 0 ? (finalMatches.filter(m => m.successful).length / finalMatches.length) * 100 : 0,
+          totalReturn: totalReturn,
+          annualizedReturn: annualizedReturn * 100 // Convert to percentage
       };
 
       setBacktestResults(aggregatedSummary);
@@ -1483,14 +1496,14 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
                   options={availableCoins}
                   selectedValues={selectedCoins}
                   onChange={handleCoinsChange}
-                  placeholder="Select coins to backtest..."
+                  placeholder="Enter coins to backtest..."
                 />
               </div>
               <div>
                 <Label htmlFor="timeframe-select">Candle Timeframe</Label>
                 <Select value={timeframe} onValueChange={handleTimeframeChange}>
                   <SelectTrigger id="timeframe-select">
-                    <SelectValue placeholder="Select timeframe" />
+                    <SelectValue placeholder="Enter timeframe" />
                   </SelectTrigger>
                   <SelectContent>
                     {timeframes.map(tf => (

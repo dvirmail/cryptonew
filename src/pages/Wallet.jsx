@@ -1,7 +1,9 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet } from '@/components/providers/WalletProvider';
+import { useTradingMode } from '@/components/providers/TradingModeProvider';
 import { useLivePrices } from '@/components/utils/useLivePrices';
+import { queueEntityCall } from '@/components/utils/apiQueue';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -49,11 +51,18 @@ const formatPrice = (price) => {
     });
 };
 
-const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scannerInitialized }) => {
-    const pnl = currentPrice ? (currentPrice - position.entry_price) * position.quantity_crypto : 0;
-    const pnlPercentage = position.entry_value_usdt > 0 ? (pnl / position.entry_value_usdt) * 100 : 0;
-    const pnlColor = pnl >= 0 ? 'text-green-500' : 'text-red-500';
-    const PnlIcon = pnl >= 0 ? TrendingUp : TrendingDown;
+const PositionRow = React.memo(({ position, currentPrice, onClosePosition, isClosing, scannerInitialized }) => {
+    // Memoize calculations to prevent duplicate processing
+    const calculations = useMemo(() => {
+        const pnl = currentPrice ? (currentPrice - position.entry_price) * position.quantity_crypto : 0;
+        const pnlPercentage = position.entry_value_usdt > 0 ? (pnl / position.entry_value_usdt) * 100 : 0;
+        const pnlColor = pnl >= 0 ? 'text-green-500' : 'text-red-500';
+        const PnlIcon = pnl >= 0 ? TrendingUp : TrendingDown;
+        
+        return { pnl, pnlPercentage, pnlColor, PnlIcon };
+    }, [currentPrice, position.entry_price, position.quantity_crypto, position.entry_value_usdt]);
+    
+    const { pnl, pnlPercentage, pnlColor, PnlIcon } = calculations;
     
     // Color coding for current price and value based on performance
     const currentPriceColor = currentPrice > position.entry_price ? 'text-green-600' : 
@@ -77,6 +86,8 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
             const entryTimestamp = position.entry_timestamp || position.created_date;
             const timeExitHours = position.time_exit_hours || 24; // Default 24 hours if not set
             
+            // Exit time calculation (logs removed to prevent flooding)
+            
             if (!entryTimestamp) {
                 return 'N/A';
             }
@@ -86,6 +97,47 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
                 const exitTime = new Date(entryTime.getTime() + (timeExitHours * 60 * 60 * 1000));
                 const now = new Date();
                 const timeLeftMs = exitTime.getTime() - now.getTime();
+                
+                // Log exit time calculation details (throttled to prevent spam)
+                const nowTime = Date.now();
+                const lastLogTime = window.lastExitTimeLog || 0;
+                
+                if (nowTime - lastLogTime > 10000) { // Log every 10 seconds max globally
+                    // console.log('[EXIT_TIME] 🕐 Exit time calculation for position:', {
+                    //     // HOW EXIT TIME IS DECIDED:
+                    //     exitTimeDecision: {
+                    //         source: 'time_exit_hours field from position data',
+                    //         value: timeExitHours,
+                    //         unit: 'hours',
+                    //         explanation: `Position will close after ${timeExitHours} hours from entry time`,
+                    //         isFixed: timeExitHours === 24 ? 'YES - All positions use 24-hour default' : 'NO - Custom exit time'
+                    //     },
+                    //     symbol: position.symbol,
+                    //     position_id: position.position_id,
+                    //     entryTimestamp: entryTimestamp,
+                    //     entryTime: entryTime.toISOString(),
+                    //     timeExitHours: timeExitHours,
+                    //     exitTime: exitTime.toISOString(),
+                    //     currentTime: now.toISOString(),
+                    //     timeLeftMs: timeLeftMs,
+                    //     timeLeftHours: (timeLeftMs / (1000 * 60 * 60)).toFixed(2),
+                    //     calculation: {
+                    //         step1_entryTimeMs: entryTime.getTime(),
+                    //         step2_timeExitHours: timeExitHours,
+                    //         step3_timeExitHoursMs: timeExitHours * 60 * 60 * 1000,
+                    //         step4_calculatedExitTimeMs: entryTime.getTime() + (timeExitHours * 60 * 60 * 1000),
+                    //         step5_currentTimeMs: now.getTime(),
+                    //         step6_timeLeftMs: timeLeftMs,
+                    //         step7_timeLeftHours: (timeLeftMs / (1000 * 60 * 60)).toFixed(2),
+                    //         formula: `exitTime = entryTime + (${timeExitHours} hours * 60 * 60 * 1000) = ${entryTime.getTime()} + ${timeExitHours * 60 * 60 * 1000} = ${entryTime.getTime() + (timeExitHours * 60 * 60 * 1000)}`,
+                    //         timeLeftFormula: `timeLeft = exitTime - currentTime = ${entryTime.getTime() + (timeExitHours * 60 * 60 * 1000)} - ${now.getTime()} = ${timeLeftMs}`
+                    //     }
+                    // });
+                    
+                    // Store last log time globally
+                    window.lastExitTimeLog = nowTime;
+                }
+                
 
                 if (timeLeftMs <= 0) {
                     const overdueMs = Math.abs(timeLeftMs);
@@ -140,26 +192,54 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
         }, 1000);
 
         return () => clearInterval(intervalId);
-    }, [position.time_exit_hours, position.entry_timestamp, position.created_date, position.position_id, position.symbol, position]);
+    }, [position.time_exit_hours, position.entry_timestamp, position.created_date, position.position_id, position.symbol]);
 
-    const getStopLossInfo = () => {
+    const getStopLossInfo = useMemo(() => {
         const items = [];
         const fmt = (num, digits = 4) => (typeof num === 'number' ? num.toFixed(digits) : num);
 
+        // Exit parameters calculation (logs removed to prevent flooding)
+
         const pctFromEntry = (price) => {
             if (typeof price !== 'number' || typeof position.entry_price !== 'number' || position.entry_price === 0) return null;
-            return ((price - position.entry_price) / position.entry_price) * 100;
+            const percentage = ((price - position.entry_price) / position.entry_price) * 100;
+            return percentage;
         };
 
-        // Default SL/TP if not set
-        const defaultSL = position.entry_price * 0.95; // 5% below entry
-        const defaultTP = position.entry_price * 1.05; // 5% above entry
+        // Check if SL/TP values are realistic and log warnings if not
+        const isRealisticPrice = (price, entryPrice) => {
+            if (typeof price !== 'number' || typeof entryPrice !== 'number') return false;
+            // Check if price is within reasonable range (not more than 10x entry price or negative)
+            return price > 0 && price < entryPrice * 10 && price > entryPrice * 0.1;
+        };
+
+        // Use actual SL/TP prices and log warnings if unrealistic
+        const slPrice = position.stop_loss_price;
+        const tpPrice = position.take_profit_price;
         
-        const slPrice = typeof position.stop_loss_price === 'number' ? position.stop_loss_price : defaultSL;
-        const tpPrice = typeof position.take_profit_price === 'number' ? position.take_profit_price : defaultTP;
+        // Log warnings for unrealistic values
+        if (typeof slPrice === 'number' && !isRealisticPrice(slPrice, position.entry_price)) {
+            console.warn('[Wallet] ⚠️ WARNING: Unrealistic stop loss price:', {
+                stopLossPrice: slPrice,
+                entryPrice: position.entry_price,
+                symbol: position.symbol,
+                impact: 'SL/TP values are not logical - check ATR data and multipliers'
+            });
+        }
+        
+        if (typeof tpPrice === 'number' && !isRealisticPrice(tpPrice, position.entry_price)) {
+            console.warn('[Wallet] ⚠️ WARNING: Unrealistic take profit price:', {
+                takeProfitPrice: tpPrice,
+                entryPrice: position.entry_price,
+                symbol: position.symbol,
+                impact: 'SL/TP values are not logical - check ATR data and multipliers'
+            });
+        }
         
         const slPct = pctFromEntry(slPrice);
         const tpPct = pctFromEntry(tpPrice);
+
+        // Final calculated values (logs removed to prevent flooding)
 
         items.push(
             <div key="sl" className="flex items-center gap-1">
@@ -201,26 +281,26 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
                 {items}
             </div>
         );
-    };
+    }, [position.entry_price, position.stop_loss_price, position.take_profit_price, position.is_trailing, position.trailing_stop_price, position.trailing_peak_price, position.peak_price, position.trough_price]);
 
     return (
         <TableRow key={position.position_id}>
             <TableCell>
-                <div className="font-medium">{position.symbol}</div>
-                <div className="text-xs text-gray-500">{position.strategy_name}</div>
+                <div className="font-medium">{position.symbol || 'N/A'}</div>
+                <div className="text-xs text-gray-500">{position.strategy_name || 'Unknown Strategy'}</div>
             </TableCell>
             <TableCell>{formatPrice(position.entry_price)}</TableCell>
             <TableCell className={currentPriceColor}>
                 {formatPrice(currentPrice || 0)}
             </TableCell>
-            <TableCell>{position.quantity_crypto.toFixed(4)}</TableCell>
+            <TableCell>{Number(position.quantity_crypto || 0).toFixed(4)}</TableCell>
             <TableCell className={valueColor}>
                 {formatPrice(position.entry_value_usdt)}
             </TableCell>
             <TableCell className={pnlColor}>
                 <div className="flex items-center text-xs">
                     {pnl >= 0 ? '↗️' : '↘️'}
-                    <span className="ml-1">{formatPrice(pnl)} ({pnlPercentage.toFixed(2)}%)</span>
+                    <span className="ml-1">{formatPrice(pnl)} ({Number(pnlPercentage || 0).toFixed(2)}%)</span>
                 </div>
             </TableCell>
             <TableCell>
@@ -235,7 +315,7 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
                 {timeLeftDisplay}
             </TableCell>
             <TableCell>
-                {getStopLossInfo()}
+                {getStopLossInfo}
             </TableCell>
             <TableCell>
                 <TooltipProvider>
@@ -262,7 +342,17 @@ const PositionRow = ({ position, currentPrice, onClosePosition, isClosing, scann
             </TableCell>
         </TableRow>
     );
-};
+}, (prevProps, nextProps) => {
+    // Custom comparison function to prevent unnecessary re-renders
+    return (
+        prevProps.position.position_id === nextProps.position.position_id &&
+        prevProps.position.quantity_crypto === nextProps.position.quantity_crypto &&
+        prevProps.position.entry_value_usdt === nextProps.position.entry_value_usdt &&
+        prevProps.currentPrice === nextProps.currentPrice &&
+        prevProps.isClosing === nextProps.isClosing &&
+        prevProps.scannerInitialized === nextProps.scannerInitialized
+    );
+});
 
 const WalletPage = () => {
     const {
@@ -282,9 +372,11 @@ const WalletPage = () => {
         recentTrades,
         loading,
         backgroundSyncing,
-        refreshWallet,
+        forceRefresh,
         scannerInitialized
     } = useWallet();
+
+    const { tradingMode } = useTradingMode();
 
     const [currentPage, setCurrentPage] = useState(1);
     const [chartTimeframe, setChartTimeframe] = useState('30d');
@@ -311,8 +403,217 @@ const WalletPage = () => {
     const POSITIONS_PER_PAGE = 10;
 
     const activePositions = useMemo(() => {
-        return (positions || []).filter(pos => pos.status === 'open' || pos.status === 'trailing');
+        
+        const validPositions = (positions || []).filter(pos => {
+            const isValid = pos.status === 'open' || pos.status === 'trailing';
+            // TEMPORARILY DISABLE STRICT FILTERING TO DEBUG
+            const hasEssentialData = true; // pos.position_id && pos.symbol && pos.strategy_name;
+            
+            
+            if (!hasEssentialData) {
+            }
+            
+            return isValid && hasEssentialData;
+        });
+        
+        
+        return validPositions;
     }, [positions]);
+
+    // Cleanup corrupted positions automatically
+    const cleanupCorruptedPositions = useCallback(async () => {
+        
+        try {
+            const scannerService = getAutoScannerService();
+            const positionManager = scannerService.positionManager;
+            
+            if (!positionManager) {
+                throw new Error('PositionManager not available');
+            }
+            
+            // Get all positions from database
+            const allPositions = await queueEntityCall('LivePosition', 'filter', {
+                trading_mode: tradingMode,
+                status: ['open', 'trailing']
+            });
+            
+            
+            if (!allPositions || allPositions.length === 0) {
+                return;
+            }
+            
+            // Identify corrupted positions (missing essential data)
+            const corruptedPositions = allPositions.filter(pos => 
+                !pos.symbol || !pos.strategy_name || !pos.quantity_crypto || pos.quantity_crypto <= 0
+            );
+            
+            
+            if (corruptedPositions.length === 0) {
+                return;
+            }
+            
+            // Delete corrupted positions
+            let deletedCount = 0;
+            for (const corruptedPos of corruptedPositions) {
+                try {
+                    
+                    await queueEntityCall('LivePosition', 'delete', corruptedPos.id);
+                    deletedCount++;
+                } catch (deleteError) {
+                    console.error('[Wallet] ❌ Error deleting corrupted position:', deleteError);
+                }
+            }
+            
+            
+            // Refresh wallet data
+            await forceRefresh();
+            
+            toast({
+                title: "Cleanup Complete",
+                description: `Removed ${deletedCount} corrupted positions from the database.`,
+                variant: "success",
+            });
+            
+        } catch (error) {
+            console.error('[Wallet] ❌ Error during cleanup:', error);
+            toast({
+                title: "Cleanup Failed",
+                description: `Failed to clean up corrupted positions: ${error.message}`,
+                variant: "destructive",
+            });
+        }
+    }, [tradingMode, forceRefresh]);
+
+    const analyzeExitParameters = useCallback(async () => {
+        if (!scannerInitialized) {
+            toast({
+                title: "Scanner Not Ready",
+                description: "Please wait for the scanner to initialize.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        try {
+            console.log('[Wallet] 🔍 Starting exit parameter analysis...');
+            const scannerService = getAutoScannerService();
+            
+            if (scannerService?.positionManager) {
+                console.log('[Wallet] 🔍 Triggering exit parameter analysis...');
+                await scannerService.positionManager.triggerExitParameterAnalysis();
+                console.log('[Wallet] ✅ Exit parameter analysis completed - check console for detailed logs');
+                
+                toast({
+                    title: "Analysis Complete",
+                    description: "Exit parameter analysis completed. Check console for detailed logs.",
+                    variant: "default"
+                });
+            } else {
+                throw new Error('PositionManager not available');
+            }
+        } catch (error) {
+            console.error('[Wallet] ❌ Error during exit parameter analysis:', error);
+            toast({
+                title: "Analysis Failed",
+                description: `Error: ${error.message}`,
+                variant: "destructive"
+            });
+        }
+    }, [scannerInitialized, toast]);
+
+    // Auto-cleanup corrupted positions and fix zero quantity positions when positions change
+    const autoCleanupCorruptedPositions = useCallback(async () => {
+        if (!positions || positions.length === 0) return;
+        
+        const corruptedPositions = positions.filter(pos => {
+            const isValid = pos.status === 'open' || pos.status === 'trailing';
+            const hasEssentialData = pos.position_id && pos.symbol && pos.strategy_name;
+            return isValid && !hasEssentialData;
+        });
+        
+        const zeroQuantityPositions = positions.filter(pos => {
+            const isValid = pos.status === 'open' || pos.status === 'trailing';
+            const hasZeroQuantity = pos.quantity_crypto === 0 || pos.entry_value_usdt === 0;
+            return isValid && hasZeroQuantity;
+        });
+        
+        if (corruptedPositions.length > 0 || zeroQuantityPositions.length > 0) {
+            try {
+                const scannerService = getAutoScannerService();
+                if (scannerService?.positionManager) {
+                    // Fix zero quantity positions first
+                    if (zeroQuantityPositions.length > 0) {
+                        console.log('[Wallet] 🔧 Fixing zero quantity positions:', zeroQuantityPositions.length);
+                        const fixResult = await scannerService.positionManager.fixZeroQuantityPositions();
+                        if (fixResult.fixed > 0) {
+                            console.log(`[Wallet] ✅ Fixed ${fixResult.fixed} positions with zero quantity/value`);
+                        }
+                    }
+                    
+                    // Clean up corrupted positions
+                    if (corruptedPositions.length > 0) {
+                        await Promise.all(corruptedPositions.map(async (corruptedPos) => {
+                            await scannerService.positionManager._safeDeleteLivePosition(corruptedPos.id);
+                        }));
+                    }
+                    
+                    // Refresh wallet to get updated positions
+                    forceRefresh();
+                }
+            } catch (error) {
+                console.error('[Wallet] ❌ Error cleaning up positions:', error);
+            }
+        }
+    }, [positions, forceRefresh]);
+
+    // Trigger cleanup when positions change
+    useEffect(() => {
+        if (positions && positions.length > 0) {
+            autoCleanupCorruptedPositions();
+        }
+    }, [positions, autoCleanupCorruptedPositions]);
+
+    // Add manual cleanup button for corrupted positions
+    const handleCleanupCorruptedPositions = useCallback(async () => {
+        if (!positions || positions.length === 0) {
+            toast({
+                title: "No Positions",
+                description: "No positions found to cleanup.",
+                variant: "info",
+            });
+            return;
+        }
+
+        const corruptedCount = positions.filter(pos => {
+            const isValid = pos.status === 'open' || pos.status === 'trailing';
+            const hasEssentialData = pos.position_id && pos.symbol && pos.strategy_name;
+            return isValid && !hasEssentialData;
+        }).length;
+
+        if (corruptedCount === 0) {
+            toast({
+                title: "No Corrupted Positions",
+                description: "All positions have valid data.",
+                variant: "success",
+            });
+            return;
+        }
+
+        try {
+            await cleanupCorruptedPositions();
+            toast({
+                title: "Cleanup Complete",
+                description: `Removed ${corruptedCount} corrupted positions.`,
+                variant: "success",
+            });
+        } catch (error) {
+            toast({
+                title: "Cleanup Failed",
+                description: `Error: ${error.message}`,
+                variant: "destructive",
+            });
+        }
+    }, [positions, cleanupCorruptedPositions, toast]);
 
     const paginatedPositions = useMemo(() => {
         const startIndex = (currentPage - 1) * POSITIONS_PER_PAGE;
@@ -322,7 +623,7 @@ const WalletPage = () => {
     const totalPages = Math.ceil(activePositions.length / POSITIONS_PER_PAGE);
 
     const symbolsToWatch = useMemo(() => {
-        const positionSymbols = activePositions.map(p => p.symbol.replace('/', ''));
+        const positionSymbols = activePositions.map(p => (p.symbol || '').replace('/', ''));
 
         const cryptoSymbols = (balances || []).filter(b => {
             if (b.asset === 'USDT') return false;
@@ -375,6 +676,7 @@ const WalletPage = () => {
     const balancesTotalPages = Math.ceil(sortedBalances.length / BALANCES_PER_PAGE);
 
     const handleClosePosition = async (position, currentPrice) => {
+        
         if (!scannerInitialized) {
             toast({
                 title: "Action Not Ready",
@@ -391,46 +693,55 @@ const WalletPage = () => {
             const scannerService = getAutoScannerService();
             const positionManager = scannerService.positionManager;
 
+
             if (!positionManager) {
                 throw new Error('PositionManager not available. Please ensure the scanner service is initialized.');
             }
 
-            const result = await positionManager.manualClosePosition(position, currentPrice);
+            let result;
+            try {
+                result = await positionManager.manualClosePosition(position, currentPrice);
+            } catch (error) {
+                throw error;
+            }
 
             if (result.success) {
-                toast({
-                    title: "Position Closed",
-                    description: `${position.symbol} has been successfully closed. P&L: $${(result.pnl || 0).toFixed(2)}.`,
-                    variant: "success",
-                });
+                if (result.alreadyClosed) {
+                    toast({
+                        title: "Position Already Closed",
+                        description: `${position.symbol} was already closed and removed from the database.`,
+                        variant: "success",
+                    });
+                } else {
+                    toast({
+                        title: "Position Closed",
+                        description: `${position.symbol} has been successfully closed. P&L: $${(result.pnl || 0).toFixed(2)}.`,
+                        variant: "success",
+                    });
+                }
                 
-                refreshWallet(false).then(() => {
-                    setClosingPositions(prev => {
-                        const updated = { ...prev };
-                        delete updated[position.position_id];
-                        return updated;
-                    });
-                }).catch(err => {
-                    // No console.warn here
-                    setClosingPositions(prev => {
-                        const updated = { ...prev };
-                        delete updated[position.position_id];
-                        return updated;
-                    });
+                // Force refresh wallet data after successful position close
+                await forceRefresh(); // Force refresh from database
+                
+                setClosingPositions(prev => {
+                    const updated = { ...prev };
+                    delete updated[position.position_id];
+                    return updated;
                 });
             } else {
                 throw new Error(result.error || 'Failed to close position.');
             }
 
         } catch (error) {
-            // No console.error here
 
             let errorTitle = "Close Failed";
             let errorDescription = error.message || "An unexpected error occurred.";
 
             if (errorDescription.includes('dust_or_below_threshold') || errorDescription.includes('below minimum') || errorDescription.includes('minQty')) {
                 errorTitle = "Position Too Small";
-                errorDescription = `This position is too small to trade on Binance (minimum $5 value required). Cannot close position.`;
+                // Calculate actual position value for more accurate error message
+                const positionValue = parseFloat(position.quantity_crypto) * parseFloat(position.current_price || position.entry_price);
+                errorDescription = `This position is too small to trade on Binance. Position value: $${positionValue.toFixed(2)} (minimum $5 required). Cannot close position.`;
             } else if (errorDescription.includes('notional') || errorDescription.includes('MIN_NOTIONAL')) {
                 errorTitle = "Trade Value Too Small";
                 errorDescription = `Cannot close: The total value of this trade is below Binance's minimum for ${position.symbol}.`;
@@ -485,7 +796,7 @@ const WalletPage = () => {
 
             await scannerService.reinitializeWalletFromBinance();
 
-            await refreshWallet(true);
+            await forceRefresh();
 
             toast({
                 title: "Sync Complete",
@@ -541,7 +852,7 @@ const WalletPage = () => {
                 <h3 className="mt-2 text-sm font-medium text-gray-900">No Wallet Data</h3>
                 <p className="mt-1 text-sm text-gray-500">Could not load wallet data. Please try again.</p>
                 <div className="mt-6">
-                    <Button onClick={refreshWallet}>
+                    <Button onClick={forceRefresh}>
                         <RefreshCw className="mr-2 h-4 w-4" />
                         Refresh
                     </Button>
@@ -682,6 +993,19 @@ const WalletPage = () => {
                 </div>
 
                 <div className="mb-6">
+                    {(() => {
+                        console.log('[Wallet] 🔍 Passing data to DailyPerformanceChart:', {
+                            recentTradesLength: recentTrades?.length || 0,
+                            chartTimeframe,
+                            dailyPerformanceHistoryLength: dailyPerformanceHistory?.length || 0,
+                            hourlyPerformanceHistoryLength: hourlyPerformanceHistory?.length || 0,
+                            walletSummary: walletSummary ? 'present' : 'null',
+                            dailyPerformanceHistorySample: dailyPerformanceHistory?.slice(0, 2),
+                            hourlyPerformanceHistorySample: hourlyPerformanceHistory?.slice(0, 2),
+                            timestamp: new Date().toISOString()
+                        });
+                        return null;
+                    })()}
                     <DailyPerformanceChart
                         trades={recentTrades}
                         timeframe={chartTimeframe}
@@ -693,10 +1017,70 @@ const WalletPage = () => {
                     />
                 </div>
 
+
                 <div className="flex flex-col gap-6">
                     <Card>
                         <CardHeader>
-                            <CardTitle>Open Positions ({openPositionsCount})</CardTitle>
+                            <div className="flex justify-between items-center">
+                                <CardTitle>Open Positions ({openPositionsCount})</CardTitle>
+                                <Button 
+                                    variant="outline" 
+                                    size="sm" 
+                                    onClick={async () => {
+                                        if (!scannerInitialized) {
+                                            toast({
+                                                title: "Scanner Not Ready",
+                                                description: "Please wait for the scanner to initialize.",
+                                                variant: "destructive"
+                                            });
+                                            return;
+                                        }
+
+                                        if (openPositionsCount === 0) {
+                                            toast({
+                                                title: "No Positions",
+                                                description: "No open positions found to update.",
+                                                variant: "info",
+                                            });
+                                            return;
+                                        }
+
+                                        try {
+                                            const scannerService = getAutoScannerService();
+                                            
+                                            if (scannerService?.positionManager) {
+                                                console.log('[Wallet] ⏰ Updating exit time for all positions to 1 minute...');
+                                                
+                                                // Update exit time for all open positions to 1 minute (1/60 hours)
+                                                const updateResult = await scannerService.positionManager.updateAllPositionsExitTime(1/60);
+                                                
+                                                if (updateResult.success) {
+                                                    toast({
+                                                        title: "Exit Times Updated",
+                                                        description: `Updated exit time to 1 minute for ${updateResult.updated} positions.`,
+                                                        variant: "success",
+                                                    });
+                                                    forceRefresh();
+                                                } else {
+                                                    throw new Error(updateResult.error || 'Failed to update exit times');
+                                                }
+                                            } else {
+                                                throw new Error('PositionManager not available');
+                                            }
+                                        } catch (error) {
+                                            console.error('[Wallet] ❌ Error updating exit times:', error);
+                                            toast({
+                                                title: "Update Failed",
+                                                description: `Failed to update exit times: ${error.message}`,
+                                                variant: "destructive",
+                                            });
+                                        }
+                                    }}
+                                    className="text-xs"
+                                >
+                                    ⏰ Set Exit Time to 1min
+                                </Button>
+                            </div>
                         </CardHeader>
                         <CardContent>
                             <Table>
@@ -717,11 +1101,11 @@ const WalletPage = () => {
                                 </TableHeader>
                                 <TableBody>
                                     {paginatedPositions.length > 0 ? (
-                                        paginatedPositions.map((pos) => (
+                                        paginatedPositions.map((pos, index) => (
                                             <PositionRow
-                                                key={pos.position_id}
+                                                key={pos.position_id || pos.id || `position-${index}`}
                                                 position={pos}
-                                                currentPrice={currentPrices[pos.symbol.replace('/', '')]}
+                                                currentPrice={currentPrices[(pos.symbol || '').replace('/', '')]}
                                                 onClosePosition={handleClosePosition}
                                                 isClosing={!!closingPositions[pos.position_id]}
                                                 scannerInitialized={scannerInitialized}
@@ -843,7 +1227,7 @@ const WalletPage = () => {
                 availableAmount={tradingModalConfig.availableAmount}
                 onTradeSuccess={() => {
                     setIsTradingModalOpen(false);
-                    refreshWallet();
+                    forceRefresh();
                 }}
             />
         </div>

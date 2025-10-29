@@ -119,16 +119,30 @@ export default function TradeHistory() {
   });
   const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
   const [selectedTradeDetails, setSelectedTradeDetails] = useState(null);
+  const [lastRefreshTime, setLastRefreshTime] = useState(null);
+  const [refreshError, setRefreshError] = useState(null);
 
   const fetchTrades = useCallback(async () => {
     setIsLoading(true);
     try {
-      const allTrades = await queueEntityCall('Trade', 'filter', {}, '-exit_timestamp', 1000);
-
-
+      // OPTIMIZATION: Fetch trades directly from API instead of through queueEntityCall
+      // This makes trade fetching independent of scanner initialization
+      const response = await fetch('http://localhost:3003/api/trades?orderBy=-exit_timestamp&limit=1000');
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      const allTrades = result.success ? result.data : [];
+      
+      console.log('[TradeHistory] 📊 Fetched trades directly from API:', allTrades.length);
       setTrades(allTrades || []);
+      setLastRefreshTime(new Date());
+      setRefreshError(null);
     } catch (error) {
-      console.error("[DEBUG_FRONTEND] TradeHistory: Error fetching trades:", error);
+      console.error("[TradeHistory] ❌ Error fetching trades:", error);
+      setRefreshError(error.message);
       toast({
         title: "Error",
         description: "Failed to load trade history. " + (error.message || "Please try again later."),
@@ -139,6 +153,12 @@ export default function TradeHistory() {
       setIsLoading(false);
     }
   }, [toast]);
+
+  // Manual refresh function
+  const handleRefresh = useCallback(async () => {
+    console.log('[TradeHistory] 🔄 Manual refresh triggered');
+    await fetchTrades();
+  }, [fetchTrades]);
 
   useEffect(() => {
     fetchTrades();
@@ -268,10 +288,13 @@ export default function TradeHistory() {
 
   if (isLoading) {
     return (
-      <div className="flex justify-center items-center h-64">
+      <div className="flex justify-center items-center min-h-[400px]">
         <div className="text-center">
-          <Loader2 className="mx-auto h-12 w-12 text-gray-400 mb-4 animate-spin" />
-          <p className="text-gray-500">Loading trade history...</p>
+          <Loader2 className="mx-auto h-12 w-12 text-blue-500 mb-4 animate-spin" />
+          <p className="text-gray-600 dark:text-gray-400 text-lg font-medium">Loading trade history...</p>
+          <p className="text-gray-500 dark:text-gray-500 text-sm mt-2">
+            Fetching trades directly from database (independent of scanner)
+          </p>
         </div>
       </div>
     );
@@ -283,14 +306,29 @@ export default function TradeHistory() {
         <div>
           <h1 className="text-3xl font-bold">Trade History</h1>
           <p className="text-muted-foreground">A log of all completed trades across all trading modes.</p>
+          {lastRefreshTime && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Last updated: {lastRefreshTime.toLocaleTimeString()}
+            </p>
+          )}
+          {refreshError && (
+            <p className="text-xs text-red-500 mt-1">
+              Error: {refreshError}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-4">
           <Badge variant={isLiveMode ? 'live' : 'default'} className="flex items-center gap-1">
             {isLiveMode ? 'Live Mode' : 'Testnet Mode'}
           </Badge>
-          <Button variant="outline" onClick={refreshData} className="gap-2">
-            <RefreshCw className="h-4 w-4" />
-            Refresh
+          <Button 
+            variant="outline" 
+            onClick={handleRefresh} 
+            className="gap-2"
+            disabled={isLoading}
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+            {isLoading ? 'Loading...' : 'Refresh'}
           </Button>
         </div>
       </div>
@@ -516,12 +554,12 @@ export default function TradeHistory() {
               </TableHeader>
               <TableBody>
                 {filteredTrades.length > 0 ? (
-                  filteredTrades.map((trade) => {
+                  filteredTrades.map((trade, index) => {
                     const pnlColor = (trade.pnl_usdt || 0) >= 0 ? "text-green-500" : "text-red-500";
                     const pnlPrefix = (trade.pnl_usdt || 0) >= 0 ? '+' : '';
 
                     return (
-                      <TableRow key={trade.trade_id}>
+                      <TableRow key={`${trade.trade_id || trade.id || 'unknown'}-${index}`}>
                         <TableCell className="font-medium">{trade.symbol}</TableCell>
                         <TableCell className="text-xs max-w-[150px] truncate" title={trade.strategy_name}>
                           {trade.strategy_name}

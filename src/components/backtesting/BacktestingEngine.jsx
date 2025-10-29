@@ -2,6 +2,8 @@
 import { calculateAllIndicators } from '../utils/indicatorManager';
 import { get } from 'lodash';
 import MarketRegimeDetector from '@/components/utils/MarketRegimeDetector';
+import SignalWeightCalculator from './core/SignalWeightCalculator';
+import { AdvancedSignalStrengthCalculator } from './core/AdvancedSignalStrengthCalculator';
 
 class BacktestingEngine {
   constructor({
@@ -47,6 +49,12 @@ class BacktestingEngine {
     this.regimeTrackingEnabled = regimeTrackingEnabled; 
     this.isRegimeAware = isRegimeAware;
     
+    // Initialize signal weight calculator
+    this.signalWeightCalculator = new SignalWeightCalculator();
+    
+    // Initialize advanced signal strength calculator for Step 4
+    this.advancedSignalStrengthCalculator = new AdvancedSignalStrengthCalculator();
+    
     
     this.allMatches = []; 
     this.summary = {}; 
@@ -64,6 +72,13 @@ class BacktestingEngine {
       totalDetectionTime: 0,
     };
     this.regimeHistory = []; 
+    
+    // Market context data for advanced calculations
+    this.marketContext = {
+      volatility: null,
+      trendStrength: null,
+      volumeProfile: null
+    };
 
     this.log(`[${this.settings.coin}] BacktestingEngine initialized.`, 'info');
     this.log(`[${this.settings.coin}] [CONFIG] Backtest Time Window: ${this.timeWindow}`, 'info');
@@ -169,7 +184,18 @@ class BacktestingEngine {
     
     while (true) {
         const combination = indices.map(i => signals[i]);
-        const combinedStrength = combination.reduce((sum, signal) => sum + (signal.strength || 0), 0);
+        // Use advanced signal strength calculator for comprehensive scoring
+        const advancedResult = this.advancedSignalStrengthCalculator.calculateAdvancedCombinedStrength(
+          combination, 
+          regimeType, 
+          regimeConfidence,
+          { 
+            marketVolatility: this.getMarketVolatility(),
+            trendStrength: this.getTrendStrength(),
+            volumeProfile: this.getVolumeProfile()
+          }
+        );
+        const combinedStrength = advancedResult.totalStrength;
         
         if (combinedStrength >= this.settings.minCombinedStrength) {
             const candle = this.historicalData[candleIndex];
@@ -602,6 +628,60 @@ class BacktestingEngine {
     return Object.keys(this.signalSettings).filter(key => 
         this.signalSettings[key] && this.signalSettings[key].enabled
     );
+  }
+
+  // Helper methods for advanced signal strength calculation
+  getMarketVolatility() {
+    if (this.marketContext.volatility !== null) {
+      return this.marketContext.volatility;
+    }
+    
+    // Calculate volatility from historical data
+    if (this.historicalData && this.historicalData.length > 20) {
+      const prices = this.historicalData.slice(-20).map(candle => candle.close);
+      const returns = prices.slice(1).map((price, i) => (price - prices[i]) / prices[i]);
+      const volatility = Math.sqrt(returns.reduce((sum, ret) => sum + ret * ret, 0) / returns.length);
+      this.marketContext.volatility = volatility;
+      return volatility;
+    }
+    
+    return 0.02; // Default volatility
+  }
+
+  getTrendStrength() {
+    if (this.marketContext.trendStrength !== null) {
+      return this.marketContext.trendStrength;
+    }
+    
+    // Calculate trend strength from historical data
+    if (this.historicalData && this.historicalData.length > 10) {
+      const prices = this.historicalData.slice(-10).map(candle => candle.close);
+      const firstPrice = prices[0];
+      const lastPrice = prices[prices.length - 1];
+      const trendStrength = Math.abs((lastPrice - firstPrice) / firstPrice);
+      this.marketContext.trendStrength = trendStrength;
+      return trendStrength;
+    }
+    
+    return 0.01; // Default trend strength
+  }
+
+  getVolumeProfile() {
+    if (this.marketContext.volumeProfile !== null) {
+      return this.marketContext.volumeProfile;
+    }
+    
+    // Calculate volume profile from historical data
+    if (this.historicalData && this.historicalData.length > 10) {
+      const volumes = this.historicalData.slice(-10).map(candle => candle.volume);
+      const avgVolume = volumes.reduce((sum, vol) => sum + vol, 0) / volumes.length;
+      const maxVolume = Math.max(...volumes);
+      const volumeProfile = avgVolume / maxVolume;
+      this.marketContext.volumeProfile = volumeProfile;
+      return volumeProfile;
+    }
+    
+    return 0.5; // Default volume profile
   }
 }
 

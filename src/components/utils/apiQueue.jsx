@@ -408,7 +408,7 @@ class ApiQueue {
         requestTimeout = timeoutMs;
       } else if (priority === 'critical') {
         requestTimeout = 300000;
-      } else if (cacheKey && (cacheKey.includes('BacktestCombination') || cacheKey.includes('updateStrategyStats'))) {
+      } else if (cacheKey && typeof cacheKey === 'string' && (cacheKey.includes('BacktestCombination') || cacheKey.includes('updateStrategyStats'))) {
         requestTimeout = 180000;
       } else {
         requestTimeout = 120000;
@@ -566,7 +566,7 @@ class ApiQueue {
         lastError = error;
         
         // ADDED: Enhanced logging for liveTradingAPI failures
-        if (request.cacheKey && request.cacheKey.includes('liveTradingAPI')) {
+        if (request.cacheKey && typeof request.cacheKey === 'string' && request.cacheKey.includes('liveTradingAPI')) {
           DEBUG_APIQ.log('[LIVE_TRADING_API_CALL_FAILED]', {
             attempt: attempt + 1,
             cacheKey: request.cacheKey,
@@ -757,11 +757,11 @@ export const queueEntityCall = async (entityName, method, ...args) => {
   let retryProfile = null; // NEW
 
   // CRITICAL: Prioritize essential entity operations to prevent them from being dropped
-  if (entityName === 'ScanSettings' || entityName === 'User' || entityName === 'WalletSummary') {
+  if (entityName === 'ScanSettings' || entityName === 'User' || entityName === 'WalletSummary' || entityName === 'CentralWalletState') {
     priority = 'critical';
   }
   
-  if (entityName === 'LiveWalletState' && (method === 'update' || method === 'create')) {
+  if (entityName === 'CentralWalletState' && (method === 'update' || method === 'create')) {
     priority = 'critical';
   }
 
@@ -1374,7 +1374,6 @@ export const queueFunctionCall = async (...allArgs) => {
   
   // NEW: Detect reconciliation actions and give high priority and specific retry profiles
   const isReconciliationAction = 
-    funcName === 'walletReconciliation' ||
     (action && ['reconcileWallet', 'requestFundingWalletBalance', 'syncBinanceBalances'].includes(action));
 
   let timeoutMs = customTimeoutMs;
@@ -1556,21 +1555,24 @@ export const queueFunctionCall = async (...allArgs) => {
 
         // Step 2: Trigger reconciliation/virtual close to clean DB state (with retry)
         try {
-          const { base44 } = await import('@/api/base44Client');
-          let vcOk = false;
-          for (let i = 0; i < 2 && !vcOk; i++) {
-            try {
-              await base44.functions.invoke('walletReconciliation', {
-                action: 'virtualCloseDustPositions',
-                symbol,
-                mode
-              });
-              vcOk = true;
-              DEBUG_APIQ.log('[VIRTUAL_CLOSE_AFTER_DUST]', { symbol, mode, attempt: i + 1, triggered: true });
-            } catch (reconErr) {
-              DEBUG_APIQ.log('[VIRTUAL_CLOSE_AFTER_DUST_FAIL]', { attempt: i + 1, message: reconErr?.message || String(reconErr) });
-              await new Promise(r => setTimeout(r, 600 + Math.random() * 800));
+          // Use the new PositionManager virtualCloseDustPositions method instead of backend
+          const { getAutoScannerService } = await import('@/components/services/AutoScannerService');
+          const scannerService = getAutoScannerService();
+          
+          if (scannerService && scannerService.positionManager) {
+            let vcOk = false;
+            for (let i = 0; i < 2 && !vcOk; i++) {
+              try {
+                await scannerService.positionManager.virtualCloseDustPositions(symbol, mode);
+                vcOk = true;
+                DEBUG_APIQ.log('[VIRTUAL_CLOSE_AFTER_DUST]', { symbol, mode, attempt: i + 1, triggered: true, method: 'PositionManager' });
+              } catch (reconErr) {
+                DEBUG_APIQ.log('[VIRTUAL_CLOSE_AFTER_DUST_FAIL]', { attempt: i + 1, message: reconErr?.message || String(reconErr), method: 'PositionManager' });
+                await new Promise(r => setTimeout(r, 600 + Math.random() * 800));
+              }
             }
+          } else {
+            DEBUG_APIQ.log('[VIRTUAL_CLOSE_AFTER_DUST_SKIP]', { symbol, mode, reason: 'PositionManager not available' });
           }
 
           // Step 3: Verification and last-resort cleanup of ghost positions

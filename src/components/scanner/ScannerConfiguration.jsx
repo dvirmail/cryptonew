@@ -32,7 +32,7 @@ export default function ScannerConfiguration({
     });
     const [currentInvested, setCurrentInvested] = useState(() => {
         const s = scanner.getState();
-        return Number(s?.walletSummary?.balanceInTrades || 0);
+        return Number(s?.walletSummary?.balance_in_trades || 0);
     });
 
     const { balanceInTrades: walletBalanceInTrades = 0 } = useWallet() || {};
@@ -40,7 +40,7 @@ export default function ScannerConfiguration({
     useEffect(() => {
         const unsubscribe = scanner.subscribe((state) => {
             setInvestCap(state?.settings?.maxBalanceInvestCapUSDT ?? 0);
-            setCurrentInvested(Number(state?.walletSummary?.balanceInTrades || 0));
+            setCurrentInvested(Number(state?.walletSummary?.balance_in_trades || 0));
         });
         return () => { if (unsubscribe) unsubscribe(); };
     }, [scanner]);
@@ -195,25 +195,45 @@ export default function ScannerConfiguration({
                         </div>
                     </div>
 
-                    {/* Fixed Position Sizing Section */}
-                    {!localConfig.useWinStrategySize && (
-                        <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg space-y-4">
-                            <h3 className="font-semibold text-green-900 dark:text-green-100">Fixed Position Sizing</h3>
+                    {/* Position Sizing Configuration */}
+                    <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg space-y-4">
+                        <h3 className="font-semibold text-green-900 dark:text-green-100">Position Sizing Configuration</h3>
+                        
+                        {/* Base Position Size - Always visible for LPM system */}
+                        <div className="space-y-2">
+                            <Label htmlFor="basePositionSize">Base Position Size (USDT)</Label>
+                            <Input
+                                id="basePositionSize"
+                                type="number"
+                                min="10"
+                                max="10000"
+                                step="10"
+                                value={localConfig.basePositionSize || 100}
+                                onChange={(e) => handleChange('basePositionSize', parseFloat(e.target.value))}
+                                className="font-mono"
+                            />
+                            <p className="text-xs text-gray-600 dark:text-gray-400">
+                                Base position size in USDT. The LPM system will adjust this size based on market conditions and performance.
+                            </p>
+                        </div>
+
+                        {/* Fixed Position Sizing - Only when Win Strategy is disabled */}
+                        {!localConfig.useWinStrategySize && (
                             <div className="space-y-2">
-                                <Label htmlFor="defaultPositionSize">Default Position Size (USDT)</Label>
+                                <Label htmlFor="defaultPositionSize">Fixed Position Size (USDT)</Label>
                                 <Input
                                     id="defaultPositionSize"
                                     type="number"
-                                    value={localConfig.defaultPositionSize || 30}
+                                    value={localConfig.defaultPositionSize || 100}
                                     onChange={(e) => handleChange('defaultPositionSize', parseFloat(e.target.value))}
                                     className="font-mono"
                                 />
                                 <p className="text-xs text-gray-600 dark:text-gray-400">
-                                    Base position size in USDT, adjusted by conviction score.
+                                    Fixed position size in USDT, adjusted by conviction score (only used when Win Strategy sizing is disabled).
                                 </p>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
 
                     {/* Max Balance Percent Risk - NEW */}
                     <div className="space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">

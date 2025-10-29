@@ -1,0 +1,215 @@
+{
+  "name": "Comprehensive Test Strategy - All Signals",
+  "description": "Test strategy containing all available signal types to validate Advanced Calculator",
+  "coin": "BTCUSDT",
+  "timeframe": "15m",
+  "minCombinedStrength": 50,
+  "requiredSignals": 5,
+  "maxSignals": 35,
+  "signals": [
+    {
+      "type": "macd",
+      "strength": 85,
+      "condition": "above_signal",
+      "enabled": true
+    },
+    {
+      "type": "rsi",
+      "strength": 70,
+      "condition": "oversold",
+      "enabled": true
+    },
+    {
+      "type": "ichimoku",
+      "strength": 80,
+      "condition": "bullish",
+      "enabled": true
+    },
+    {
+      "type": "stochastic",
+      "strength": 75,
+      "condition": "oversold",
+      "enabled": true
+    },
+    {
+      "type": "ema",
+      "strength": 60,
+      "condition": "above",
+      "enabled": true
+    },
+    {
+      "type": "bollinger",
+      "strength": 65,
+      "condition": "lower_touch",
+      "enabled": true
+    },
+    {
+      "type": "ma200",
+      "strength": 55,
+      "condition": "above",
+      "enabled": true
+    },
+    {
+      "type": "atr",
+      "strength": 50,
+      "condition": "high_volatility",
+      "enabled": true
+    },
+    {
+      "type": "psar",
+      "strength": 45,
+      "condition": "bullish",
+      "enabled": true
+    },
+    {
+      "type": "williamsr",
+      "strength": 40,
+      "condition": "oversold",
+      "enabled": true
+    },
+    {
+      "type": "mfi",
+      "strength": 35,
+      "condition": "oversold",
+      "enabled": true
+    },
+    {
+      "type": "adx",
+      "strength": 30,
+      "condition": "strong_trend",
+      "enabled": true
+    },
+    {
+      "type": "tema",
+      "strength": 25,
+      "condition": "above",
+      "enabled": true
+    },
+    {
+      "type": "dema",
+      "strength": 20,
+      "condition": "above",
+      "enabled": true
+    },
+    {
+      "type": "hma",
+      "strength": 15,
+      "condition": "above",
+      "enabled": true
+    },
+    {
+      "type": "wma",
+      "strength": 10,
+      "condition": "above",
+      "enabled": true
+    },
+    {
+      "type": "cci",
+      "strength": 5,
+      "condition": "oversold",
+      "enabled": true
+    },
+    {
+      "type": "roc",
+      "strength": 0,
+      "condition": "positive",
+      "enabled": true
+    },
+    {
+      "type": "awesomeoscillator",
+      "strength": 90,
+      "condition": "positive",
+      "enabled": true
+    },
+    {
+      "type": "cmo",
+      "strength": 95,
+      "condition": "positive",
+      "enabled": true
+    },
+    {
+      "type": "obv",
+      "strength": 100,
+      "condition": "increasing",
+      "enabled": true
+    },
+    {
+      "type": "cmf",
+      "strength": 85,
+      "condition": "positive",
+      "enabled": true
+    },
+    {
+      "type": "adline",
+      "strength": 80,
+      "condition": "increasing",
+      "enabled": true
+    },
+    {
+      "type": "bbw",
+      "strength": 75,
+      "condition": "narrow",
+      "enabled": true
+    },
+    {
+      "type": "ttm_squeeze",
+      "strength": 70,
+      "condition": "squeeze",
+      "enabled": true
+    },
+    {
+      "type": "candlestick",
+      "strength": 65,
+      "condition": "bullish",
+      "enabled": true
+    },
+    {
+      "type": "keltner",
+      "strength": 60,
+      "condition": "upper_touch",
+      "enabled": true
+    },
+    {
+      "type": "donchian",
+      "strength": 55,
+      "condition": "breakout",
+      "enabled": true
+    },
+    {
+      "type": "chartpattern",
+      "strength": 50,
+      "condition": "bullish",
+      "enabled": true
+    },
+    {
+      "type": "pivot",
+      "strength": 45,
+      "condition": "above",
+      "enabled": true
+    },
+    {
+      "type": "fibonacci",
+      "strength": 40,
+      "condition": "retracement",
+      "enabled": true
+    },
+    {
+      "type": "supportresistance",
+      "strength": 35,
+      "condition": "breakout",
+      "enabled": true
+    },
+    {
+      "type": "maribbon",
+      "strength": 30,
+      "condition": "bullish",
+      "enabled": true
+    },
+    {
+      "type": "volume",
+      "strength": 25,
+      "condition": "high",
+      "enabled": true
+    }
+  ]
+}

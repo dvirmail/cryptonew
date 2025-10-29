@@ -9,7 +9,9 @@ import {
   Target, Shield, DollarSign, Clock, TrendingUp,
   Zap, BarChart3, Activity, SlidersHorizontal, Settings, AlertCircle
 } from 'lucide-react';
-import { VirtualWalletState } from '@/api/entities'; // New import for VirtualWalletState
+import { queueEntityCall } from '@/components/utils/apiQueue';
+import centralWalletStateManager from '@/components/services/CentralWalletStateManager';
+import walletBalanceCache from '@/components/services/WalletBalanceCache';
 
 const generateThematicName = (coin, signals, timeframe) => {
     const adjectives = ["Golden", "Silver", "Crystal", "Shadow", "Quantum", "Galactic", "Solar", "Lunar", "Cosmic", "Atomic", "Mystic", "Arctic", "Crimson", "Azure", "Emerald", "Obsidian", "Phantom", "Silent", "Iron", "Steel", "Diamond", "Vortex", "Abyss", "Zenith", "Apex", "Nova", "Pulse", "Echo", "Oracle", "Cipher", "Matrix", "Aegis", "Titan", "Spectre", "Warden", "Reaper", "Viper", "Cobra", "Phoenix", "Griffin", "Dragon", "Hydra", "Chimera", "Basilisk", "Wyvern", "Manticore", "Ronin", "Samurai", "Ninja", "Shinobi", "Shogun", "Daimyo", "Kensei", "Sensei", "Roshi", "Satori", "Kensho", "Zanshin"];
@@ -62,8 +64,8 @@ export default function WinStrategy({
     return {
       // ATR-related parameters now directly on the strategy object
       riskPercentage: initial.riskPercentage ?? initial.atrAdaptive?.baseRiskPercentage ?? 1, // Default to 1%
-      stopLossAtrMultiplier: initial.stopLossAtrMultiplier ?? initial.atrAdaptive?.stopLossMultiplier ?? 2.5, // Default to 2.5x
-      takeProfitAtrMultiplier: initial.takeProfitAtrMultiplier ?? initial.atrAdaptive?.takeProfitMultiplier ?? 3.0, // Default to 3.0x
+      stopLossAtrMultiplier: initial.stopLossAtrMultiplier ?? initial.atrAdaptive?.stopLossMultiplier ?? 1.0, // Default to 1.0x for realistic short-term trading
+      takeProfitAtrMultiplier: initial.takeProfitAtrMultiplier ?? initial.atrAdaptive?.takeProfitMultiplier ?? 1.5, // Default to 1.5x for realistic short-term trading
       // Traditional strategy parameters remain nested
       traditional: {
         positionSizePercentage: 1,
@@ -86,35 +88,48 @@ export default function WinStrategy({
     };
   });
 
-  const [walletBalance, setWalletBalance] = useState(10000); // Default fallback
+  const [walletBalance, setWalletBalance] = useState(0);
   const [loading, setLoading] = useState(true);
 
-  // Fetch current wallet balance
+  // Fetch current wallet balance using cached service
   useEffect(() => {
-    const fetchWalletBalance = async () => {
+    const initializeWalletBalance = async () => {
       try {
         setLoading(true);
-        const walletList = await VirtualWalletState.list();
-
-        if (walletList.length > 0) {
-          const wallet = walletList[0];
-          // Calculate total equity (available balance + value in open positions)
-          const positionsValue = wallet.positions?.reduce((sum, pos) => sum + (pos.entry_value_usdt || 0), 0) || 0;
-          const totalEquity = (wallet.balance_usdt || 0) + positionsValue;
-          setWalletBalance(totalEquity);
+        
+        // Initialize the cache service if not already done
+        walletBalanceCache.initialize(centralWalletStateManager);
+        
+        // Get cached balance immediately
+        const cachedData = walletBalanceCache.getCachedBalance();
+        if (cachedData.isValid) {
+          setWalletBalance(cachedData.balance);
+          setLoading(false);
         } else {
-            // If no wallets, or empty list, use default
-            setWalletBalance(10000);
+          // Cache is stale, refresh it
+          await walletBalanceCache.refreshBalance();
+          const refreshedData = walletBalanceCache.getCachedBalance();
+          setWalletBalance(refreshedData.balance);
+          setLoading(false);
         }
+        
+        // Subscribe to balance updates
+        const unsubscribe = walletBalanceCache.subscribe((cacheData) => {
+          setWalletBalance(cacheData.balance);
+          setLoading(cacheData.isLoading);
+        });
+        
+        // Cleanup subscription on unmount
+        return unsubscribe;
+        
       } catch (error) {
-        console.error('Failed to fetch wallet balance:', error);
-        // Keep default fallback value on error
-      } finally {
+        console.error('[WinStrategy] ❌ Failed to initialize wallet balance:', error);
+        setWalletBalance(0);
         setLoading(false);
       }
     };
 
-    fetchWalletBalance();
+    initializeWalletBalance();
   }, []); // Empty dependency array means it runs once on mount
 
   // Enhanced ATR strategy calculation with proper wallet consideration

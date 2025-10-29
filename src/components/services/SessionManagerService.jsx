@@ -47,13 +47,7 @@ export default class SessionManagerService {
       }
       return sid;
     } catch (e) {
-      // Fallback if sessionStorage fails
-      const timestamp = Date.now();
-      const random = Math.floor(1000 + Math.random() * 9000);
-      const counter = Math.floor(10000 + Math.random() * 90000);
-      const sid = `session_${timestamp}-${random}-${counter}`;
-      console.warn(`[SESSION] sessionStorage unavailable, using ephemeral ID: ${sid}`);
-      return sid;
+      throw new Error('Session storage not available');
     }
   }
 
@@ -66,12 +60,10 @@ export default class SessionManagerService {
   }
 
   handleBeforeUnload(event) {
-    console.log('[SESSION] beforeunload event triggered');
     this._reliableReleaseSession();
   }
 
   handlePageHide(event) {
-    console.log('[SESSION] pagehide event triggered');
     this._reliableReleaseSession();
   }
 
@@ -97,7 +89,6 @@ export default class SessionManagerService {
           const sent = navigator.sendBeacon(functionUrl, blob);
           
           if (sent) {
-              console.log('[SESSION] Session release beacon sent successfully');
               return;
           } else {
               console.warn('[SESSION] sendBeacon failed, trying keepalive fetch');
@@ -113,7 +104,7 @@ export default class SessionManagerService {
             body: payload,
             keepalive: true // Critical: allows request to outlive the page
         }).then(() => {
-            console.log('[SESSION] Session release via keepalive fetch successful');
+            // Session release successful
         }).catch((error) => {
             console.warn('[SESSION] Session release via keepalive fetch failed:', error);
         });
@@ -127,17 +118,18 @@ export default class SessionManagerService {
   }
 
   async start(force = false) {
+    console.log('[SESSION] 🔍 start() called with force:', force);
     this._validateSessionId();
 
     // Prevent rapid successive start calls
     if (this._isStarting) {
-      console.log('[SESSION] Start already in progress, ignoring duplicate call');
+      console.log('[SESSION] 🔍 Already starting, returning false');
       return false;
     }
     
     this._isStarting = true;
+    console.log('[SESSION] 🔍 Setting _isStarting to true');
 
-    //console.log(`[SESSION] start() called ${force ? '(FORCE MODE)' : ''}`, { sessionId: this.sessionId });
     this.addLog(`[SESSION] Attempting to claim leadership${force ? ' (FORCE MODE)' : ''}...`, 'system');
 
     try {
@@ -160,19 +152,24 @@ export default class SessionManagerService {
           //console.log('[SESSION] claimSession response:', response.data);
 
           if (response?.data?.success) {
+            console.log('[SESSION] ✅ Session claim successful, starting running state...');
             this.scannerService.state.leaderSessionId = this.sessionId;
-            this.scannerService._startRunningState();
+            await this.scannerService._startRunningState();
+            console.log('[SessionManagerService] 📊 DEBUG: _startRunningState completed');
             this.addLog('[SESSION] ✅ Leadership claimed successfully', 'success');
             this._isStarting = false;
             return true;
           } else {
             const errorMsg = response?.data?.error || 'Unknown error';
             const code = response?.data?.code;
+            const currentLeader = response?.data?.currentLeader;
 
+            console.log('[SESSION] ❌ Session claim failed:', { errorMsg, code, currentLeader, sessionId: this.sessionId });
             lastError = new Error(errorMsg);
 
             // If session already claimed by another active (non-stale) leader, don't retry
             if (code === 'already_claimed' && !force) {
+              console.log('[SESSION] ⚠️ Session already claimed by:', currentLeader);
               this.addLog(`[SESSION] ⚠️ Another tab is already leading. Use "Take Control" to override.`, 'warning');
               // Also update the state based on the current leader
               const statusResponse = await scannerSessionManager({ action: 'getSessionStatus' });
@@ -192,7 +189,6 @@ export default class SessionManagerService {
 
               // Check status before retrying
               const statusResponse = await scannerSessionManager({ action: 'getSessionStatus' });
-              console.log('[SESSION] Status before retry:', statusResponse.data);
 
               // If session became available, continue with retry
               if (!statusResponse?.data?.is_active || statusResponse?.data?.active_session_id === this.sessionId) {
@@ -238,13 +234,11 @@ export default class SessionManagerService {
 
     // Prevent rapid successive stop calls
     if (this._isStopping) {
-      console.log('[SESSION] Stop already in progress, ignoring duplicate call');
       return false;
     }
     
     this._isStopping = true;
 
-    console.log('[SESSION] stop() called', { sessionId: this.sessionId });
     this.addLog('[SESSION] Releasing leadership...', 'system');
 
     try {
@@ -254,7 +248,6 @@ export default class SessionManagerService {
         sessionId: this.sessionId
       });
 
-      console.log('[SESSION] releaseSession response:', response.data);
 
       if (response?.data?.success) {
         this.scannerService._stopRunningState();
@@ -284,7 +277,6 @@ export default class SessionManagerService {
   async forceStop() {
     this._validateSessionId();
 
-    console.log('[SESSION] forceStop() called', { sessionId: this.sessionId });
     this.addLog('[SESSION] Force stopping and releasing leadership...', 'system');
 
     // First stop local state immediately
@@ -365,6 +357,59 @@ export default class SessionManagerService {
     }
   }
 
+  async attemptSessionRecovery() {
+    this._validateSessionId();
+    
+    this.addLog('[SESSION] 🔄 Attempting session recovery after system wake-up...', 'system');
+    
+    const maxRetries = 5;
+    let attempt = 0;
+    
+    while (attempt < maxRetries) {
+      try {
+        attempt++;
+        this.addLog(`[SESSION] 🔄 Recovery attempt ${attempt}/${maxRetries}...`, 'system');
+        
+        // First, try to verify current leadership
+        const hasLeadership = await this.verifyLeadership();
+        
+        if (hasLeadership) {
+          this.addLog('[SESSION] ✅ Session recovery successful - leadership maintained', 'success');
+          return true;
+        }
+        
+        // If no leadership, try to start a new session
+        this.addLog('[SESSION] 🔄 No active leadership - attempting to start new session...', 'system');
+        const startResult = await this.start();
+        
+        if (startResult) {
+          this.addLog('[SESSION] ✅ Session recovery successful - new session started', 'success');
+          return true;
+        } else {
+          this.addLog(`[SESSION] ⚠️ Recovery attempt ${attempt} failed - retrying...`, 'warning');
+          
+          if (attempt < maxRetries) {
+            const delay = Math.min(1000 * Math.pow(2, attempt), 10000); // Exponential backoff, max 10s
+            this.addLog(`[SESSION] ⏳ Waiting ${delay}ms before retry...`, 'system');
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+        }
+      } catch (error) {
+        this.addLog(`[SESSION] ❌ Recovery attempt ${attempt} error: ${error.message}`, 'error');
+        console.error('[SESSION] Session recovery error:', error);
+        
+        if (attempt < maxRetries) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+          this.addLog(`[SESSION] ⏳ Waiting ${delay}ms before retry...`, 'system');
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    }
+    
+    this.addLog('[SESSION] ❌ Session recovery failed after all retries', 'error');
+    return false;
+  }
+
   startMonitoring() {
     if (this.isMonitoring) {
       return;
@@ -378,14 +423,58 @@ export default class SessionManagerService {
         await this.verifyLeadership();
       } catch (error) {
         console.error('[SESSION] Error during monitoring:', error);
+        // Don't stop monitoring on errors - continue trying to maintain session
+        this.addLog('[SESSION] Monitoring error - continuing to maintain session', 'warning');
       }
     }, 60000); // 60 seconds
+
+    // Add additional keep-alive mechanism for extended offline periods
+    this.keepAliveInterval = setInterval(async () => {
+      try {
+        if (this.scannerService.state.isRunning) {
+          // Send keep-alive signal even if not visible
+          await this.verifyLeadership();
+          this.addLog('[SESSION] Keep-alive signal sent', 'debug');
+        }
+      } catch (error) {
+        console.error('[SESSION] Keep-alive error:', error);
+        // If keep-alive fails, attempt session recovery
+        this.addLog('[SESSION] Keep-alive failed - attempting session recovery', 'warning');
+        await this.attemptSessionRecovery();
+      }
+    }, 300000); // 5 minutes - more frequent keep-alive
+
+    // Add emergency recovery mechanism for extended offline periods
+    this.emergencyRecoveryInterval = setInterval(async () => {
+      try {
+        if (this.scannerService.state.isRunning) {
+          // Check if we've been offline for too long
+          const lastHeartbeat = this.scannerService.state.lastHeartbeat || 0;
+          const timeSinceLastHeartbeat = Date.now() - lastHeartbeat;
+          
+          if (timeSinceLastHeartbeat > 600000) { // 10 minutes without heartbeat
+            this.addLog('[SESSION] Emergency recovery triggered - no heartbeat for 10+ minutes', 'warning');
+            await this.attemptSessionRecovery();
+          }
+        }
+      } catch (error) {
+        console.error('[SESSION] Emergency recovery error:', error);
+      }
+    }, 600000); // Check every 10 minutes
   }
 
   stopMonitoring() {
     if (this.monitoringInterval) {
       clearInterval(this.monitoringInterval);
       this.monitoringInterval = null;
+    }
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+    if (this.emergencyRecoveryInterval) {
+      clearInterval(this.emergencyRecoveryInterval);
+      this.emergencyRecoveryInterval = null;
     }
     this.isMonitoring = false;
     this.addLog('[SESSION] Stopped passive monitoring', 'system');

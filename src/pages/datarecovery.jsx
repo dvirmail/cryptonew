@@ -9,7 +9,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { base44 } from '@/api/base44Client';
 
-import { VirtualWalletState } from '@/api/entities';
 import { BacktestCombination } from '@/api/entities';
 import { Trade } from '@/api/entities';
 import { HistoricalPerformance } from '@/api/entities';
@@ -209,11 +208,9 @@ export default function DataRecovery() {
     const checkTradeHistoryIntegrity = async () => {
         setIsChecking(true);
         try {
-            const walletList = await VirtualWalletState.list('-last_updated_timestamp', 1);
-            if (walletList.length === 0) {
-                setResults(prev => [...prev, "❌ No wallet state found in database"]);
-                return;
-            }
+            // Virtual wallet functionality removed - only testnet and live modes supported
+            setResults(prev => [...prev, "⚠️ Virtual wallet functionality has been removed. Only testnet and live modes are supported."]);
+            return;
 
             const walletState = walletList[0];
             const dbTradeHistory = walletState.trade_history || [];
@@ -296,59 +293,11 @@ export default function DataRecovery() {
         try {
             setResults(prev => [...prev, "🔧 Starting orphaned combination cleanup..."]);
 
-            const [combinations, walletList] = await Promise.all([
-                BacktestCombination.list(),
-                VirtualWalletState.list('-last_updated_timestamp', 1)
-            ]);
-
-            if (walletList.length === 0) {
-                setResults(prev => [...prev, "❌ No wallet state found"]);
-                return;
-            }
-
-            const wallet = walletList[0];
-            const tradeHistory = wallet.trade_history || [];
+            const combinations = await BacktestCombination.list();
             
-            const activeStrategyNames = new Set(combinations.map(c => c.combinationName));
-            const tradedStrategyNames = new Set(tradeHistory.map(t => t.strategy_name));
-            
-            const orphanedTrades = tradeHistory.filter(trade => 
-                trade.strategy_name && !activeStrategyNames.has(trade.strategy_name)
-            );
-            
-            if (orphanedTrades.length === 0) {
-                setResults(prev => [...prev, "✅ No significant orphaned trades found."]);
-                return;
-            }
-
-            setResults(prev => [
-                ...prev, 
-                `Found ${orphanedTrades.length} orphaned trades from deleted strategies`,
-                "Orphaned strategies: " + Array.from(new Set(orphanedTrades.map(t => t.strategy_name))).join(", ")
-            ]);
-
-            const cleanedTradeHistory = tradeHistory.filter(trade => 
-                !trade.strategy_name || activeStrategyNames.has(trade.strategy_name)
-            );
-
-            await VirtualWalletState.update(wallet.id, {
-                trade_history: cleanedTradeHistory,
-                total_trades_count: cleanedTradeHistory.length,
-                winning_trades_count: cleanedTradeHistory.filter(t => t.pnl_usdt > 0).length,
-                losing_trades_count: cleanedTradeHistory.filter(t => t.pnl_usdt <= 0).length,
-                last_updated_timestamp: new Date().toISOString()
-            });
-
-            setResults(prev => [
-                ...prev,
-                `✅ Cleanup complete! Removed ${orphanedTrades.length} orphaned trades`,
-                `Remaining trades: ${cleanedTradeHistory.length}`
-            ]);
-
-            toast({
-                title: "Cleanup Complete",
-                description: `Removed ${orphanedTrades.length} orphaned trades`,
-            });
+            // Virtual wallet functionality removed - only testnet and live modes supported
+            setResults(prev => [...prev, "⚠️ Virtual wallet functionality has been removed. Only testnet and live modes are supported."]);
+            return;
 
         } catch (error) {
             setResults(prev => [...prev, `❌ Error during cleanup: ${error.message}`]);
@@ -367,10 +316,9 @@ export default function DataRecovery() {
         setResults(prev => [...prev, "", "💰 Starting wallet balance reconciliation..."]);
     
         try {
-            const [walletList, allTrades] = await Promise.all([
-                VirtualWalletState.list('-last_updated_timestamp', 1),
-                Trade.list()
-            ]);
+            // Virtual wallet functionality removed - only testnet and live modes supported
+            setResults(prev => [...prev, "⚠️ Virtual wallet functionality has been removed. Only testnet and live modes are supported."]);
+            return;
     
             if (walletList.length === 0) {
                 throw new Error("No wallet state found in the database.");
@@ -402,10 +350,8 @@ export default function DataRecovery() {
             } else {
                 setResults(prev => [...prev, `   • Applying adjustment of $${(discrepancy || 0).toFixed(2)}...`]);
                 
-                await VirtualWalletState.update(wallet.id, {
-                    balance_usdt: expectedAvailableCash,
-                    last_updated_timestamp: new Date().toISOString()
-                });
+                // Virtual wallet functionality removed - only testnet and live modes supported
+                setResults(prev => [...prev, "⚠️ Virtual wallet functionality has been removed. Only testnet and live modes are supported."]);
     
                 setResults(prev => [...prev, "✅ Reconciliation complete. Wallet balance has been corrected."]);
                 toast({
@@ -1518,7 +1464,7 @@ export default function DataRecovery() {
                             Wallet State Reconciliation
                         </CardTitle>
                         <CardDescription>
-                            Synchronizes the VirtualWalletState database record with the exact values displayed in the UI (Total Equity, Available Cash, Balance in Trades).
+                            Virtual wallet functionality has been removed. Only testnet and live modes are supported.
                         </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">

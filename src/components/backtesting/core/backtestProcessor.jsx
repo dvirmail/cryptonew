@@ -96,10 +96,12 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
   rawMatches.forEach(match => {
     // Generate combination name from signals
     const combinationName = match.signals.map(s => s.value || s.type).sort().join(' + ');
+    // Include coin in the key to ensure combinations are grouped per coin
+    const combinationKey = `${match.coin}-${combinationName}`;
 
-    if (!combinations.has(combinationName)) {
+    if (!combinations.has(combinationKey)) {
       // Initialize new combination entry
-      combinations.set(combinationName, {
+      combinations.set(combinationKey, {
         signals: match.signals.map(s => ({
           ...s,
           isEvent: classifySignalType(s)
@@ -107,6 +109,7 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
         matches: [],
         combinedStrength: 0,
         coin: match.coin, // Preserve the coin information from the match
+        combinationName: combinationName, // Store the original combination name
         marketRegimePerformance: {
           uptrend: { occurrences: 0, successful: 0, grossProfit: 0, grossLoss: 0 },
           downtrend: { occurrences: 0, successful: 0, grossProfit: 0, grossLoss: 0 },
@@ -116,7 +119,7 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
       });
     }
 
-    const combination = combinations.get(combinationName);
+    const combination = combinations.get(combinationKey);
 
     // Store the full match object
     combination.matches.push(match);
@@ -144,8 +147,7 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
   let skippedCount = 0;
   let regimeStats = { total: 0, passed: 0, failed: 0 };
 
-  for (const [regimeAwareCombinationName, comboData] of combinations.entries()) {
-    const combinationName = regimeAwareCombinationName;
+  for (const [combinationKey, comboData] of combinations.entries()) {
     processedCount++;
 
     if (comboData.matches.length < minOccurrences) {
@@ -185,7 +187,7 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
 
     // Create separate strategy entries for each valid regime
     for (const validRegime of validRegimes) {
-      const regimeSpecificName = `${combinationName} (${validRegime.regime.toUpperCase()})`;
+      const regimeSpecificName = `${comboData.combinationName} (${validRegime.regime.toUpperCase()})`;
       
       // Filter matches for this specific regime
       const regimeMatches = comboData.matches.filter(match => 
@@ -304,6 +306,14 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
       // Calculate regime-specific profitability score
       const regimeProfitabilityScore = regimeSuccessRate * 0.4 + Math.min(regimeNetAveragePriceMove * 10, 100) * 0.3 + Math.min(regimeProfitFactor * 10, 100) * 0.3;
 
+      // Calculate median lowest low during backtest (historical support analysis)
+      const regimeHistoricalDrawdownPercentages = regimeMatches
+        .filter(match => typeof match.maxDrawdown === 'number' && !isNaN(match.maxDrawdown))
+        .map(match => Math.abs(match.maxDrawdown));
+      
+      const regimeMedianLowestLowDuringBacktest = regimeHistoricalDrawdownPercentages.length > 0 ? calculateMedian(regimeHistoricalDrawdownPercentages) : null;
+      
+
       // Create the regime-specific strategy entry
       const regimeStrategy = {
         combinationName: regimeSpecificName,
@@ -332,6 +342,7 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
         profitabilityScore: regimeProfitabilityScore,
         marketRegime: validRegime.regime,
         coin: comboData.coin, // Preserve the coin information from the combination data
+        medianLowestLowDuringBacktest: regimeMedianLowestLowDuringBacktest, // Add historical support analysis
         marketRegimePerformance: {
           [validRegime.regime]: {
             occurrences: validRegime.occurrences,
@@ -806,6 +817,14 @@ export const processBacktestResults = (matches, onLog) => {
 
     const estimatedExitTimeMinutes = calculateEstimatedExitTime(matchGroup);
 
+    // Calculate median lowest low during backtest (historical support analysis)
+    const drawdownPercentages = matchGroup
+      .filter(match => typeof match.maxDrawdown === 'number' && !isNaN(match.maxDrawdown))
+      .map(match => Math.abs(match.maxDrawdown));
+    
+    const medianLowestLowDuringBacktest = drawdownPercentages.length > 0 ? calculateMedian(drawdownPercentages) : null;
+    
+
     return {
       key,
       coin: firstMatch.coin, // Preserve the coin information from the first match
@@ -827,6 +846,7 @@ export const processBacktestResults = (matches, onLog) => {
       dominantMarketRegime, // This is now correctly 'uptrend', 'downtrend', or 'ranging'
       marketRegimeDistribution: regimeCounts, // This will also contain specific counts
       estimatedExitTimeMinutes,
+      medianLowestLowDuringBacktest, // Add historical support analysis
     };
   });
 

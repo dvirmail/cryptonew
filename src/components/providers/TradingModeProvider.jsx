@@ -237,7 +237,14 @@ export const TradingModeProvider = ({ children }) => {
         await new Promise(resolve => setTimeout(resolve, 500)); // Give it a moment to stop
         console.log(`[MODE_SWITCH] Scanner stopped before switching to ${newMode} mode.`);
         scannerService.setTradingMode(newMode);
-        scannerService.start(); // Restart after mode change
+        // Use LifecycleService as the single orchestrator for scanner starts
+        const lifecycleService = scannerService.lifecycleService;
+        if (lifecycleService && lifecycleService.start) {
+            lifecycleService.start();
+        } else {
+            console.warn('[TradingModeProvider] ⚠️ LifecycleService not available, using deprecated AutoScannerService.start()');
+            scannerService.start(); // Fallback to direct start
+        }
         toast({
           title: "Trading Mode Changed & Scanner Restarted",
           description: `Switched to ${newMode.toUpperCase()} mode. Scanner has been restarted.`,

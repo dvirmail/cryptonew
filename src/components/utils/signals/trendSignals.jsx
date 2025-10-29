@@ -158,7 +158,7 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'macd',
             value: 'MACD Above Signal',
-            strength: applyRegimeAdjustment(strength, 'macd_above_signal_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'macd'),
             details: `MACD line (${macd.toFixed(4)}) is above Signal line (${signal.toFixed(4)})`,
             priority: 6
         });
@@ -167,7 +167,7 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'macd',
             value: 'MACD Below Signal',
-            strength: applyRegimeAdjustment(strength, 'macd_below_signal_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'macd'),
             details: `MACD line (${macd.toFixed(4)}) is below Signal line (${signal.toFixed(4)})`,
             priority: 6
         });
@@ -179,7 +179,7 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'macd',
             value: 'MACD Above Zero',
-            strength: applyRegimeAdjustment(strength, 'macd_above_zero_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'macd'),
             details: `MACD is above zero line, indicating upward momentum`,
             priority: 5
         });
@@ -188,7 +188,7 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'macd',
             value: 'MACD Below Zero',
-            strength: applyRegimeAdjustment(strength, 'macd_below_zero_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'macd'),
             details: `MACD is below zero line, indicating downward momentum`,
             priority: 5
         });
@@ -200,7 +200,7 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'macd',
             value: 'Positive Histogram',
-            strength: applyRegimeAdjustment(strength, 'macd_positive_histogram_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'macd'),
             details: `Positive histogram indicates strengthening bullish momentum`,
             priority: 4
         });
@@ -209,7 +209,7 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'macd',
             value: 'Negative Histogram',
-            strength: applyRegimeAdjustment(strength, 'macd_negative_histogram_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'macd'),
             details: `Negative histogram indicates strengthening bearish momentum`,
             priority: 4
         });
@@ -222,7 +222,7 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'macd',
             value: 'Bullish Cross',
-            strength: applyRegimeAdjustment(80, 'macd_bullish_cross_event', marketRegime),
+            strength: applyRegimeAdjustment(80, marketRegime, 'macd'),
             details: `MACD line crossed above Signal line`,
             priority: 9
         });
@@ -233,7 +233,7 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'macd',
             value: 'Bearish Cross',
-            strength: applyRegimeAdjustment(80, 'macd_bearish_cross_event', marketRegime),
+            strength: applyRegimeAdjustment(80, marketRegime, 'macd'),
             details: `MACD line crossed below Signal line`,
             priority: 9
         });
@@ -273,7 +273,7 @@ export const evaluateEmaCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'ema',
             value: 'Price Above EMA',
-            strength: applyRegimeAdjustment(strength, 'ema_price_above', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ema'),
             details: `Price ${currentPrice.toFixed(2)} is above EMA ${currentEma.toFixed(2)}`,
             priority: 6
         });
@@ -282,7 +282,7 @@ export const evaluateEmaCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'ema',
             value: 'Price Below EMA',
-            strength: applyRegimeAdjustment(strength, 'ema_price_below', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ema'),
             details: `Price ${currentPrice.toFixed(2)} is below EMA ${currentEma.toFixed(2)}`,
             priority: 6
         });
@@ -297,7 +297,7 @@ export const evaluateEmaCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'ema',
             value: 'Bullish EMA Alignment',
-            strength: applyRegimeAdjustment(strength, 'ema_bullish_alignment', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ema'),
             details: `Fast EMA above Slow EMA - bullish alignment`,
             priority: 7
         });
@@ -306,7 +306,7 @@ export const evaluateEmaCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'ema',
             value: 'Bearish EMA Alignment',
-            strength: applyRegimeAdjustment(strength, 'ema_bearish_alignment', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ema'),
             details: `Fast EMA below Slow EMA - bearish alignment`,
             priority: 7
         });
@@ -322,7 +322,7 @@ export const evaluateEmaCondition = (candle, indicators, index, signalSettings, 
             signals.push({
                 type: 'ema',
                 value: 'Bullish Cross',
-                strength: applyRegimeAdjustment(80, 'ema_bullish_cross', marketRegime),
+                strength: applyRegimeAdjustment(80, marketRegime, 'ema'),
                 details: `Fast EMA crossed above Slow EMA`,
                 priority: 9
             });
@@ -333,7 +333,7 @@ export const evaluateEmaCondition = (candle, indicators, index, signalSettings, 
             signals.push({
                 type: 'ema',
                 value: 'Bearish Cross',
-                strength: applyRegimeAdjustment(80, 'ema_bearish_cross', marketRegime),
+                strength: applyRegimeAdjustment(80, marketRegime, 'ema'),
                 details: `Fast EMA crossed below Slow EMA`,
                 priority: 9
             });
@@ -381,7 +381,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'Price Above MA200',
-            strength: applyRegimeAdjustment(strength, 'ma200_price_above', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ma200'),
             details: `Price ${currentClose.toFixed(2)} is above MA200 ${ma200.toFixed(2)}`,
             priority: 6
         });
@@ -390,7 +390,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'Price Below MA200',
-            strength: applyRegimeAdjustment(strength, 'ma200_price_below', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ma200'),
             details: `Price ${currentClose.toFixed(2)} is below MA200 ${ma200.toFixed(2)}`,
             priority: 6
         });
@@ -406,7 +406,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'Bullish MA Alignment',
-            strength: applyRegimeAdjustment(55, 'ma200_ma_bullish_alignment', marketRegime),
+            strength: applyRegimeAdjustment(55, marketRegime, 'ma200'),
             details: `Fast MA and MA100 both above MA200 - bullish alignment`,
             priority: 7
         });
@@ -414,7 +414,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'Bearish MA Alignment',
-            strength: applyRegimeAdjustment(55, 'ma200_ma_bearish_alignment', marketRegime),
+            strength: applyRegimeAdjustment(55, marketRegime, 'ma200'),
             details: `Fast MA and MA100 both below MA200 - bearish alignment`,
             priority: 7
         });
@@ -422,7 +422,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'Mixed MA Alignment',
-            strength: applyRegimeAdjustment(25, 'ma200_ma_mixed_alignment', marketRegime),
+            strength: applyRegimeAdjustment(25, marketRegime, 'ma200'),
             details: `Mixed MA alignment - conflicting signals`,
             priority: 4
         });
@@ -435,7 +435,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'Golden Cross',
-            strength: applyRegimeAdjustment(80, 'ma200_golden_cross', marketRegime),
+            strength: applyRegimeAdjustment(80, marketRegime, 'ma200'),
             details: `Golden Cross: Fast MA crossed above MA200`,
             priority: 9
         });
@@ -446,7 +446,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'Death Cross',
-            strength: applyRegimeAdjustment(80, 'ma200_death_cross', marketRegime),
+            strength: applyRegimeAdjustment(80, marketRegime, 'ma200'),
             details: `Death Cross: Fast MA crossed below MA200`,
             priority: 9
         });
@@ -459,7 +459,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'price_cross_up',
-            strength: applyRegimeAdjustment(strength, 'ma200_price_cross_up', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ma200'),
             details,
             priority: 8
         });
@@ -472,7 +472,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'price_cross_down',
-            strength: applyRegimeAdjustment(strength, 'ma200_price_cross_down', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ma200'),
             details,
             priority: 8
         });
@@ -491,7 +491,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'bullish_rejection',
-            strength: applyRegimeAdjustment(strength, 'ma200_bullish_rejection', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ma200'),
             details,
             priority: 8
         });
@@ -510,7 +510,7 @@ export const evaluateMa200Condition = (candle, indicators, index, signalSettings
         signals.push({
             type: 'ma200',
             value: 'bearish_rejection',
-            strength: applyRegimeAdjustment(strength, 'ma200_bearish_rejection', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'ma200'),
             details,
             priority: 8
         });
@@ -713,7 +713,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'adx',
             value: 'Strong Trend',
-            strength: applyRegimeAdjustment(strength, 'adx_strong_trend_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'adx'),
             details: `ADX ${ADX.toFixed(1)} indicates strong trending market`,
             priority: 7
         });
@@ -721,7 +721,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'adx',
             value: 'Moderate Trend',
-            strength: applyRegimeAdjustment(40, 'adx_moderate_trend_state', marketRegime),
+            strength: applyRegimeAdjustment(40, marketRegime, 'adx'),
             details: `ADX ${ADX.toFixed(1)} indicates moderate trend`,
             priority: 5
         });
@@ -729,7 +729,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'adx',
             value: 'Weak Trend',
-            strength: applyRegimeAdjustment(25, 'adx_weak_trend_state', marketRegime),
+            strength: applyRegimeAdjustment(25, marketRegime, 'adx'),
             details: `ADX ${ADX.toFixed(1)} indicates weak or choppy market`,
             priority: 3
         });
@@ -741,7 +741,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'adx',
             value: 'Bullish Directional Movement',
-            strength: applyRegimeAdjustment(strength, 'adx_bullish_direction_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'adx'),
             details: `DI+ (${PDI.toFixed(1)}) > DI- (${MDI.toFixed(1)}) - bullish direction`,
             priority: 6
         });
@@ -750,7 +750,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'adx',
             value: 'Bearish Directional Movement',
-            strength: applyRegimeAdjustment(strength, 'adx_bearish_direction_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'adx'),
             details: `DI- (${MDI.toFixed(1)}) > DI+ (${PDI.toFixed(1)}) - bearish direction`,
             priority: 6
         });
@@ -758,7 +758,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'adx',
             value: 'Neutral Directional Movement',
-            strength: applyRegimeAdjustment(20, 'adx_neutral_direction_state', marketRegime),
+            strength: applyRegimeAdjustment(20, marketRegime, 'adx'),
             details: `DI+ and DI- are balanced`,
             priority: 3
         });
@@ -771,7 +771,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'adx',
             value: 'Bullish DI Crossover',
-            strength: applyRegimeAdjustment(75, 'adx_bullish_di_crossover_event', marketRegime),
+            strength: applyRegimeAdjustment(75, marketRegime, 'adx'),
             details: `DI+ crossed above DI-`,
             priority: 8
         });
@@ -782,7 +782,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'adx',
             value: 'Bearish DI Crossover',
-            strength: applyRegimeAdjustment(75, 'adx_bearish_di_crossover_event', marketRegime),
+            strength: applyRegimeAdjustment(75, marketRegime, 'adx'),
             details: `DI- crossed above DI+`,
             priority: 8
         });
@@ -822,7 +822,7 @@ export const evaluatePsarCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'psar',
             value: 'Uptrending',
-            strength: applyRegimeAdjustment(strength, 'psar_uptrending_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'psar'),
             details: `Price is above PSAR, indicating an uptrend. Distance: ${(distanceFromPsar * 100).toFixed(2)}%`,
             priority: 7
         });
@@ -831,7 +831,7 @@ export const evaluatePsarCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'psar',
             value: 'Downtrending',
-            strength: applyRegimeAdjustment(strength, 'psar_downtrending_state', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'psar'),
             details: `Price is below PSAR, indicating a downtrend. Distance: ${(distanceFromPsar * 100).toFixed(2)}%`,
             priority: 7
         });
@@ -844,7 +844,7 @@ export const evaluatePsarCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'psar',
             value: 'PSAR Flip Bullish',
-            strength: applyRegimeAdjustment(85, 'psar_flip_bullish_event', marketRegime),
+            strength: applyRegimeAdjustment(85, marketRegime, 'psar'),
             details: `PSAR flipped below the price, signaling a new uptrend`,
             priority: 9
         });
@@ -852,7 +852,7 @@ export const evaluatePsarCondition = (candle, indicators, index, signalSettings,
         signals.push({
             type: 'psar',
             value: 'PSAR Flip Bearish',
-            strength: applyRegimeAdjustment(85, 'psar_flip_bearish_event', marketRegime),
+            strength: applyRegimeAdjustment(85, marketRegime, 'psar'),
             details: `PSAR flipped above the price, signaling a new downtrend`,
             priority: 9
         });
@@ -1093,7 +1093,7 @@ export const evaluateHmaCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'hma',
             value: 'Price Above HMA',
-            strength: applyRegimeAdjustment(strength, 'hma_price_above', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'hma'),
             details: `Price ${currentPrice.toFixed(2)} is above HMA ${currentHma.toFixed(2)}`,
             priority: 6
         });
@@ -1102,7 +1102,7 @@ export const evaluateHmaCondition = (candle, indicators, index, signalSettings, 
         signals.push({
             type: 'hma',
             value: 'Price Below HMA',
-            strength: applyRegimeAdjustment(strength, 'hma_price_below', marketRegime),
+            strength: applyRegimeAdjustment(strength, marketRegime, 'hma'),
             details: `Price ${currentPrice.toFixed(2)} is below HMA ${currentHma.toFixed(2)}`,
             priority: 6
         });
@@ -1118,7 +1118,7 @@ export const evaluateHmaCondition = (candle, indicators, index, signalSettings, 
             signals.push({
                 type: 'hma',
                 value: `HMA ${hmaTrend} Trend`,
-                strength: applyRegimeAdjustment(30 + Math.min(40, trendStrength * 1000), `hma_${hmaTrend.toLowerCase()}_trend`, marketRegime),
+                strength: applyRegimeAdjustment(30 + Math.min(40, trendStrength * 1000), marketRegime, 'hma'),
                 details: `HMA is ${hmaTrend.toLowerCase()}`,
                 priority: 5
             });
@@ -1157,11 +1157,11 @@ export const evaluateMARibbonCondition = (candle, indicators, index, signalSetti
     const isBearishOrder = ma10 < ma20 && ma20 < ma30 && ma30 < ma40 && ma40 < ma50 && ma50 < ma60;
 
     if (isBullishOrder) {
-        signals.push({ type: 'maribbon', value: 'Bullish Alignment', strength: applyRegimeAdjustment(70, 'maribbon_bullish_alignment_state', marketRegime), details: 'All MAs are in perfect bullish order.', priority: 8 });
+        signals.push({ type: 'maribbon', value: 'Bullish Alignment', strength: applyRegimeAdjustment(70, marketRegime, 'maribbon'), details: 'All MAs are in perfect bullish order.', priority: 8 });
     } else if (isBearishOrder) {
-        signals.push({ type: 'maribbon', value: 'Bearish Alignment', strength: applyRegimeAdjustment(70, 'maribbon_bearish_alignment_state', marketRegime), details: 'All MAs are in perfect bearish order.', priority: 8 });
+        signals.push({ type: 'maribbon', value: 'Bearish Alignment', strength: applyRegimeAdjustment(70, marketRegime, 'maribbon'), details: 'All MAs are in perfect bearish order.', priority: 8 });
     } else {
-         signals.push({ type: 'maribbon', value: 'Mixed Alignment', strength: applyRegimeAdjustment(25, 'maribbon_mixed_alignment_state', marketRegime), details: 'MAs are tangled, indicating consolidation.', priority: 3 });
+         signals.push({ type: 'maribbon', value: 'Mixed Alignment', strength: applyRegimeAdjustment(25, marketRegime, 'maribbon'), details: 'MAs are tangled, indicating consolidation.', priority: 3 });
     }
 
     // 2. Ribbon Expansion/Contraction
@@ -1174,9 +1174,9 @@ export const evaluateMARibbonCondition = (candle, indicators, index, signalSetti
             
             // Check for significant expansion/contraction (e.g., 5% change)
             if (ribbonWidth > prevRibbonWidth * 1.05) {
-                 signals.push({ type: 'maribbon', value: 'Expanding', strength: applyRegimeAdjustment(50, 'maribbon_expanding_state', marketRegime), details: `Ribbon is expanding, suggesting strengthening trend.`, priority: 6 });
+                 signals.push({ type: 'maribbon', value: 'Expanding', strength: applyRegimeAdjustment(50, marketRegime, 'maribbon'), details: `Ribbon is expanding, suggesting strengthening trend.`, priority: 6 });
             } else if (ribbonWidth < prevRibbonWidth * 0.95) {
-                 signals.push({ type: 'maribbon', value: 'Contracting', strength: applyRegimeAdjustment(40, 'maribbon_contracting_state', marketRegime), details: `Ribbon is contracting, suggesting weakening trend or consolidation.`, priority: 5 });
+                 signals.push({ type: 'maribbon', value: 'Contracting', strength: applyRegimeAdjustment(40, marketRegime, 'maribbon'), details: `Ribbon is contracting, suggesting weakening trend or consolidation.`, priority: 5 });
             }
         }
     }
@@ -1198,10 +1198,10 @@ export const evaluateMARibbonCondition = (candle, indicators, index, signalSetti
     // I will proceed with the outline's checks and names as given.
 
     if (isUptrend) { // This condition means ma10 <= ma20 <= ma30 ... (bearish alignment)
-        signals.push({ type: 'maribbon', value: 'Uptrend Confirmation', strength: applyRegimeAdjustment(75, 'maribbon_uptrend_confirmation', marketRegime), details: 'MA ribbon confirms an uptrend (fast MAs below slow MAs).', priority: 8 });
+        signals.push({ type: 'maribbon', value: 'Uptrend Confirmation', strength: applyRegimeAdjustment(75, marketRegime, 'maribbon'), details: 'MA ribbon confirms an uptrend (fast MAs below slow MAs).', priority: 8 });
     }
     if (isDowntrend) { // This condition means ma10 >= ma20 >= ma30 ... (bullish alignment)
-        signals.push({ type: 'maribbon', value: 'Downtrend Confirmation', strength: applyRegimeAdjustment(75, 'maribbon_downtrend_confirmation', marketRegime), details: 'MA ribbon confirms a downtrend (fast MAs above slow MAs).', priority: 8 });
+        signals.push({ type: 'maribbon', value: 'Downtrend Confirmation', strength: applyRegimeAdjustment(75, marketRegime, 'maribbon'), details: 'MA ribbon confirms a downtrend (fast MAs above slow MAs).', priority: 8 });
     }
     
     return getUniqueSignals(signals).map(s => ({ ...s, type: 'MARibbon', strength: Math.min(100, Math.max(0, s.strength)), candle: index }));

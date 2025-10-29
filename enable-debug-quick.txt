@@ -1,0 +1,16 @@
+Quick Enable Debug Logs:
+=======================
+
+1. Open browser DevTools (F12 or Cmd+Option+I)
+2. Go to Console tab
+3. Paste this code and press Enter:
+
+localStorage.setItem('debug_api_queue', '1');
+localStorage.setItem('debug_trade', '1');
+window.DEBUG_API_QUEUE = true;
+window.DEBUG_TRADE_LOGS = true;
+console.log('✅ Debug logs enabled! Refresh the page.');
+
+4. Refresh the page (F5 or Cmd+R)
+
+You should now see [API_QUEUE] and [TRADE] logs in the console!

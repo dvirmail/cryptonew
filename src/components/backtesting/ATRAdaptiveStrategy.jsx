@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { queueEntityCall } from '@/components/utils/apiQueue';
-import { Loader2, TrendingUp, Shield, Target, Minus, Plus, Zap } from 'lucide-react';
+import { Loader2, TrendingUp, Shield, Target, Minus, Plus, Zap, RefreshCw } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const formatCurrency = (value, decimals = 2) => {
@@ -31,61 +31,140 @@ export default function ATRAdaptiveStrategy({ combination, currentCoin, timefram
   const [walletState, setWalletState] = useState(null);
   const [strategy, setStrategy] = useState({});
   const [baseRiskPercent, setBaseRiskPercent] = useState(1);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [dataSource, setDataSource] = useState('real'); // Only use real data
+
+  const refreshData = async () => {
+    setIsRefreshing(true);
+    try {
+      // Get real data from scanner service
+      const { getAutoScannerService } = await import('@/components/services/AutoScannerService');
+      const scannerService = getAutoScannerService();
+      
+      if (scannerService && scannerService.state) {
+        // Get real current price
+        const currentPrices = scannerService.state.currentPrices || {};
+        const symbolNoSlash = currentCoin?.replace('/', '') || '';
+        const realPrice = currentPrices[symbolNoSlash];
+        
+        // Get real ATR data
+        const indicators = scannerService.state.indicators || {};
+        const atrData = indicators.atr;
+        let realATR = null;
+        
+        if (Array.isArray(atrData) && atrData.length > 0) {
+          // Find the last valid ATR value
+          for (let i = atrData.length - 1; i >= 0; i--) {
+            if (atrData[i] !== null && atrData[i] !== undefined && !isNaN(atrData[i])) {
+              realATR = atrData[i];
+              break;
+            }
+          }
+        } else if (typeof atrData === 'number' && !isNaN(atrData)) {
+          realATR = atrData;
+        }
+        
+        if (realPrice) setCurrentPrice(realPrice);
+        if (realATR) setAtrData({ atr: realATR, percentile: 50 });
+        
+        // Update data source if we got real data
+        if (realPrice || realATR) {
+          setDataSource('real');
+        }
+        
+        console.log('[ATRAdaptiveStrategy] 🔄 Manual refresh completed:', {
+          symbol: currentCoin,
+          realPrice: realPrice,
+          realATR: realATR,
+          dataSource: 'real'
+        });
+      }
+    } catch (error) {
+      console.warn('[ATRAdaptiveStrategy] Manual refresh failed:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        // FIX: Use mock/fallback data instead of trying to call non-existent functions
         let realPrice = null;
         let realATR = null;
         let walletData = null;
 
-        // Try to get wallet data
+        // Try to get wallet data from scanner service instead of database
         try {
-          const walletResponse = await queueEntityCall('VirtualWalletState', 'list');
-          if (walletResponse && walletResponse.length > 0) {
-            walletData = walletResponse[0];
+          const { getAutoScannerService } = await import('@/components/services/AutoScannerService');
+          const scannerService = getAutoScannerService();
+          
+          if (scannerService && scannerService.walletManagerService) {
+            walletData = scannerService.walletManagerService.getCurrentWalletState();
+            console.log('[ATRAdaptiveStrategy] 🔍 Real wallet data from scanner service:', {
+              availableBalance: walletData.available_balance,
+              totalEquity: walletData.total_equity,
+              balanceInTrades: walletData.balance_in_trades
+            });
+          } else {
+            console.warn('[ATRAdaptiveStrategy] No live wallet state available in scanner service');
           }
         } catch (error) {
-          // Error is silently ignored as per removal of logs
+          console.warn('[ATRAdaptiveStrategy] Failed to fetch wallet data from scanner service:', error);
         }
 
-        // FIX: Use reasonable mock data based on the coin
-        if (currentCoin) {
-          const coinSymbol = currentCoin.replace('/USDT', '');
-          switch (coinSymbol) {
-            case 'SOL':
-              realPrice = 145.50;
-              realATR = 3.2;
-              break;
-            case 'BTC':
-              realPrice = 45000;
-              realATR = 900;
-              break;
-            case 'ETH':
-              realPrice = 2400;
-              realATR = 48;
-              break;
-            case 'BNB':
-              realPrice = 320;
-              realATR = 6.4;
-              break;
-            case 'ADA':
-              realPrice = 0.45;
-              realATR = 0.009;
-              break;
-            case 'DOGE':
-              realPrice = 0.08;
-              realATR = 0.0016;
-              break;
-            default:
-              realPrice = 100;
-              realATR = 2;
+        // Get real data from scanner service
+        try {
+          // Import the scanner service to get real data
+          const { getAutoScannerService } = await import('@/components/services/AutoScannerService');
+          const scannerService = getAutoScannerService();
+          
+          if (scannerService && scannerService.state) {
+            // Get real current price
+            const currentPrices = scannerService.state.currentPrices || {};
+            const symbolNoSlash = currentCoin?.replace('/', '') || '';
+            realPrice = currentPrices[symbolNoSlash];
+            
+            // Get real ATR data
+            const indicators = scannerService.state.indicators || {};
+            const atrData = indicators.atr;
+            
+            if (Array.isArray(atrData) && atrData.length > 0) {
+              // Find the last valid ATR value
+              for (let i = atrData.length - 1; i >= 0; i--) {
+                if (atrData[i] !== null && atrData[i] !== undefined && !isNaN(atrData[i])) {
+                  realATR = atrData[i];
+                  break;
+                }
+              }
+            } else if (typeof atrData === 'number' && !isNaN(atrData)) {
+              realATR = atrData;
+            }
+            
+            console.log('[ATRAdaptiveStrategy] 🔍 Real data from scanner service:', {
+              symbol: currentCoin,
+              symbolNoSlash: symbolNoSlash,
+              realPrice: realPrice,
+              realATR: realATR,
+              atrDataType: typeof atrData,
+              atrDataLength: Array.isArray(atrData) ? atrData.length : 'not array',
+              hasScannerService: !!scannerService,
+              hasIndicators: !!indicators,
+              indicatorsKeys: Object.keys(indicators)
+            });
+            
+            // Update data source if we got real data
+            if (realPrice || realATR) {
+              setDataSource('real');
+            }
           }
-        } else {
-          realPrice = 100;
-          realATR = 2;
+        } catch (error) {
+          console.warn('[ATRAdaptiveStrategy] Failed to get real data from scanner service:', error);
+        }
+
+        // Only use real data - throw error if not available
+        if (!realPrice || !realATR) {
+          throw new Error('Real data not available - cannot calculate strategy without live market data');
         }
 
         setCurrentPrice(realPrice);
@@ -93,16 +172,20 @@ export default function ATRAdaptiveStrategy({ combination, currentCoin, timefram
         setWalletState(walletData || { balance_usdt: 10000 });
 
       } catch (error) {
-        // Fallback to safe defaults
-        setCurrentPrice(currentCoin?.includes('SOL') ? 145.50 : 100);
-        setAtrData({ atr: currentCoin?.includes('SOL') ? 3.2 : 2, percentile: 50 });
-        setWalletState({ balance_usdt: 10000 });
+        throw new Error('Failed to fetch real data');
       } finally {
         setIsLoading(false);
       }
     };
     
     fetchData();
+    
+    // Set up periodic refresh to get updated real data
+    const refreshInterval = setInterval(() => {
+      fetchData();
+    }, 30000); // Refresh every 30 seconds
+    
+    return () => clearInterval(refreshInterval);
 }, [combination, currentCoin, timeframe]);
 
   useEffect(() => {
@@ -130,8 +213,8 @@ export default function ATRAdaptiveStrategy({ combination, currentCoin, timefram
       const adjustedRiskPercent = baseRisk * riskMultiplier;
       const riskAmount = walletBalance * (adjustedRiskPercent / 100);
       
-      const stopLossAtrMultiplier = combination.stopLossAtrMultiplier || 2.0;
-      const takeProfitAtrMultiplier = combination.takeProfitAtrMultiplier || 3.0;
+      const stopLossAtrMultiplier = combination.stopLossAtrMultiplier || 1.0; // Reduced for realistic short-term trading
+      const takeProfitAtrMultiplier = combination.takeProfitAtrMultiplier || 1.5; // Reduced for realistic short-term trading
 
       const stopLossDistance = atrValue * stopLossAtrMultiplier;
       const positionSizeCoins = stopLossDistance > 0 ? riskAmount / stopLossDistance : 0;
@@ -197,12 +280,38 @@ export default function ATRAdaptiveStrategy({ combination, currentCoin, timefram
               <Zap className="h-5 w-5 text-blue-600" />
               ATR Adaptive Trade Setup
             </CardTitle>
-            <div className="px-3 py-1 bg-blue-600 text-white text-sm rounded-full font-medium">
-              Score: 90/100
+            <div className="flex items-center gap-2">
+              <button
+                onClick={refreshData}
+                disabled={isRefreshing}
+                className="flex items-center gap-1 px-3 py-1 bg-blue-100 hover:bg-blue-200 dark:bg-blue-900 dark:hover:bg-blue-800 text-blue-700 dark:text-blue-300 text-sm rounded-full font-medium transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
+              </button>
+              <div className="px-3 py-1 bg-blue-600 text-white text-sm rounded-full font-medium">
+                Score: 90/100
+              </div>
             </div>
           </div>
           <CardDescription>
             Volatility-adjusted position sizing and risk management
+            <div className="mt-2 flex items-center gap-2">
+              <div className={`px-2 py-1 text-xs rounded-full font-medium ${
+                dataSource === 'real' 
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' 
+                  : dataSource === 'unavailable'
+                  ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                  : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300'
+              }`}>
+                {dataSource === 'real' ? '📊 Live Data' : dataSource === 'unavailable' ? '❌ No Data' : '⚠️ Loading...'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {dataSource === 'real' ? 'Using real market data from scanner' : 
+                 dataSource === 'unavailable' ? 'Real market data not available' : 
+                 'Loading market data...'}
+              </div>
+            </div>
           </CardDescription>
         </CardHeader>
         <CardContent>

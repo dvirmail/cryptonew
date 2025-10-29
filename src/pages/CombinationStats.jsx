@@ -132,11 +132,11 @@ const ExpandedRowContent = ({ combination, strategyStats }) => {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Stop Loss (ATR):</span>
-              <span>{combination.stopLossAtrMultiplier || 2.5}x</span>
+              <span>{combination.stopLossAtrMultiplier || 1.0}x</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Take Profit (ATR):</span>
-              <span>{combination.takeProfitAtrMultiplier || 3}x</span>
+              <span>{combination.takeProfitAtrMultiplier || 1.5}x</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Est. Exit Time:</span>
@@ -314,9 +314,25 @@ export default function CombinationStats() {
         trade.strategy_name === combo.combinationName
       );
 
-      if (DEBUG_COMBINATION_STATS && strategyTrades.length > 0) {
-        const modeSample = strategyTrades[0]?.trading_mode || 'unknown';
-        //console.log(`[CS] stats for ${combo.combinationName}: trades=${strategyTrades.length}, sampleMode=${modeSample}`);
+      // DEBUG: Log strategy matching
+      if (DEBUG_COMBINATION_STATS) {
+        console.log(`[CS] Processing strategy: ${combo.combinationName}`);
+        console.log(`[CS] Found ${strategyTrades.length} trades for this strategy`);
+
+        // Check all available strategy names in trades for debugging
+        const allStrategyNames = [...new Set(tradeHistory.map(t => t.strategy_name))];
+        console.log(`[CS] All strategy names in trades:`, allStrategyNames.slice(0, 5));
+
+        if (strategyTrades.length > 0) {
+          console.log(`[CS] Sample trade:`, {
+            strategy_name: strategyTrades[0].strategy_name,
+            exit_timestamp: strategyTrades[0].exit_timestamp,
+            conviction_score: strategyTrades[0].conviction_score,
+            pnl_usdt: strategyTrades[0].pnl_usdt
+          });
+        } else {
+          console.log(`[CS] No trades found for strategy: ${combo.combinationName}`);
+        }
       }
 
       const winningTrades = strategyTrades.filter(trade => trade.pnl_usdt > 0);
@@ -384,6 +400,19 @@ export default function CombinationStats() {
         if (tradesData && tradesData.length > 0) {
           const modes = [...new Set(tradesData.map(t => t.trading_mode || 'unknown'))];
           console.log('[CS] trade modes present:', modes);
+
+          // DEBUG: Check conviction scores and strategy names
+          const sampleTrade = tradesData[0];
+          console.log('[CS] Sample trade data:', {
+            strategy_name: sampleTrade.strategy_name,
+            conviction_score: sampleTrade.conviction_score,
+            exit_timestamp: sampleTrade.exit_timestamp,
+            pnl_usdt: sampleTrade.pnl_usdt
+          });
+
+          // Check if any trades have conviction scores
+          const tradesWithConviction = tradesData.filter(t => t.conviction_score !== null && t.conviction_score !== undefined);
+          console.log('[CS] Trades with conviction scores:', tradesWithConviction.length, 'out of', tradesData.length);
         }
       }
 
@@ -753,7 +782,7 @@ export default function CombinationStats() {
 
       // Timeframe filter
       if (timeframeFilter !== 'all' && combination.timeframe !== timeframeFilter) return false;
-      
+
       // NEW: Regime filter
       if (regimeFilter !== 'all' && combination.dominantMarketRegime !== regimeFilter) return false;
 
@@ -966,7 +995,7 @@ export default function CombinationStats() {
       });
       return;
     }
-    
+
     if (!window.confirm(`Are you sure you want to mark all ${filteredAndSortedCombinations.length} filtered strategies for live trading?`)) {
       return;
     }
@@ -1055,7 +1084,7 @@ export default function CombinationStats() {
   // Helper function to format latest trade timestamp
   const formatLatestTrade = (timestamp) => {
     if (!timestamp) return 'Never';
-    
+
     const date = new Date(timestamp);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
@@ -1068,10 +1097,10 @@ export default function CombinationStats() {
     if (diffMins < 60) return `${diffMins}m ago`;
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays < 7) return `${diffDays}d ago`;
-    
+
     // Show formatted date for older trades
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
       day: 'numeric',
       year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
     });
@@ -1398,9 +1427,9 @@ export default function CombinationStats() {
                 ` (filtered from ${combinations.length} total)`}
             </p>
           )}
-          
-          <Button 
-              size="sm" 
+
+          <Button
+              size="sm"
               variant="outline"
               className="bg-purple-100 hover:bg-purple-200 text-purple-800 border-purple-300 dark:bg-purple-900/40 dark:text-purple-200 dark:hover:bg-purple-900/60 dark:border-purple-700"
               onClick={handleBulkMarkForLive}
@@ -1433,7 +1462,7 @@ export default function CombinationStats() {
                       onCheckedChange={handleSelectAll}
                     />
                   </TableHead>
-                  <TableHead className="w-8"></TableHead> {/* Empty header for expand button */}
+                  <TableHead className="w-8">{/* Empty header for expand button */}</TableHead>
                   <TableHead
                     className="p-4 text-left font-medium cursor-pointer hover:bg-muted/70 transition-colors"
                     onClick={() => handleSort('combinationName')}
@@ -1561,174 +1590,166 @@ export default function CombinationStats() {
                 {paginatedCombinations.map((combination) => {
                   const currentStats = strategyStats[combination.combinationName];
                   return (
-                  <React.Fragment key={combination.id}>
-                    <TableRow
-                      className={`border-b hover:bg-muted/30 transition-colors ${selectedRows.has(combination.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
-                      onClick={() => handleSelectRow(combination.id, !selectedRows.has(combination.id))}
-                    >
-                       <TableCell className="p-4" onClick={(e) => e.stopPropagation()}>
-                         <Checkbox
-                           checked={selectedRows.has(combination.id)}
-                           onCheckedChange={(checked) => handleSelectRow(combination.id, checked)}
-                         />
-                       </TableCell>
-                      <TableCell className="p-4" onClick={(e) => e.stopPropagation()}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => toggleRowExpansion(combination.id)}
-                          className="h-6 w-6 p-0"
-                        >
-                          {expandedRows.has(combination.id) ?
-                            <ChevronDown className="h-4 w-4" /> :
-                            <ChevronRight className="h-4 w-4" />
-                          }
-                        </Button>
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <div>
-                          <div className="font-medium">
-                            {combination.combinationName || 'Unnamed Strategy'}
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            ID: {combination.id.substring(0, 8)}...
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <Badge variant="outline">
-                          <Coins className="h-3 w-3 mr-1" />
-                          {combination.coin}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="p-4">
-                          <RegimeBadge regime={combination.dominantMarketRegime} />
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <Badge variant="secondary">
-                          <Clock className="h-3 w-3 mr-1" />
-                          {combination.timeframe}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="p-4 text-center">
-                        <Badge variant="outline">
-                          {combination.signalCount || 0}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="p-4 text-center">
-                        <span className={`font-semibold ${getColorForMetric(combination.combinedStrength, 'combinedStrength')}`}>
-                          {combination.combinedStrength ? Math.round(combination.combinedStrength) : 'N/A'}
-                        </span>
-                      </TableCell>
-                      <TableCell className="p-4 text-center">
-                        <span className={`font-semibold ${getColorForMetric(currentStats?.realAvgConvictionScore, 'convictionScore')}`}>
-                          {currentStats?.realAvgConvictionScore ? currentStats.realAvgConvictionScore.toFixed(1) : 'N/A'}
-                        </span>
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <span className={getColorForMetric(combination.successRate, 'successRate')}>
-                          {combination.successRate ? combination.successRate.toFixed(1) : '0.0'}%
-                        </span>
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <ProfitFactorCell value={combination.profitFactor || 0} />
-                      </TableCell>
-                      <TableCell className="p-4 text-center">
-                        <span className={getColorForMetric(currentStats?.realTradeCount, 'default')}>
-                          {currentStats?.realTradeCount || 0}
-                        </span>
-                      </TableCell>
-                      {/* NEW: Latest Trade Cell */}
-                      <TableCell className="p-4">
-                        <div className="flex items-center gap-1 text-sm">
-                          {currentStats?.latestTradeTimestamp ? (
-                            <>
-                              <Activity className="h-3 w-3 text-blue-500" />
-                              <span className="text-muted-foreground">
-                                {formatLatestTrade(currentStats.latestTradeTimestamp)}
-                              </span>
-                            </>
-                          ) : (
-                            <span className="text-muted-foreground italic">Never</span>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <span className={getColorForMetric(currentStats?.realSuccessRate, 'successRate')}>
-                          {currentStats?.realSuccessRate ? currentStats.realSuccessRate.toFixed(1) : '0.0'}%
-                        </span>
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <ProfitFactorCell value={currentStats?.realProfitFactor || 0} />
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <div className="flex flex-wrap gap-1">
-                          {combination.includedInLiveScanner && (
-                             <Badge variant="outline" className="text-xs text-purple-700 bg-purple-100 border-purple-300 dark:text-purple-200 dark:bg-purple-900/40 dark:border-purple-700">
-                               <Rocket className="h-3 w-3 mr-1" />
-                               Live
-                             </Badge>
-                          )}
-                          {(combination.includedInScanner && !combination.includedInLiveScanner) && (
-                            <Badge variant="success" className="text-xs">
-                              <CheckCircle2 className="h-3 w-3 mr-1" />
-                              Demo
-                            </Badge>
-                          )}
-                          {combination.optedOutGlobally && (
-                            <Badge variant="destructive" className="text-xs">
-                              <XCircle className="h-3 w-3 mr-1" />
-                              Opted Out (Global)
-                            </Badge>
-                          )}
-                          {combination.optedOutForCoin && (
-                            <Badge variant="destructive" className="text-xs">
-                              <XCircle className="h-3 w-3 mr-1" />
-                              Opted Out (Coin)
-                            </Badge>
-                          )}
-                          {!(combination.includedInScanner || combination.includedInLiveScanner || combination.optedOutGlobally || combination.optedOutForCoin) && (
-                            <Badge variant="secondary" className="text-xs">
-                                Inactive
-                            </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="p-4">
-                        <div className="flex items-center gap-1">
+                    <React.Fragment key={combination.id}>
+                      <TableRow className={`border-b hover:bg-muted/30 transition-colors ${selectedRows.has(combination.id) ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`} onClick={() => handleSelectRow(combination.id, !selectedRows.has(combination.id))}>
+                        <TableCell className="p-4" onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={selectedRows.has(combination.id)}
+                            onCheckedChange={(checked) => handleSelectRow(combination.id, checked)}
+                          />
+                        </TableCell>
+                        <TableCell className="p-4" onClick={(e) => e.stopPropagation()}>
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => handleEdit(combination)}
-                            className="h-8 w-8 p-0"
+                            onClick={() => toggleRowExpansion(combination.id)}
+                            className="h-6 w-6 p-0"
                           >
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleOptOut(combination)}
-                            className="h-8 w-8 p-0"
-                            disabled={combination.optedOutGlobally || combination.optedOutForCoin}
-                          >
-                            {combination.optedOutGlobally || combination.optedOutForCoin ?
-                              <EyeOff className="h-4 w-4" /> :
-                              <Eye className="h-4 w-4" />
+                            {expandedRows.has(combination.id) ?
+                              <ChevronDown className="h-4 w-4" /> :
+                              <ChevronRight className="h-4 w-4" />
                             }
                           </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                    {expandedRows.has(combination.id) && (
-                      <TableRow>
-                        <TableCell colSpan="17" className="p-0">
-                          <ExpandedRowContent combination={combination} strategyStats={strategyStats} />
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <div>
+                            <div className="font-medium">
+                              {combination.combinationName || 'Unnamed Strategy'}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              ID: {combination.id.substring(0, 8)}...
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <Badge variant="outline">
+                            <Coins className="h-3 w-3 mr-1" />
+                            {combination.coin}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <RegimeBadge regime={combination.dominantMarketRegime} />
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <Badge variant="secondary">
+                            <Clock className="h-3 w-3 mr-1" />
+                            {combination.timeframe}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="p-4 text-center">
+                          <Badge variant="outline">
+                            {combination.signalCount || 0}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="p-4 text-center">
+                          <span className={`font-semibold ${getColorForMetric(combination.combinedStrength, 'combinedStrength')}`}>
+                            {combination.combinedStrength ? Math.round(combination.combinedStrength) : 'N/A'}
+                          </span>
+                        </TableCell>
+                        <TableCell className="p-4 text-center">
+                          <span className={`font-semibold ${getColorForMetric(currentStats?.realAvgConvictionScore, 'convictionScore')}`}>
+                            {currentStats?.realAvgConvictionScore ? currentStats.realAvgConvictionScore.toFixed(1) : 'N/A'}
+                          </span>
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <span className={getColorForMetric(combination.successRate, 'successRate')}>
+                            {combination.successRate ? combination.successRate.toFixed(1) : '0.0'}%
+                          </span>
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <ProfitFactorCell value={combination.profitFactor || 0} />
+                        </TableCell>
+                        <TableCell className="p-4 text-center">
+                          <span className={getColorForMetric(currentStats?.realTradeCount, 'default')}>
+                            {currentStats?.realTradeCount || 0}
+                          </span>
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <div className="flex items-center gap-1 text-sm">
+                            {currentStats?.latestTradeTimestamp ? (
+                              <>
+                                <Activity className="h-3 w-3 text-blue-500" />
+                                <span className="text-muted-foreground">
+                                  {formatLatestTrade(currentStats.latestTradeTimestamp)}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground italic">Never</span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <span className={getColorForMetric(currentStats?.realSuccessRate, 'successRate')}>
+                            {currentStats?.realSuccessRate ? currentStats.realSuccessRate.toFixed(1) : '0.0'}%
+                          </span>
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <ProfitFactorCell value={currentStats?.realProfitFactor || 0} />
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <div className="flex flex-wrap gap-1">
+                            {combination.includedInLiveScanner && (
+                              <Badge variant="outline" className="text-xs text-purple-700 bg-purple-100 border-purple-300 dark:text-purple-200 dark:bg-purple-900/40 dark:border-purple-700">
+                                <Rocket className="h-3 w-3 mr-1" />
+                                Live
+                              </Badge>
+                            )}
+                            {(combination.includedInScanner && !combination.includedInLiveScanner) && (
+                              <Badge variant="success" className="text-xs">
+                                <CheckCircle2 className="h-3 w-3 mr-1" />
+                                Demo
+                              </Badge>
+                            )}
+                            {combination.optedOutGlobally && (
+                              <Badge variant="destructive" className="text-xs">
+                                <XCircle className="h-3 w-3 mr-1" />
+                                Opted Out (Global)
+                              </Badge>
+                            )}
+                            {combination.optedOutForCoin && (
+                              <Badge variant="destructive" className="text-xs">
+                                <XCircle className="h-3 w-3 mr-1" />
+                                Opted Out (Coin)
+                              </Badge>
+                            )}
+                            {!(combination.includedInScanner || combination.includedInLiveScanner || combination.optedOutGlobally || combination.optedOutForCoin) && (
+                              <Badge variant="secondary" className="text-xs">
+                                Inactive
+                              </Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="p-4">
+                          <div className="flex items-center gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEdit(combination)}
+                              className="h-8 w-8 p-0"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleOptOut(combination)}
+                              className="h-8 w-8 p-0"
+                              disabled={combination.optedOutGlobally || combination.optedOutForCoin}
+                            >
+                              {combination.optedOutGlobally || combination.optedOutForCoin ?
+                                <EyeOff className="h-4 w-4" /> :
+                                <Eye className="h-4 w-4" />
+                              }
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
-                    )}
-                  </React.Fragment>
-                )}
-                )}
+                      {expandedRows.has(combination.id) && (
+                        <TableRow><TableCell colSpan="17" className="p-0"><ExpandedRowContent combination={combination} strategyStats={strategyStats} /></TableCell></TableRow>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

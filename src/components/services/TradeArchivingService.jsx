@@ -64,12 +64,10 @@ class TradeArchivingService {
         60_000  // timeout 60s
       );
 
-      console.log('[TradeArchivingService] Raw response:', res);
       const data = res?.data ?? res ?? {};
-      const success = data?.success === true;
       
-      console.log('[TradeArchivingService] Parsed data:', data);
-      console.log('[TradeArchivingService] Success:', success);
+      // Fix success logic: should be true if no error occurred, even if no archiving was needed
+      const success = data?.success !== false && !data?.error;
 
       const deletedCount = typeof data?.deletedCount === "number" ? data.deletedCount : 0;
       const remainingCount = typeof data?.remainingCount === "number" ? data.remainingCount : null;

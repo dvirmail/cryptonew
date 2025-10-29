@@ -1,0 +1,22 @@
+[
+  {
+    "id": "wallet_1761514731874_nfnxf6w74",
+    "trading_mode": "testnet",
+    "mode": "testnet",
+    "available_balance": "0.00000000",
+    "total_realized_pnl": "0.00000000",
+    "unrealized_pnl": "0.00000000",
+    "balances": [],
+    "positions": [],
+    "live_position_ids": [],
+    "total_trades_count": 0,
+    "winning_trades_count": 0,
+    "losing_trades_count": 0,
+    "total_gross_profit": 0,
+    "total_gross_loss": 0,
+    "total_fees_paid": 0,
+    "last_updated_timestamp": "2025-10-26T21:38:51.874Z",
+    "last_binance_sync": "2025-10-26T21:38:51.874Z",
+    "created_date": "2025-10-26T21:38:52.847Z"
+  }
+]

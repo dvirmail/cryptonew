@@ -47,9 +47,40 @@ import {
     evaluateChartPatternCondition
 } from './signals/patternSignals';
 import { initializeRegimeTracker, logRegimeStatistics, getRegimeMultiplier } from './regimeUtils';
-import { defaultSignalSettings } from './signalSettings';
+import { defaultSignalSettings, SIGNAL_WEIGHTS, CORE_SIGNAL_TYPES } from './signalSettings';
 
 const indent = '        ';
+
+// Calculate weighted combined strength with regime adjustments and core signal bonuses
+function calculateWeightedCombinedStrength(matchedSignals, marketRegime = 'neutral') {
+    let weightedSum = 0;
+    let totalWeight = 0;
+    let coreSignalsCount = 0;
+    
+    for (const signal of matchedSignals) {
+        const signalType = signal.type?.toLowerCase();
+        const weight = SIGNAL_WEIGHTS[signalType] || 1.0;
+        const isCore = CORE_SIGNAL_TYPES.includes(signalType);
+        
+        // Apply both weight and regime adjustment
+        const regimeMultiplier = getRegimeMultiplier(marketRegime, signalType, signal.category);
+        const finalStrength = signal.strength * weight * regimeMultiplier;
+        
+        weightedSum += finalStrength;
+        totalWeight += weight;
+        
+        if (isCore) coreSignalsCount++;
+    }
+    
+    // Core signal bonus (10 points per core signal, max 50 points)
+    const coreBonus = Math.min(coreSignalsCount * 10, 50);
+    
+    // Signal diversity bonus (bonus for having multiple different signal types)
+    const uniqueTypes = new Set(matchedSignals.map(s => s.type?.toLowerCase()));
+    const diversityBonus = uniqueTypes.size > 3 ? 5 : 0;
+    
+    return weightedSum + coreBonus + diversityBonus;
+}
 
 // Central signal evaluation dispatcher
 export const evaluateSignalCondition = (candle, indicators, index, signalSettings, marketRegime, onLog) => {
@@ -241,7 +272,6 @@ export const evaluateSignalConditions = (strategy, indicators, klines) => {
     };
 
     let matchedSignalsFromStrategy = [];
-    let totalCombinedStrength = 0;
     
     for (const strategySignal of strategy.signals) {
         const signalKeyLowercase = strategySignal.type.toLowerCase();
@@ -276,7 +306,6 @@ export const evaluateSignalConditions = (strategy, indicators, klines) => {
         if (exactMatch) {
             const strength = exactMatch.strength || 0;
             matchedSignalsFromStrategy.push({ ...exactMatch, strength });
-            totalCombinedStrength += strength;
             const matchType = exactMatch.isEvent ? 'signal_event_match' : 'signal_match';
             onLog(`${indent}>>>>>> ${strategySignal.type}: Expected "${strategySignal.value}" → Got "${exactMatch.value}" (Strength: ${strength})`, matchType, logData);
         } else {
@@ -288,13 +317,16 @@ export const evaluateSignalConditions = (strategy, indicators, klines) => {
 
             if (bestAvailableSignal) {
                 const strength = bestAvailableSignal.strength || 0;
-                totalCombinedStrength += strength;
+                matchedSignalsFromStrategy.push({ ...bestAvailableSignal, strength });
                 onLog(`${indent}>>>>>> ${strategySignal.type}: Expected "${strategySignal.value}" → Got "${bestAvailableSignal.value}" (Strength: ${strength})`, 'signal_mismatch', logData);
             } else {
                 onLog(`${indent}>>>>>> ${strategySignal.type}: Expected "${strategySignal.value}" → Got "Not Found" (Strength: 0)`, 'signal_not_found', logData);
             }
         }
     }
+    
+    // Calculate weighted combined strength using the new system
+    const totalCombinedStrength = calculateWeightedCombinedStrength(matchedSignalsFromStrategy, 'neutral');
     
     return {
         isMatch: true, 

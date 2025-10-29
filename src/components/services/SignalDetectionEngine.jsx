@@ -11,14 +11,14 @@ import { MarketAlert } from '@/api/entities';
 import { resetIndicatorManagerDebug } from "@/components/utils/indicatorManager";
 
 // === Dynamic conviction threshold (momentum-aware) ===
-// No UI exposure: uses existing settings.minimumConvictionScore as the base.
-const MOMENTUM_CONVICTION_THRESHOLD = 60; // if momentum >= 60, no penalty
-const MOMENTUM_CONVICTION_ADJUSTMENT_FACTOR = 0.75; // each point below threshold adds 0.75 to required conviction
+// REDESIGNED: 50 is the neutral point where LPM has no impact on conviction
+const NEUTRAL_LPM_SCORE = 50; // LPM = 50 means no impact on conviction
+const LPM_ADJUSTMENT_FACTOR = 0.5; // Each point deviation from 50 affects conviction by 0.5
 
 /**
  * Computes a dynamic conviction threshold based on the scanner's performance momentum score.
- * If momentum is high, the required conviction threshold is the base. If momentum is low,
- * the required conviction threshold increases.
+ * NEW LOGIC: LPM = 50 is neutral (no impact), LPM > 50 reduces conviction requirements,
+ * LPM < 50 increases conviction requirements.
  * @param {object} settings - Global scanner settings, containing `minimumConvictionScore`.
  * @param {number} performanceMomentumScore - The current performance momentum score of the scanner.
  * @returns {number} The dynamically adjusted minimum conviction score.
@@ -26,19 +26,18 @@ const MOMENTUM_CONVICTION_ADJUSTMENT_FACTOR = 0.75; // each point below threshol
 function computeDynamicConvictionThreshold(settings, performanceMomentumScore) {
     const base = Number(settings?.minimumConvictionScore ?? 0);
     const momentum = Number(performanceMomentumScore);
+    
     if (!Number.isFinite(base)) return 0;
     // If momentum is not a valid number, or there's no momentum data, use the base threshold.
     if (!Number.isFinite(momentum)) return Math.min(100, Math.max(0, base));
 
-    let dynamic = base;
-    if (momentum < MOMENTUM_CONVICTION_THRESHOLD) {
-        const deficit = MOMENTUM_CONVICTION_THRESHOLD - momentum;
-        dynamic = base + deficit * MOMENTUM_CONVICTION_ADJUSTMENT_FACTOR;
-    }
-    // clamp between base and 100
-    if (dynamic < base) dynamic = base;
-    if (dynamic > 100) dynamic = 100; // Conviction score can't exceed 100
-    return dynamic;
+    // NEW LOGIC: 50 is neutral, deviation from 50 affects conviction
+    const deviation = momentum - NEUTRAL_LPM_SCORE; // Range: -50 to +50
+    const adjustment = deviation * LPM_ADJUSTMENT_FACTOR; // Range: -25 to +25
+    const dynamic = base - adjustment; // Higher LPM = lower conviction needed
+    
+    // Clamp between base and 100 (conviction can't exceed 100)
+    return Math.min(100, Math.max(base, dynamic));
 }
 
 /**
@@ -47,13 +46,13 @@ function computeDynamicConvictionThreshold(settings, performanceMomentumScore) {
  * @returns {number} The maximum lookback period plus buffer.
  */
 function calculateMaxRequiredKlineLimit(signalSettings) {
-    let maxPeriod = 50; // Default minimum
+    let maxPeriod = 20; // Minimum required
     const detectedPeriods = [];
     let hasLongPeriodIndicators = false;
 
     // Handle the case where signalSettings might be undefined or not an object
     if (!signalSettings || typeof signalSettings !== 'object') {
-        return maxPeriod + 50;
+        return maxPeriod + 20;
     }
 
     for (const signalKey in signalSettings) {
@@ -121,7 +120,7 @@ function calculateMaxRequiredKlineLimit(signalSettings) {
     if (hasMaSignals && maxPeriod < 200) {
         maxPeriod = 200; // Sets maxPeriod to 200 if any MA signals are present
         hasLongPeriodIndicators = true;
-        detectedPeriods.push('SAFETY_MA200_FALLBACK=200');
+        detectedPeriods.push('SAFETY_MA200=200');
     }
 
     // Add a generous buffer for warm-up
@@ -185,14 +184,10 @@ class TradeManager {
 
 export class SignalDetectionEngine {
     constructor(scannerService) {
-        // DEFENSIVE CHECK: Ensure scannerService is valid on creation
         if (!scannerService || typeof scannerService.addLog !== 'function') {
-            console.error('[SIGNAL_ENGINE_CRITICAL] SignalDetectionEngine initialized without a valid scannerService!');
-            // Fallback to prevent crashes, though logging will be lost.
-            this.scannerService = { addLog: (msg, type) => console.log(`[${type}] ${msg}`) };
-        } else {
-            this.scannerService = scannerService;
+            throw new Error('SignalDetectionEngine requires a valid scannerService with addLog method');
         }
+        this.scannerService = scannerService;
 
         this.autoScannerService = this.scannerService; // Alias for backward compatibility if needed
         this.state = {};
@@ -200,7 +195,7 @@ export class SignalDetectionEngine {
         // PositionSizeValidator is now expected to be managed by PositionManager, as per the outline's refactoring.
         // REMOVED: this.positionSizeValidator = new PositionSizeValidator(this.addLog.bind(this)); // Initialize PositionSizeValidator
         this.abortController = null; // Initialize AbortController
-        this._currentScanSkipReasons = null; // Temporary property to hold skip reasons object during a scan
+        this._currentScanSkipReasons = null;
         this.atrLogCounter = 0; // Track how many ATR logs we've shown
         this.maxAtrLogs = 5; // Only show first 5 strategies per scan cycle
     }
@@ -247,7 +242,7 @@ export class SignalDetectionEngine {
 
     /**
      * Helper method to track skip reasons internally.
-     * This method is designed to update a temporary skipReasons object associated with the current scan cycle.
+     * This method updates a skipReasons object associated with the current scan cycle.
      * @param {string} reason - The reason for skipping a strategy.
      */
     trackSkipReason(reason) {
@@ -291,7 +286,7 @@ export class SignalDetectionEngine {
                 return result;
             }
 
-            const symbolNoSlash = strategy.coin.replace('/', '');
+            const symbolNoSlash = (strategy.coin || '').replace('/', '');
             const priceAtMatch = currentPrices.get(symbolNoSlash);
 
             if (typeof priceAtMatch !== 'number' || isNaN(priceAtMatch)) {
@@ -396,7 +391,9 @@ export class SignalDetectionEngine {
                 currentPrice: priceAtMatch,
                 defaultPositionSize: settings.defaultPositionSize || 100,
                 useWinStrategySize: settings.useWinStrategySize !== false,
-                minimumTradeValue: settings.minimumTradeValue || 10
+                minimumTradeValue: settings.minimumTradeValue || 10,
+                symbol: strategy.coin || 'UNKNOWN',
+                exchangeInfo: this.scannerService.getExchangeInfo ? this.scannerService.getExchangeInfo(strategy.coin?.replace('/', '')) : null
             });
 
             if (!sizeResult.isValid) {
@@ -408,13 +405,6 @@ export class SignalDetectionEngine {
                     reason: result.blockReason,
                     details: sizeResult.details || result.blockReason
                 });
-                /*console.log(`[BLOCK_DEBUG] Details: sizeResult=${JSON.stringify(sizeResult)}, settings.minimumTradeValue=${settings.minimumTradeValue}, settings.defaultPositionSize=${settings.defaultPositionSize}`, 'block_debug', {
-                    level: 2,
-                    strategy: strategy.combinationName,
-                    sizeResult: sizeResult,
-                    minimumTradeValue: settings.minimumTradeValue,
-                    defaultPositionSize: settings.defaultPositionSize
-                });*/
                 return result;
             }
 
@@ -423,6 +413,9 @@ export class SignalDetectionEngine {
 
             // All checks passed, prepare the trade parameters.
             result.matched = true;
+            
+            // DEBUG: Log strategy object to understand missing fields
+            
             result.newlyOpenedPosition = {
                 strategy_name: strategy.combinationName,
                 symbol: strategy.coin,
@@ -479,7 +472,7 @@ export class SignalDetectionEngine {
                 originalStrategy: strategy,
 
                 atr_value: atrValueForLog,
-                is_event_driven_strategy: false
+                is_event_driven_strategy: this.isEventDrivenStrategy(strategy.combinationName)
             };
 
             return result;
@@ -575,7 +568,10 @@ export class SignalDetectionEngine {
      */
     buildTradeParams(strategy, symbol, priceAtMatch, positionDetails, convictionResult, triggerSignals, indicators, klines, combinedStrength) {
         const settings = this.state.scannerSettings;
-        const atrValue = indicators?.atr && indicators.atr.length > 0 ? indicators.atr[indicators.atr.length - 1] : null;
+        // Get symbol-specific ATR data
+        const symbolNoSlash = symbol.replace('/', '');
+        const symbolIndicators = this.scannerService.state.indicators?.[symbolNoSlash];
+        const atrValue = symbolIndicators?.atr && symbolIndicators.atr.length > 0 ? symbolIndicators.atr[symbolIndicators.atr.length - 1] : null;
 
         const stopLossMultiplier = strategy.stopLossAtrMultiplier;
         const takeProfitMultiplier = strategy.takeProfitAtrMultiplier;
@@ -942,6 +938,13 @@ export class SignalDetectionEngine {
             this.scannerService.addLog(`[GROUP_INDICATORS] Calculating indicators for ${groupKey}...`, 'info');
             const allIndicators = calculateAllIndicators(klineData, indicatorSettingsForCalculation, this.scannerService.addLog.bind(this.scannerService));
             this.scannerService.addLog(`[GROUP_INDICATORS] Calculated ${Object.keys(allIndicators).length} indicators for ${groupKey}`, 'info');
+            
+            // FIXED: Store indicators per symbol in scanner service
+            if (!this.scannerService.state.indicators) {
+                this.scannerService.state.indicators = {};
+            }
+            this.scannerService.state.indicators[coin] = allIndicators;
+
 
             for (const strategy of strategiesInGroup) {
                 localCycleStats.strategiesProcessed++;
@@ -990,7 +993,7 @@ export class SignalDetectionEngine {
 
                                 localCycleStats.alertsCreated++;
                             } catch (alertError) {
-                                this.addLog(`[ALERT_ERROR] Failed to create alert: ${alertError.message}`, 'warning', { level: 2 });
+                                this.addLog(`[ALERT_ERROR] Failed to create alert: ${alertError?.message || 'Unknown error'}`, 'warning', { level: 2 });
                             }
                         }
 
@@ -1115,7 +1118,7 @@ export class SignalDetectionEngine {
 
         for (const position of openPositions) {
             this.addLog(`[POS_MON] Checking position ${position.position_id.slice(-8)} (${position.symbol}, ${position.strategy_name})`, 'debug');
-            const symbolNoSlash = position.symbol.replace('/', '');
+            const symbolNoSlash = (position.symbol || '').replace('/', '');
             const currentPrice = priceCache.get(symbolNoSlash);
 
             if (typeof currentPrice !== 'number') {
@@ -1298,7 +1301,30 @@ export class SignalDetectionEngine {
             const allPositions = (walletState?.positions || []);
             const openPositions = allPositions.filter(pos => pos.status === 'open');
 
+            // Debug logging for strategies
+            console.log(`[SignalDetectionEngine] 🔍 Active strategies:`, {
+                strategyCount: this.scannerService.state.activeStrategies?.length || 0,
+                sampleStrategies: this.scannerService.state.activeStrategies?.slice(0, 3).map(s => ({
+                    coin: s.coin,
+                    combinationName: s.combinationName
+                })) || []
+            });
+            
             const exchangeInfo = this.scannerService.getExchangeInfo();
+            
+            // Debug logging for exchange info
+            if (exchangeInfo && Object.keys(exchangeInfo).length > 0) {
+                console.log(`[SignalDetectionEngine] 🔍 Exchange info loaded:`, {
+                    tradingMode: this.scannerService.state.tradingMode,
+                    symbolCount: Object.keys(exchangeInfo).length,
+                    sampleSymbols: Object.keys(exchangeInfo).slice(0, 5),
+                    hasETHUSDT: !!exchangeInfo['ETHUSDT'],
+                    hasXLMUSDT: !!exchangeInfo['XLMUSDT'],
+                    hasBTCUSDT: !!exchangeInfo['BTCUSDT']
+                });
+            } else {
+                console.log(`[SignalDetectionEngine] ⚠️ No exchange info available for trading mode: ${this.scannerService.state.tradingMode}`);
+            }
             if (!exchangeInfo || Object.keys(exchangeInfo).length === 0) {
                 this.addLog('🔴 CRITICAL: Exchange information is not available for symbol validation. Proceeding without validation (risky).', 'error');
             } else {
@@ -1323,6 +1349,16 @@ export class SignalDetectionEngine {
                 if (exchangeInfo && Object.keys(exchangeInfo).length > 0) {
                     const formattedCoinSymbol = strategy.coin.replace('/', '').replace(/\s/g, '').toUpperCase();
                     const coinDetails = exchangeInfo[formattedCoinSymbol];
+
+                    // Debug logging for symbol lookup
+                    if (!coinDetails) {
+                        console.log(`[SignalDetectionEngine] 🔍 Symbol lookup failed:`, {
+                            originalCoin: strategy.coin,
+                            formattedSymbol: formattedCoinSymbol,
+                            exchangeInfoKeys: Object.keys(exchangeInfo).slice(0, 10), // First 10 keys for debugging
+                            exchangeInfoCount: Object.keys(exchangeInfo).length
+                        });
+                    }
 
                     if (!coinDetails) {
                         scanStats.strategiesSkipped++;
@@ -1432,11 +1468,12 @@ export class SignalDetectionEngine {
                     });
                     groupMaxKlineLimit = calculateMaxRequiredKlineLimit(signalSettingsForGroup);
 
-                    const klinePromise = queueFunctionCall('getKlineData', getKlineData, {
+                    // NEW: Direct call to bypass API queue for better batching
+                    const klinePromise = getKlineData({
                         symbols: [coin],
                         interval: timeframe,
                         limit: groupMaxKlineLimit
-                    }, 'normal', `klines_${groupKey}`, 120000)
+                    })
                         .then(response => ({ groupKey, response }))
                         .catch(error => ({ groupKey, error }));
                     klinePromises.push(klinePromise);
@@ -1686,22 +1723,16 @@ export class SignalDetectionEngine {
                 existingPositionsCountMap.set(pos.strategy_name, count + 1);
             });
 
-
-            for (const signal of scanStats.pendingTradeRequests) { // 'allSignals' in the outline is scanStats.pendingTradeRequests here
-                const strategyName = signal.strategy_name; // Use strategy_name from the prepared signal
-                if (!strategyName) {
-                    continue; // Should not happen with well-formed signals
-                }
-
-                // Check how many positions this strategy already has
-                const existingCount = existingPositionsCountMap.get(strategyName) || 0;
-
-                if (existingCount >= maxPositionsPerStrategyForExecution) {
+            for (const signal of scanStats.pendingTradeRequests) {
+                const existingPositionsForStrategy = existingPositionsCountMap.get(signal.strategy_name) || 0;
+                
+                if (existingPositionsForStrategy >= maxPositionsPerStrategyForExecution) {
                     blockedByMaxPositionsPostEval.push({
-                        strategy: strategyName,
-                        existing: existingCount,
+                        signal: signal,
+                        strategy: signal.strategy_name,
+                        existing: existingPositionsForStrategy,
                         max: maxPositionsPerStrategyForExecution,
-                        signal: signal // Store the full signal for potential logging/debugging
+                        reason: 'Strategy position limit reached'
                     });
                 } else {
                     filteredSignals.push(signal);
@@ -1730,6 +1761,9 @@ export class SignalDetectionEngine {
 
             if (filteredSignals.length > 0) { // Changed from scanStats.pendingTradeRequests to filteredSignals
                 this.addLog(`✅ Calling positionManager.openPositionsBatch with ${filteredSignals.length} eligible signals`, 'info'); // Log updated
+                
+                // DEBUG: Log the filtered signals structure
+                
                 try {
                     const batchResult = await this.scannerService.positionManager.openPositionsBatch(filteredSignals); // Use filteredSignals
 
@@ -1744,7 +1778,7 @@ export class SignalDetectionEngine {
                         this.scannerService.addLog(`[ATOMIC_EXECUTION] ✅ Successfully executed ${actualExecutedPositions.length} trade${actualExecutedPositions.length === 1 ? '' : 's'} on exchange.`, 'success');
                         this.scannerService.addLog(`[ATOMIC_UPDATE] Adding ${actualExecutedPositions.length} new positions to wallet state...`, 'info');
 
-                        const currentWalletState = this.scannerService.state.liveWalletState;
+                        const currentWalletState = this.scannerService.walletManagerService?.getCurrentWalletState();
 
                         if (!currentWalletState || !Array.isArray(currentWalletState.positions)) {
                             this.scannerService.addLog(`[ATOMIC_UPDATE] ❌ Cannot update wallet: No active wallet state or positions array found`, 'error');
@@ -1769,12 +1803,12 @@ export class SignalDetectionEngine {
                                             await queueEntityCall('MarketAlert', 'update', alertToUpdate.id, { action_taken: true });
                                         }
                                     } catch (alertError) {
-                                        this.addLog(`[ALERT_UPDATE_ERROR] Failed to update alert: ${alertError.message}`, 'warning', { level: 2 });
+                                        this.addLog(`[ALERT_UPDATE_ERROR] Failed to update alert: ${alertError?.message || 'Unknown error'}`, 'warning', { level: 2 });
                                     }
                                 }
 
                             } catch (persistError) {
-                                this.scannerService.addLog(`[ATOMIC_UPDATE] ❌ Failed to persist wallet changes: ${persistError.message}`, 'error');
+                                this.scannerService.addLog(`[ATOMIC_UPDATE] ❌ Failed to persist wallet changes: ${persistError?.message || 'Unknown error'}`, 'error');
 
                                 for (let i = 0; i < actualExecutedPositions.length; i++) {
                                     currentWalletState.positions.pop();
@@ -1895,6 +1929,29 @@ export class SignalDetectionEngine {
                 );
             }
         }
+    }
+
+    /**
+     * Determines if a strategy is event-driven based on its name
+     * @param {string} strategyName - The name of the strategy
+     * @returns {boolean} True if the strategy is event-driven, false otherwise
+     */
+    isEventDrivenStrategy(strategyName) {
+        if (!strategyName || typeof strategyName !== 'string') {
+            return false;
+        }
+
+        const eventDrivenKeywords = [
+            'news', 'event', 'announcement', 'earnings', 'fomc', 'fed', 'cpi', 'ppi',
+            'nfp', 'gdp', 'inflation', 'rate', 'cut', 'hike', 'policy', 'central',
+            'bank', 'meeting', 'speech', 'conference', 'summit', 'election', 'vote',
+            'referendum', 'brexit', 'trade', 'tariff', 'sanction', 'regulation',
+            'compliance', 'audit', 'merger', 'acquisition', 'ipo', 'listing',
+            'partnership', 'collaboration', 'launch', 'release', 'upgrade', 'update'
+        ];
+
+        const lowerStrategyName = strategyName.toLowerCase();
+        return eventDrivenKeywords.some(keyword => lowerStrategyName.includes(keyword));
     }
 }
 

@@ -431,7 +431,7 @@ export const evaluateMfiCondition = (candle, indicators, index, signalSettings, 
         }
     }
 
-    const finalSignals = signals.map(s => ({ ...s, strength: applyRegimeAdjustment(s.strength, s.value, marketRegime) }));
+    const finalSignals = signals.map(s => ({ ...s, strength: applyRegimeAdjustment(s.strength, marketRegime, s.type) }));
     return getUniqueSignals(finalSignals);
 };
 
@@ -497,7 +497,7 @@ export const evaluateObvCondition = (candle, indicators, index, signalSettings, 
         }
     }
 
-    const finalSignals = signals.map(s => ({ ...s, strength: applyRegimeAdjustment(s.strength, s.value, marketRegime) }));
+    const finalSignals = signals.map(s => ({ ...s, strength: applyRegimeAdjustment(s.strength, marketRegime, s.type) }));
     return getUniqueSignals(finalSignals);
 };
 

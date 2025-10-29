@@ -3,6 +3,7 @@
  * Core calculation helpers for technical indicators
  * These are the foundational functions used by all indicator types
  */
+import { calculateATR as unifiedCalculateATR } from '../atrUnified';
 
 /**
  * Calculates the Exponential Moving Average (EMA) for a given period.
@@ -130,39 +131,7 @@ export const calculateRSI = (klineData, period = 14) => {
   return results;
 };
 
-export const calculateATR = (klineData, period = 14) => {
-    if (!klineData || klineData.length < period) {
-        return new Array(klineData.length).fill(null);
-    }
-
-    const results = [];
-    const trueRanges = [];
-
-    for (let i = 0; i < klineData.length; i++) {
-        const current = klineData[i];
-        const prevClose = i > 0 ? klineData[i - 1].close : current.open; // Use current.open if no previous close (first bar)
-        const tr = Math.max(current.high - current.low, Math.abs(current.high - prevClose), Math.abs(current.low - prevClose));
-        trueRanges.push(tr);
-    }
-    
-    for(let i = 0; i < period - 1; i++) {
-        results.push(null);
-    }
-
-    let sum = 0;
-    for (let i = 0; i < period; i++) {
-        sum += trueRanges[i];
-    }
-    let atr = sum / period;
-    results.push(atr);
-
-    for (let i = period; i < klineData.length; i++) {
-        atr = (atr * (period - 1) + trueRanges[i]) / period;
-        results.push(atr);
-    }
-
-    return results;
-};
+// ATR function removed - use unifiedCalculateATR directly
 
 // Helper function for MACD calculation specifically for value arrays
 export const calculateEMAFromValues = (values, period) => {
@@ -220,36 +189,3 @@ export const getTypicalPrice = (klineData) => {
     });
 };
 
-// Helper function to calculate ATR points
-export const calculateATRPoints = (klineData, period = 14) => {
-    if (!klineData || klineData.length < 2) return [];
-    
-    const trueRanges = [];
-    
-    for (let i = 1; i < klineData.length; i++) {
-        const current = klineData[i];
-        const previous = klineData[i - 1];
-        
-        const high = parseFloat(current.high);
-        const low = parseFloat(current.low);
-        const prevClose = parseFloat(previous.close);
-        
-        const tr1 = high - low;
-        const tr2 = Math.abs(high - prevClose);
-        const tr3 = Math.abs(low - prevClose);
-        
-        trueRanges.push(Math.max(tr1, tr2, tr3));
-    }
-    
-    // Calculate ATR using simple moving average of true ranges
-    const atr = [];
-    for (let i = period - 1; i < trueRanges.length; i++) {
-        let sum = 0;
-        for (let j = 0; j < period; j++) {
-            sum += trueRanges[i - j];
-        }
-        atr.push(sum / period);
-    }
-    
-    return atr;
-};

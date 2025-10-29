@@ -10,7 +10,7 @@ import { Loader2, Save, X, Info, ShieldCheck, TrendingUp, Target, DollarSign, Ac
 import { Badge } from '@/components/ui/badge';
 import { queueEntityCall } from '@/components/utils/apiQueue';
 import { getKlineData } from '@/api/functions';
-import { calculateATR } from '@/components/utils/indicatorManager';
+import { calculateATR as unifiedCalculateATR } from '@/components/utils/atrUnified';
 import { BacktestCombination } from '@/api/entities';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getAutoScannerService } from '@/components/services/AutoScannerService'; // NEW: Import AutoScannerService
@@ -118,7 +118,8 @@ const formatDuration = (minutes) => {
 const ATR_ADAPTIVE_DEFAULTS = {
   riskPercentage: 1,
   rewardRiskRatio: 1.5,
-  stopLossAtrMultiplier: 2.5
+  stopLossAtrMultiplier: 1.0, // Reduced from 2.5 to 1.0 for more realistic short-term trading
+  takeProfitAtrMultiplier: 1.5 // Reduced from 3.0 to 1.5 for more realistic short-term trading
 };
 
 // NEW: Function to get regime icon
@@ -269,91 +270,115 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
 
     let processedCoins = 0;
 
-    for (const coin of uniqueCoins) {
-      if (!coin) continue; // Skip if coin is undefined/null
-      
+    // OPTIMIZATION: Batch fetch all coins at once
+    if (uniqueCoins.length > 0) {
       try {
-        //console.log(`[MARKET_DATA] Fetching data for ${coin}...`);
-
-        // FIX: Use the new getKlineData parameter format with symbols array
+        console.log(`[MARKET_DATA] 🚀 Batch fetching data for ${uniqueCoins.length} coins`);
+        
+        const symbolsToFetch = uniqueCoins.map(coin => coin.replace('/', ''));
         const response = await getKlineData({
-          symbols: [coin.replace('/', '')], // Remove slash for Binance API
+          symbols: symbolsToFetch,
           interval: timeframe || '4h',
           limit: 100
         });
 
-        // ATR DEBUG: Log the entire raw response from the backend function
-        //console.log(`[ATR_DEBUG] Raw response for ${coin}:`, response);
+        if (response?.success && response?.data) {
+          // Process each coin from the batch response
+          for (const coin of uniqueCoins) {
+            if (!coin) continue;
+            
+            const coinDataContainer = response.data[coin.replace('/', '')];
+            let klineData;
+            
+            if (coinDataContainer && coinDataContainer.success && Array.isArray(coinDataContainer.data)) {
+              klineData = coinDataContainer.data;
+            }
+            
+            if (klineData && klineData.length > 0) {
+              const latestCandle = klineData[klineData.length - 1];
+              const currentPrice = parseFloat(latestCandle[4]);
 
-        // FIX: Handle the new nested response format from getKlineData
-        let klineData;
-        
-        if (response?.data) {
-          // The response.data should now be an object with coin keys
-          const coinDataContainer = response.data[coin ? coin.replace('/', '') : '']; // Access data using the converted coin as key
-          if (coinDataContainer && coinDataContainer.success && Array.isArray(coinDataContainer.data)) {
-            klineData = coinDataContainer.data;
+              // NEW: Calculate historical price range from the fetched data
+              const historicalHighs = klineData.map(candle => parseFloat(candle[2])); // High prices
+              const historicalLows = klineData.map(candle => parseFloat(candle[3]));  // Low prices
+              const historicalHigh = Math.max(...historicalHighs);
+              const historicalLow = Math.min(...historicalLows);
+              
+              // Calculate historical range metrics
+              const rangeSize = historicalHigh - historicalLow;
+              // Ensure rangeSize is not zero to prevent division by zero
+              const currentPositionInRange = rangeSize > 0 ? ((currentPrice - historicalLow) / rangeSize) * 100 : 0;
+
+              const atrValues = unifiedCalculateATR(klineData, 14, { debug: false, validateData: true });
+              // Use a default value of 0 if ATR is null or undefined
+              const latestAtr = atrValues && atrValues.length > 0 ? atrValues[atrValues.length - 1] : 0;
+
+              // CRITICAL FIX: Add a check to ensure latestAtr is a valid number
+              const atrToLog = typeof latestAtr === 'number' ? latestAtr.toFixed(6) : 'N/A';
+
+              dataCache.set(coin, {
+                price: currentPrice,
+                atr: typeof latestAtr === 'number' ? latestAtr : 0, // Ensure a number is stored
+                // NEW: Add historical price range data
+                historicalHigh,
+                historicalLow,
+                rangeSize,
+                currentPositionInRange,
+                timestamp: Date.now(),
+                error: null
+              });
+
+              processedCoins++;
+              const progressPercentage = (processedCoins / uniqueCoins.length) * 100;
+              setDataLoadingProgress(progressPercentage);
+
+              //console.log(`[MARKET_DATA] ✅ ${coin}: Price=$${currentPrice.toFixed(4)}, ATR=$${atrToLog}, Range: $${historicalLow.toFixed(4)} - $${historicalHigh.toFixed(4)}`);
+            } else {
+              // ATR DEBUG: Log failure reason
+              dataCache.set(coin, {
+                price: 0,
+                atr: 0,
+                historicalHigh: 0,
+                historicalLow: 0,
+                rangeSize: 0,
+                currentPositionInRange: 0,
+                timestamp: Date.now(),
+                error: 'No valid kline data'
+              });
+            }
+          }
+        } else {
+          console.error(`[MARKET_DATA] ❌ Batch request failed:`, response?.error);
+          // Set default values for all coins
+          for (const coin of uniqueCoins) {
+            dataCache.set(coin, {
+              price: 0,
+              atr: 0,
+              historicalHigh: 0,
+              historicalLow: 0,
+              rangeSize: 0,
+              currentPositionInRange: 0,
+              timestamp: Date.now(),
+              error: response?.error || 'Batch request failed'
+            });
           }
         }
-        
-        // ATR DEBUG: Log the final klineData array before calculation
-
-        if (klineData && klineData.length > 0) {
-          const latestCandle = klineData[klineData.length - 1];
-          const currentPrice = parseFloat(latestCandle[4]);
-
-          // NEW: Calculate historical price range from the fetched data
-          const historicalHighs = klineData.map(candle => parseFloat(candle[2])); // High prices
-          const historicalLows = klineData.map(candle => parseFloat(candle[3]));  // Low prices
-          const historicalHigh = Math.max(...historicalHighs);
-          const historicalLow = Math.min(...historicalLows);
-          
-          // Calculate historical range metrics
-          const rangeSize = historicalHigh - historicalLow;
-          // Ensure rangeSize is not zero to prevent division by zero
-          const currentPositionInRange = rangeSize > 0 ? ((currentPrice - historicalLow) / rangeSize) * 100 : 0;
-
-          const atrValues = calculateATR(klineData, 14);
-          // Use a default value of 0 if ATR is null or undefined
-          const latestAtr = atrValues && atrValues.length > 0 ? atrValues[atrValues.length - 1] : 0;
-
-          // CRITICAL FIX: Add a check to ensure latestAtr is a valid number
-          const atrToLog = typeof latestAtr === 'number' ? latestAtr.toFixed(6) : 'N/A';
-
-          dataCache.set(coin, {
-            price: currentPrice,
-            atr: typeof latestAtr === 'number' ? latestAtr : 0, // Ensure a number is stored
-            // NEW: Add historical price range data
-            historicalHigh,
-            historicalLow,
-            rangeSize,
-            currentPositionInRange,
-            timestamp: Date.now(),
-            error: null
-          });
-
-          //console.log(`[MARKET_DATA] ✅ ${coin}: Price=$${currentPrice.toFixed(4)}, ATR=$${atrToLog}, Range: $${historicalLow.toFixed(4)} - $${historicalHigh.toFixed(4)}`);
-        } else {
-          // ATR DEBUG: Log failure reason
-          console.error(`[ATR_DEBUG] No valid klineData found for ${coin}.`);
-          throw new Error('No market data received');
-        }
       } catch (error) {
-        console.error(`[MARKET_DATA] ❌ Failed to fetch data for ${coin}:`, error.message);
-        dataCache.set(coin, {
-          price: 0,
-          atr: 0,
-          historicalHigh: 0,
-          historicalLow: 0,
-          rangeSize: 0,
-          currentPositionInRange: 0,
-          timestamp: Date.now(),
-          error: error.message
-        });
+        console.error(`[MARKET_DATA] ❌ Batch fetch failed:`, error.message);
+        // Set default values for all coins
+        for (const coin of uniqueCoins) {
+          dataCache.set(coin, {
+            price: 0,
+            atr: 0,
+            historicalHigh: 0,
+            historicalLow: 0,
+            rangeSize: 0,
+            currentPositionInRange: 0,
+            timestamp: Date.now(),
+            error: error.message
+          });
+        }
       }
-
-      processedCoins++;
-      setDataLoadingProgress((processedCoins / uniqueCoins.length) * 100);
     }
 
     setMarketDataCache(dataCache);
@@ -380,12 +405,29 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
       return;
     }
 
+    // Debug: Log input strategies before filtering
+    console.log('[SAVE_COMBINATIONS] 📊 Input strategies count:', allCombinations.length);
+    console.log('[SAVE_COMBINATIONS] 📊 Input strategies by coin:', allCombinations.reduce((acc, s) => {
+      acc[s.coin] = (acc[s.coin] || 0) + 1;
+      return acc;
+    }, {}));
+    console.log('[SAVE_COMBINATIONS] 📊 Sample input strategies:', allCombinations.slice(0, 3).map(s => ({ 
+      coin: s.coin, 
+      combinationName: s.combinationName,
+      profitFactor: s.profitFactor,
+      signals: s.signals?.map(sig => sig.type).join('+') || 'No signals'
+    })));
+
     // Smart filtering to keep only the best version of each signal combination
     const filteredStrategies = filterForBestSignalVariations(allCombinations);
     
     // Debug: Log the strategies and their coin information
     console.log('[SAVE_COMBINATIONS] 📊 Filtered strategies count:', filteredStrategies.length);
-    console.log('[SAVE_COMBINATIONS] 📊 Strategies with coin info:', filteredStrategies.map(s => ({ 
+    console.log('[SAVE_COMBINATIONS] 📊 Filtered strategies by coin:', filteredStrategies.reduce((acc, s) => {
+      acc[s.coin] = (acc[s.coin] || 0) + 1;
+      return acc;
+    }, {}));
+    console.log('[SAVE_COMBINATIONS] 📊 Filtered strategies with coin info:', filteredStrategies.map(s => ({ 
       coin: s.coin, 
       combinationName: s.combinationName,
       profitFactor: s.profitFactor 
@@ -458,46 +500,31 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
   };
 
   const filterForBestSignalVariations = (strategies) => {
-    const signalGroups = {};
-
-    strategies.forEach((strategy) => {
-      const signalTypes = strategy.signals.
-      map((s) => s.type).
-      sort().
-      join('|');
-      const groupKey = `${strategy.coin}|${signalTypes}`;
-
-      if (!signalGroups[groupKey]) {
-        signalGroups[groupKey] = [];
-      }
-      signalGroups[groupKey].push(strategy);
-    });
-
-    const bestStrategies = [];
-
-    Object.keys(signalGroups).forEach((groupKey) => {
-      const group = signalGroups[groupKey];
-
-      if (group.length === 1) {
-        bestStrategies.push(group[0]);
-      }
-      else {
-        const bestStrategy = group.sort((a, b) => {
-          const profitDiff = (b.profitFactor || 0) - (a.profitFactor || 0);
-          if (Math.abs(profitDiff) > 0.1) return profitDiff; // prioritize significant profit factor difference
-
-          const successDiff = (b.successRate || 0) - (a.successRate || 0);
-          if (Math.abs(successDiff) > 1) return successDiff; // prioritize significant success rate difference
-
-          return (b.occurrences || 0) - (a.occurrences || 0); // then occurrences
-        })[0];
-
-        bestStrategies.push(bestStrategy);
+    // Filter to keep only the best version of each unique signal combination PER COIN
+    const signalCombinationMap = new Map();
+    
+    strategies.forEach(strategy => {
+      // Create a unique key based on signal types (sorted for consistency) AND coin
+      const signalTypes = strategy.signals.map(s => s.type).sort().join('+');
+      const coin = strategy.coin || 'Unknown';
+      const key = `${coin}-${signalTypes}`; // Include coin in key to separate by coin
+      
+      // Keep the best strategy for each coin-signal combination
+      if (!signalCombinationMap.has(key) || 
+          strategy.profitabilityScore > signalCombinationMap.get(key).profitabilityScore) {
+        signalCombinationMap.set(key, strategy);
       }
     });
-
-    //console.log(`[STRATEGY_FILTER] Filtered from ${strategies.length} to ${bestStrategies.length} strategies`);
-    return bestStrategies;
+    
+    // Convert map values to array
+    const filteredStrategies = Array.from(signalCombinationMap.values());
+    
+    console.log(`[STRATEGY_FILTER] Filtered ${strategies.length} strategies down to ${filteredStrategies.length} unique signal combinations (per coin)`);
+    console.log(`[STRATEGY_FILTER] Strategies by coin:`, filteredStrategies.reduce((acc, s) => {
+      acc[s.coin] = (acc[s.coin] || 0) + 1;
+      return acc;
+    }, {}));
+    return filteredStrategies;
   };
 
   // NEW: Get market data from cache
@@ -806,13 +833,6 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
     // FIX: Remove unnecessary dependencies from useEffect
     useEffect(() => {
       if (strategy && price && atr) {
-        // --- ENHANCED LOGGING ---
-        // console.log(`[STRATEGY_ANALYSIS_DEBUG] Displaying analysis for: ${strategy.combinationName}:`);
-        // console.log(`[STRATEGY_ANALYSIS_DEBUG]   - Current Price:`, price);
-        // console.log(`[STRATEGY_ANALYSIS_DEBUG]   - Strategy Object Received:`, strategy);
-        // console.log(`[STRATEGY_ANALYSIS_DEBUG]   - Median Lowest Low During Backtest (from strategy object):`, strategy.medianLowestLowDuringBacktest);
-        // console.log(`[STRATEGY_ANALYSIS_DEBUG]   - Calculated Stop Loss Price:`, calculations.stopLossPrice);
-        // --- End of Modification ---
       }
     }, [strategy, price, atr, calculations.stopLossPrice]); // FIX: Removed combinationStrategies dependency
 
@@ -996,6 +1016,8 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
           </h4>
           
           <div className="p-3 bg-gray-100 dark:bg-gray-800 rounded-lg">
+            {/* DEBUG: Log strategy data */}
+            {console.log(`[SAVE_COMBINATIONS] Strategy ${strategy.combinationName} - medianLowestLowDuringBacktest:`, strategy.medianLowestLowDuringBacktest, 'type:', typeof strategy.medianLowestLowDuringBacktest)}
             {strategy.medianLowestLowDuringBacktest && typeof strategy.medianLowestLowDuringBacktest === 'number' && marketData.price > 0 ? (
               <div className="space-y-2">
                 {/* FIXED: Display as percentage, not dollar amount */}

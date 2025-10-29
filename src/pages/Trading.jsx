@@ -570,7 +570,7 @@ export default function Trading() {
                   <label htmlFor="pair" className="text-sm font-medium">Pair</label>
                   <Select value={pair} onValueChange={setPair}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select pair" />
+                      <SelectValue placeholder="Enter pair" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="BTC/USDT">BTC/USDT</SelectItem>
@@ -586,7 +586,7 @@ export default function Trading() {
                   <label htmlFor="direction" className="text-sm font-medium">Direction</label>
                   <Select value={direction} onValueChange={setDirection}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select direction" />
+                      <SelectValue placeholder="Enter direction" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="long">Long (Buy)</SelectItem>
@@ -602,7 +602,7 @@ export default function Trading() {
                   <Input 
                     id="amount" 
                     type="number"
-                    placeholder="100.00" 
+                    placeholder="Enter amount" 
                     className="pl-9"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
@@ -614,14 +614,14 @@ export default function Trading() {
                   <label htmlFor="tp" className="text-sm font-medium">Take Profit (%)</label>
                   <div className="relative">
                     <Target className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input id="tp" type="number" placeholder="e.g., 5" className="pl-9" value={takeProfit} onChange={e => setTakeProfit(e.target.value)} />
+                    <Input id="tp" type="number" placeholder="Enter percentage" className="pl-9" value={takeProfit} onChange={e => setTakeProfit(e.target.value)} />
                   </div>
                 </div>
                 <div className="space-y-1">
                   <label htmlFor="sl" className="text-sm font-medium">Stop Loss (%)</label>
                   <div className="relative">
                     <Shield className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input id="sl" type="number" placeholder="e.g., 2" className="pl-9" value={stopLoss} onChange={e => setStopLoss(e.target.value)} />
+                    <Input id="sl" type="number" placeholder="Enter percentage" className="pl-9" value={stopLoss} onChange={e => setStopLoss(e.target.value)} />
                   </div>
                 </div>
               </div>

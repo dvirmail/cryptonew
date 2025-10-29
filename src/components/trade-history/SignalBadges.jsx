@@ -8,12 +8,15 @@ import {
 } from "@/components/ui/tooltip";
 
 const SignalBadges = ({ signals }) => {
-  if (!signals || signals.length === 0) {
+  // Ensure signals is an array
+  const signalsArray = Array.isArray(signals) ? signals : [];
+  
+  if (!signalsArray || signalsArray.length === 0) {
     return <span className="text-xs text-muted-foreground">N/A</span>;
   }
 
-  const visibleSignals = signals.slice(0, 2);
-  const hiddenSignalsCount = signals.length - visibleSignals.length;
+  const visibleSignals = signalsArray.slice(0, 2);
+  const hiddenSignalsCount = signalsArray.length - visibleSignals.length;
 
   return (
     <TooltipProvider delayDuration={100}>
@@ -42,7 +45,7 @@ const SignalBadges = ({ signals }) => {
             <TooltipContent>
               <p className="font-semibold mb-2">All Signals:</p>
               <ul className="list-disc list-inside space-y-1">
-                {signals.map((s, i) => (
+                {signalsArray.map((s, i) => (
                   <li key={i}>
                     <strong>{s.type}</strong>: {s.value}
                   </li>

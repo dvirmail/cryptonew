@@ -1,6 +1,8 @@
 // Local API Client - Replaces Base44 SDK
 // This client connects to the local API server instead of Base44
 
+import priceCacheService from '@/components/services/PriceCacheService';
+
 const API_BASE_URL = 'http://localhost:3003/api';
 
 class LocalAPIError extends Error {
@@ -12,42 +14,42 @@ class LocalAPIError extends Error {
   }
 }
 
-async function apiRequest(endpoint, options = {}) {
-  const url = `${API_BASE_URL}${endpoint}`;
-  console.log('[apiRequest] Making request to:', url);
-  console.log('[apiRequest] Options:', options);
-  
-  const config = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-    ...options,
-  };
+ async function apiRequest(endpoint, options = {}) {
+   let url = `${API_BASE_URL}${endpoint}`;
+   
+   // Handle query parameters
+   if (options.params) {
+     const queryString = new URLSearchParams(options.params).toString();
+     url += (endpoint.includes('?') ? '&' : '?') + queryString;
+   }
+   
+   const config = {
+     headers: {
+       'Content-Type': 'application/json',
+       ...options.headers,
+     },
+     ...options,
+   };
 
-  try {
-    console.log('[apiRequest] Fetch config:', config);
-    const response = await fetch(url, config);
-    console.log('[apiRequest] Response status:', response.status, response.statusText);
-    
-    // Check if response is HTML (likely an error page)
-    const contentType = response.headers.get('content-type');
-    if (contentType && contentType.includes('text/html')) {
-      const htmlText = await response.text();
-      console.error('[localClient] Received HTML response instead of JSON:', htmlText.substring(0, 200) + '...');
-      throw new LocalAPIError('Server returned HTML instead of JSON - check if proxy server is running', response.status, htmlText);
-    }
-    
-    const data = await response.json();
-    console.log('[apiRequest] Response data:', data);
+   try {
+     const response = await fetch(url, config);
+     
+     // Check if response is HTML (likely an error page)
+     const contentType = response.headers.get('content-type');
+     if (contentType && contentType.includes('text/html')) {
+       const htmlText = await response.text();
+       console.error('[localClient] Received HTML response instead of JSON:', htmlText.substring(0, 200) + '...');
+       throw new LocalAPIError('Server returned HTML instead of JSON - check if proxy server is running', response.status, htmlText);
+     }
+     
+     const data = await response.json();
 
-    if (!response.ok) {
-      console.error('[apiRequest] Request failed with status:', response.status);
-      throw new LocalAPIError(data.error || 'API request failed', response.status, data);
-    }
+     if (!response.ok) {
+       console.error('[apiRequest] Request failed with status:', response.status);
+       throw new LocalAPIError(data.error || 'API request failed', response.status, data);
+     }
 
-    console.log('[apiRequest] Request successful, returning data');
-    return data;
+     return data;
   } catch (error) {
     console.error('[apiRequest] Error occurred:', error);
     console.error('[apiRequest] Error message:', error.message);
@@ -82,7 +84,16 @@ class Entity {
       return response.data;
     }
     
-    const response = await apiRequest(`/${this.name}`, {
+    // Special handling for entities that use direct API endpoints
+    if (this.name === 'walletSummaries' || this.name === 'livePositions' || this.name === 'ScanSettings' || this.name === 'trades') {
+      const response = await apiRequest(`/${this.name}`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      return response.data;
+    }
+    
+    const response = await apiRequest(`/entities/${this.name}`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
@@ -90,7 +101,7 @@ class Entity {
   }
 
   async update(id, data) {
-    const response = await apiRequest(`/${this.name}/${id}`, {
+    const response = await apiRequest(`/entities/${this.name}/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
@@ -98,14 +109,14 @@ class Entity {
   }
 
   async delete(id) {
-    const response = await apiRequest(`/${this.name}/${id}`, {
+    const response = await apiRequest(`/entities/${this.name}/${id}`, {
       method: 'DELETE',
     });
     return response.data;
   }
 
   async bulkDelete(ids) {
-    const response = await apiRequest(`/${this.name}`, {
+    const response = await apiRequest(`/entities/${this.name}`, {
       method: 'DELETE',
       body: JSON.stringify({ ids }),
     });
@@ -113,7 +124,7 @@ class Entity {
   }
 
   async getById(id) {
-    const response = await apiRequest(`/${this.name}/${id}`);
+    const response = await apiRequest(`/entities/${this.name}/${id}`);
     return response.data;
   }
 
@@ -124,14 +135,35 @@ class Entity {
       return response.data;
     }
     
+    // Special handling for entities that use direct API endpoints
+    if (this.name === 'walletSummaries' || this.name === 'livePositions' || this.name === 'ScanSettings' || this.name === 'trades') {
+      const params = new URLSearchParams({ orderBy, limit });
+      const response = await apiRequest(`/${this.name}?${params}`);
+      return response.data;
+    }
+    
     const params = new URLSearchParams({ orderBy, limit });
-    const response = await apiRequest(`/${this.name}?${params}`);
+    const response = await apiRequest(`/entities/${this.name}?${params}`);
     return response.data;
   }
 
   async filter(conditions = {}, orderBy = '-created_date', limit = 100) {
+    // For local development, use proxy server for backtestCombinations
+    if (this.name === 'backtestCombinations') {
+      const params = new URLSearchParams({ ...conditions, orderBy, limit });
+      const response = await apiRequest(`/${this.name}?${params}`);
+      return response.data;
+    }
+    
+    // Special handling for entities that use direct API endpoints
+    if (this.name === 'walletSummaries' || this.name === 'livePositions' || this.name === 'ScanSettings' || this.name === 'trades') {
+      const params = new URLSearchParams({ ...conditions, orderBy, limit });
+      const response = await apiRequest(`/${this.name}?${params}`);
+      return response.data;
+    }
+    
     const params = new URLSearchParams({ ...conditions, orderBy, limit });
-    const response = await apiRequest(`/${this.name}?${params}`);
+    const response = await apiRequest(`/entities/${this.name}?${params}`);
     return response.data;
   }
 
@@ -153,27 +185,232 @@ class Entity {
 
 // Specific entity classes
 export const Trade = new Entity('trades');
-export const ScanSettings = new Entity('scanSettings');
-export const HistoricalPerformance = new Entity('historicalPerformance');
+export const ScanSettings = new Entity('ScanSettings');
+export const HistoricalPerformance = new Entity('HistoricalPerformance');
 export const BacktestCombination = new Entity('backtestCombinations');
 export const MarketAlert = new Entity('marketAlerts');
 export const ScannerSession = new Entity('scannerSessions');
 export const ScannerStats = new Entity('scannerStats');
-export const LiveWalletState = new Entity('liveWalletStates');
 export const LivePosition = new Entity('livePositions');
 export const WalletSummary = new Entity('walletSummaries');
+export const CentralWalletState = new Entity('centralWalletStates');
 export const TradingSignal = new Entity('tradingSignals');
 export const SignalPerformance = new Entity('signalPerformance');
 export const OptedOutCombination = new Entity('optedOutCombinations');
 
+// Use local implementation instead of base44 version
+import { updatePerformanceSnapshot as localUpdatePerformanceSnapshot } from './updatePerformanceSnapshot';
+
+// Global request deduplication for kline data
+const pendingKlineRequests = new Map();
+
+        // Global kline coordinator for batching requests
+        const globalKlineCoordinator = {
+          // NEW: Pre-collection system to bypass sequential API queue
+          preCollectionMode: false,
+          preCollectedRequests: new Map(), // Map<symbolTimeframeKey, Array<requests>>
+          preCollectionTimeout: null,
+          preCollectionInterval: 500, // Collect requests for 500ms before processing
+          
+          // NEW: Start pre-collection mode
+          startPreCollection() {
+            this.preCollectionMode = true;
+            this.preCollectedRequests.clear();
+            
+            // Set timeout to process collected requests
+            if (this.preCollectionTimeout) {
+              clearTimeout(this.preCollectionTimeout);
+            }
+            
+            this.preCollectionTimeout = setTimeout(() => {
+              this.processPreCollectedRequests();
+            }, this.preCollectionInterval);
+          },
+          
+          // NEW: Process all pre-collected requests in parallel
+          async processPreCollectedRequests() {
+            this.preCollectionMode = false;
+            
+            if (this.preCollectedRequests.size === 0) {
+              return;
+            }
+            
+            // Process all groups in parallel
+            const processingPromises = [];
+            
+            for (const [symbolTimeframeKey, requests] of this.preCollectedRequests) {
+              
+              // Group requests by endTime
+              const requestsByEndTime = new Map();
+              requests.forEach(request => {
+                const endTimeKey = request.endTime || 'latest';
+                if (!requestsByEndTime.has(endTimeKey)) {
+                  requestsByEndTime.set(endTimeKey, []);
+                }
+                requestsByEndTime.get(endTimeKey).push(request);
+              });
+              
+              // Process each endTime group
+              for (const [endTimeKey, endTimeRequests] of requestsByEndTime) {
+                const processingPromise = this.processRequestGroup(endTimeRequests, endTimeKey);
+                processingPromises.push(processingPromise);
+              }
+            }
+            
+            // Wait for all processing to complete
+            try {
+              await Promise.all(processingPromises);
+            } catch (error) {
+              console.error(`[KLINE_COORDINATOR] ❌ Error processing pre-collected requests:`, error);
+            }
+            
+            // Clear the collection
+            this.preCollectedRequests.clear();
+          },
+          
+          // NEW: Process a group of requests with the same endTime
+          async processRequestGroup(requests, endTimeKey) {
+            if (requests.length === 0) return;
+            
+            const firstRequest = requests[0];
+            const symbols = [...new Set(requests.flatMap(req => req.symbols))];
+            
+            try {
+              // Make the actual API call
+              const result = await executeKlineRequest(symbols, firstRequest.interval, firstRequest.limit, firstRequest.endTime);
+              
+              // Resolve all requests in this group
+              requests.forEach(request => {
+                if (result.success && result.data) {
+                  // Filter data for this specific request
+                  const filteredData = {};
+                  request.symbols.forEach(symbol => {
+                    if (result.data[symbol]) {
+                      filteredData[symbol] = result.data[symbol];
+                    }
+                  });
+                  request.resolve({ success: true, data: filteredData });
+                } else {
+                  request.reject(new Error(result.error || 'Unknown error'));
+                }
+              });
+              
+            } catch (error) {
+              console.error(`[KLINE_COORDINATOR] ❌ Error processing group:`, error);
+              // Reject all requests in this group
+              requests.forEach(request => {
+                request.reject(error);
+              });
+            }
+          },
+  
+          requestKlineData(symbols, interval, limit, endTime) {
+            return new Promise((resolve, reject) => {
+              const requestKey = `${symbols.join(',')}_${interval}_${limit || 'default'}_${endTime || 'latest'}`;
+              const timeframeKey = `${interval}_${limit || 'default'}`;
+              const symbolTimeframeKey = `${symbols.join(',')}_${interval}`; // Group by symbol+timeframe regardless of endTime
+              const timestamp = Date.now();
+              
+              // NEW: Use pre-collection system to bypass sequential API queue
+              if (!this.preCollectionMode) {
+                this.startPreCollection();
+              }
+              
+              // Add request to pre-collection
+              if (!this.preCollectedRequests.has(symbolTimeframeKey)) {
+                this.preCollectedRequests.set(symbolTimeframeKey, []);
+              }
+              
+              const requestData = {
+                symbols,
+                interval,
+                limit,
+                endTime,
+                resolve,
+                reject,
+                timestamp
+              };
+              
+              this.preCollectedRequests.get(symbolTimeframeKey).push(requestData);
+              
+              const totalRequests = Array.from(this.preCollectedRequests.values()).flat().length;
+              
+              // Extend the collection timeout if this is a new request
+              if (this.preCollectionTimeout) {
+                clearTimeout(this.preCollectionTimeout);
+                this.preCollectionTimeout = setTimeout(() => {
+                  this.processPreCollectedRequests();
+                }, this.preCollectionInterval);
+              }
+              
+              // NEW: Force processing after collecting a reasonable number of requests
+              if (totalRequests >= 5) {
+                clearTimeout(this.preCollectionTimeout);
+                this.processPreCollectedRequests();
+              }
+            });
+          },
+          
+};
+
+// Helper function for executing kline requests - ALWAYS use batch endpoint
+async function executeKlineRequest(symbols, interval, limit, endTime) {
+  try {
+    // ALWAYS use batch endpoint, even for single symbols
+    
+    const symbolsParam = JSON.stringify(symbols);
+    const batchUrl = `http://localhost:3003/api/binance/klines/batch?symbols=${encodeURIComponent(symbolsParam)}&interval=${interval}${limit ? `&limit=${limit}` : ''}${endTime ? `&endTime=${endTime}` : ''}`;
+    
+    const response = await fetch(batchUrl);
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const batchData = await response.json();
+    
+    if (batchData.success && batchData.data) {
+      // Convert batch response to expected format
+      const results = {};
+      batchData.data.forEach(item => {
+        results[item.symbol] = {
+          success: item.success,
+          data: item.data,
+          error: item.error
+        };
+      });
+      
+      return {
+        success: true,
+        data: results
+      };
+    } else {
+      return {
+        success: false,
+        error: batchData.error || 'Failed to fetch batch kline data'
+      };
+    }
+  } catch (error) {
+    console.error('[executeKlineRequest] ❌ Error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
 // Function calls that mimic Base44 functions
 export const functions = {
   async updatePerformanceSnapshot(data) {
-    const response = await apiRequest('/updatePerformanceSnapshot', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-    return response.data;
+    console.log('[localClient] 🚀 Calling local updatePerformanceSnapshot with data:', data);
+    try {
+      const result = await localUpdatePerformanceSnapshot(data);
+      console.log('[localClient] ✅ Local updatePerformanceSnapshot completed:', result);
+      return result;
+    } catch (error) {
+      console.error('[localClient] ❌ Local updatePerformanceSnapshot failed:', error);
+      throw error;
+    }
   },
 
   async backfillHistoricalPerformance(data) {
@@ -201,47 +438,108 @@ export const functions = {
   async getKlineData(data) {
     try {
       const { symbols, interval, limit, endTime } = data;
-      const results = {};
       
-      for (const symbol of symbols) {
-        try {
-          // Call the local proxy server to get kline data
-          const response = await fetch(`http://localhost:3003/api/binance/klines?symbol=${symbol}&interval=${interval}&limit=${limit}${endTime ? `&endTime=${endTime}` : ''}`);
-          
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          }
-          
-          const klineData = await response.json();
-          
-          if (klineData.success && klineData.data) {
-            results[symbol] = {
-              success: true,
-              data: klineData.data
-            };
-          } else {
-            results[symbol] = {
-              success: false,
-              error: klineData.error || 'Failed to fetch kline data'
-            };
-          }
-        } catch (error) {
-          results[symbol] = {
-            success: false,
-            error: error.message
-          };
-        }
+      if (!Array.isArray(symbols) || symbols.length === 0) {
+        return { success: false, error: 'Symbols array is required' };
       }
       
-      return {
-        success: true,
-        data: results
-      };
+      // Direct kline coordinator bypass - no API queue for kline requests
+      const result = await globalKlineCoordinator.requestKlineData(symbols, interval, limit, endTime);
+      
+      // Extract only the requested symbols from the batch result
+      if (result.success && result.data) {
+        const filteredData = {};
+        symbols.forEach(symbol => {
+          if (result.data[symbol]) {
+            filteredData[symbol] = result.data[symbol];
+          }
+        });
+        
+        return {
+          success: true,
+          data: filteredData
+        };
+      }
+      
+      return result;
     } catch (error) {
+      console.error('[getKlineData] ❌ Error:', error);
       return {
         success: false,
         error: error.message
       };
+    }
+  },
+
+  async reconcileWalletState(params) {
+    console.log('[localClient] 🔄 Calling reconcileWalletState with params:', params);
+    try {
+      const response = await fetch('http://localhost:3003/api/functions/reconcileWalletState', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('[localClient] ✅ reconcileWalletState completed:', result);
+      return result;
+    } catch (error) {
+      console.error('[localClient] ❌ reconcileWalletState failed:', error);
+      throw error;
+    }
+  },
+
+  async walletReconciliation(params) {
+    console.log('[localClient] 🔄 Calling walletReconciliation with params:', params);
+    try {
+      const response = await fetch('http://localhost:3003/api/functions/walletReconciliation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('[localClient] ✅ walletReconciliation completed:', result);
+      return result;
+    } catch (error) {
+      console.error('[localClient] ❌ walletReconciliation failed:', error);
+      throw error;
+    }
+  },
+
+  async purgeGhostPositions(params) {
+    console.log('[localClient] 🔄 Calling purgeGhostPositions with params:', params);
+    try {
+      const response = await fetch('http://localhost:3003/api/functions/purgeGhostPositions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('[localClient] ✅ purgeGhostPositions completed:', result);
+      return result;
+    } catch (error) {
+      console.error('[localClient] ❌ purgeGhostPositions failed:', error);
+      throw error;
     }
   },
 
@@ -253,9 +551,9 @@ export const functions = {
       return [];
     }
     
-    // Filter out symbols that are known to be unavailable on testnet
+    // Filter out only fiat currency pairs that are truly unavailable on testnet
     const unavailableSymbols = new Set([
-      'DAIUSDT', 'MXNUSDT', 'COPUSDT', 'CZKUSDT', 'ARSUSDT', 'BRLUSDT', 
+      'MXNUSDT', 'COPUSDT', 'CZKUSDT', 'ARSUSDT', 'BRLUSDT', 
       'TRYUSDT', 'EURUSDT', 'GBPUSDT', 'JPYUSDT', 'AUDUSDT', 'CADUSDT',
       'CHFUSDT', 'SEKUSDT', 'NOKUSDT', 'DKKUSDT', 'PLNUSDT', 'HUFUSDT',
       'RUBUSDT', 'INRUSDT', 'KRWUSDT', 'CNYUSDT', 'HKDUSDT', 'SGDUSDT',
@@ -274,171 +572,109 @@ export const functions = {
     }
     
     try {
-      // Make actual calls to Binance API via the proxy server
-      const proxyUrl = 'http://localhost:3003';
-      const promises = availableSymbols.map(async (symbol) => {
-        try {
-          // FIX: Use ticker/24hr endpoint to get both price and 24h change
-          const response = await fetch(`${proxyUrl}/api/binance/ticker/24hr?symbol=${symbol}`);
-          
-          if (!response.ok) {
-            console.warn(`[getBinancePrices] HTTP ${response.status} for ${symbol}, skipping`);
-            return null; // Return null for failed requests
-          }
-          
-          const data = await response.json();
-          
-          if (data.success && data.data && data.data.lastPrice) {
-            return {
-              symbol: symbol,
-              price: data.data.lastPrice,
-              change: parseFloat(data.data.priceChangePercent) || 0, // 24h change percentage
-              timestamp: Date.now()
-            };
-          } else {
-            console.warn(`[getBinancePrices] Invalid response for ${symbol}:`, data);
-            return null; // Return null for invalid responses
-          }
-        } catch (error) {
-          console.warn(`[getBinancePrices] Failed to fetch price for ${symbol}:`, error.message);
-          return null; // Return null for errors
+      console.log(`[getBinancePrices] 📊 Request for ${availableSymbols.length} symbols: ${availableSymbols.slice(0, 5).join(', ')}${availableSymbols.length > 5 ? '...' : ''}`);
+      
+      // Use centralized cache service for batch fetching with global coordination
+      const tickerMap = await priceCacheService.getBatchTicker24hr(availableSymbols, 'testnet');
+      
+      // Convert Map to array format expected by existing code
+      const results = [];
+      tickerMap.forEach((tickerData, symbol) => {
+        if (tickerData && tickerData.lastPrice) {
+          results.push({
+            symbol: symbol,
+            price: tickerData.lastPrice,
+            change: parseFloat(tickerData.priceChangePercent) || 0,
+            timestamp: Date.now()
+          });
         }
       });
       
-      const results = await Promise.all(promises);
-      // Filter out null results (failed requests)
-      return results.filter(result => result !== null);
+      console.log(`[getBinancePrices] ✅ Retrieved ${results.length} prices from global batch`);
+      return results;
+      
     } catch (error) {
-      console.error('[getBinancePrices] Error fetching prices:', error);
+      console.error('[getBinancePrices] ❌ Failed to fetch prices:', error);
       return [];
     }
   },
 
   async getExchangeInfo(symbol) {
-    // This would typically call Binance API
-    // For now, return mock data
-    return {
-      success: true,
-      data: {
-        symbols: [{
-          symbol: symbol || 'BTCUSDT',
-          status: 'TRADING',
-          baseAsset: 'BTC',
-          quoteAsset: 'USDT'
-        }]
-      }
-    };
+    throw new Error('Exchange info API not implemented');
   },
 
-  async getFearAndGreedIndex() {
-    console.log('[getFearAndGreedIndex] 🚀 FUNCTION CALLED - Starting Fear & Greed Index fetch...');
-    try {
-      console.log('[getFearAndGreedIndex] Starting Fear & Greed Index fetch via direct proxy call...');
-      
-      // Call proxy server directly with simple fetch (bypass API queue)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-      
-      const response = await fetch('http://localhost:3003/api/fearAndGreed', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const proxyResponse = await response.json();
-      
-      console.log('[getFearAndGreedIndex] Direct proxy response received:', proxyResponse);
-      
-      if (proxyResponse.success && proxyResponse.data) {
-        console.log('[getFearAndGreedIndex] Successfully fetched via direct proxy call');
-        return proxyResponse;
-      } else {
-        throw new Error('Proxy server returned invalid response');
-      }
-    } catch (error) {
-      console.error('[getFearAndGreedIndex] Error fetching Fear & Greed Index via proxy:', error);
-      
-      // Try direct API call as fallback (may fail due to CORS)
-      try {
-        console.log('[getFearAndGreedIndex] Attempting direct API call as fallback...');
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-        
-        const response = await fetch('https://api.alternative.me/fng/', {
-          signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        console.log('[getFearAndGreedIndex] Direct API response status:', response.status, response.statusText);
-        
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        console.log('[getFearAndGreedIndex] Direct API data:', data);
-        
-        if (data && data.data && data.data.length > 0) {
-          const fngData = data.data[0];
-          console.log('[getFearAndGreedIndex] Direct API data extracted:', fngData);
-          
-          return {
-            success: true,
-            data: {
-              data: [{
-                value: fngData.value,
-                value_classification: fngData.value_classification,
-                timestamp: fngData.timestamp,
-                time_until_update: fngData.time_until_update
-              }]
-            }
-          };
-        } else {
-          throw new Error('Invalid response format from direct API');
-        }
-      } catch (directError) {
-        console.error('[getFearAndGreedIndex] Direct API call also failed:', directError);
-        
-        // Check error type
-        if (directError.name === 'AbortError') {
-          console.error('[getFearAndGreedIndex] Direct API request timed out');
-        } else if (directError.message.includes('CORS') || directError.message.includes('cross-origin')) {
-          console.error('[getFearAndGreedIndex] CORS error - direct API blocked by browser');
-        } else if (directError.message.includes('fetch')) {
-          console.error('[getFearAndGreedIndex] Network error - check internet connection');
-        }
-      }
-      
-      // Return fallback data on error
-      console.log('[getFearAndGreedIndex] Using static fallback data');
-      return {
-        success: true,
-        data: {
-          data: [{
-            value: '50',
-            value_classification: 'Neutral (Fallback)',
-            timestamp: Math.floor(Date.now() / 1000).toString(),
-            time_until_update: '0'
-          }]
-        }
-      };
-    }
-  },
+   async getFearAndGreedIndex() {
+     try {
+       // Call direct API first (more reliable)
+       const controller = new AbortController();
+       const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+       
+       const response = await fetch('https://api.alternative.me/fng/', {
+         signal: controller.signal
+       });
+       
+       clearTimeout(timeoutId);
+       
+       if (!response.ok) {
+         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+       }
+       
+       const data = await response.json();
+       
+       if (data && data.data && data.data.length > 0) {
+         const fngData = data.data[0];
+         
+         return {
+           success: true,
+           data: {
+             data: [{
+               value: fngData.value,
+               value_classification: fngData.value_classification,
+               timestamp: fngData.timestamp,
+               time_until_update: fngData.time_until_update
+             }]
+           }
+         };
+       } else {
+         throw new Error('Invalid response format from direct API');
+       }
+     } catch (error) {
+       // Try proxy server as fallback
+       try {
+         const controller = new AbortController();
+         const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout for proxy
+         
+         const response = await fetch('http://localhost:3003/api/fearAndGreed', {
+           method: 'GET',
+           headers: {
+             'Content-Type': 'application/json',
+           },
+           signal: controller.signal
+         });
+         
+         clearTimeout(timeoutId);
+         
+         if (!response.ok) {
+           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+         }
+         
+         const proxyResponse = await response.json();
+         
+         if (proxyResponse.success && proxyResponse.data) {
+           return proxyResponse;
+         } else {
+           throw new Error('Proxy server returned invalid response');
+         }
+       } catch (proxyError) {
+         throw new Error('Failed to fetch Fear & Greed Index from proxy server');
+       }
+     }
+   },
 
   async liveTradingAPI(params) {
     // Make actual HTTP calls to BinanceLocal proxy server
     const { action, tradingMode, proxyUrl, ...otherParams } = params;
     
-    console.log(`[liveTradingAPI] Called with params:`, { action, tradingMode, proxyUrl });
     
     if (!proxyUrl) {
       throw new Error('Proxy URL is required for liveTradingAPI calls');
@@ -469,6 +705,41 @@ export const functions = {
             tradingMode: tradingMode || 'testnet',
             ...otherParams
           };
+          break;
+          
+        case 'getAllOrders':
+          endpoint = `${proxyUrl}/api/binance/allOrders?tradingMode=${tradingMode || 'testnet'}&symbol=${otherParams.symbol}&limit=${otherParams.limit || 10}`;
+          method = 'GET';
+          break;
+          
+        case 'getOrder':
+          endpoint = `${proxyUrl}/api/binance/order?tradingMode=${tradingMode || 'testnet'}&symbol=${otherParams.symbol}&orderId=${otherParams.orderId}`;
+          method = 'GET';
+          break;
+          
+        case 'getSymbolPriceTicker':
+          // Support both single symbol and multiple symbols using centralized cache
+          if (otherParams.symbols && Array.isArray(otherParams.symbols)) {
+            // Multiple symbols - use batch cache
+            const priceMap = await priceCacheService.getBatchPrices(otherParams.symbols, tradingMode || 'testnet');
+            const prices = Array.from(priceMap.entries()).map(([symbol, price]) => ({
+              symbol: symbol,
+              price: price.toString()
+            }));
+            return { success: true, data: prices };
+          } else if (otherParams.symbol) {
+            // Single symbol - use cache
+            const price = await priceCacheService.getPrice(otherParams.symbol, tradingMode || 'testnet');
+            return { 
+              success: true, 
+              data: { 
+                symbol: otherParams.symbol, 
+                price: price.toString() 
+              } 
+            };
+          } else {
+            throw new Error('Either symbol or symbols parameter is required for getSymbolPriceTicker');
+          }
           break;
           
         default:
@@ -504,12 +775,38 @@ export const functions = {
   },
 
   async updatePerformanceSnapshot(params) {
-    // Real performance snapshot update via local API
-    const response = await apiRequest('/updatePerformanceSnapshot', {
-      method: 'POST',
-      body: JSON.stringify(params)
-    });
-    return response;
+    // Use local implementation instead of API call
+    console.log('[liveTradingAPI] 🚀 Calling local updatePerformanceSnapshot with params:', params);
+    try {
+      const result = await localUpdatePerformanceSnapshot(params);
+      console.log('[liveTradingAPI] ✅ Local updatePerformanceSnapshot completed:', result);
+      return { success: true, data: result };
+    } catch (error) {
+      console.error('[liveTradingAPI] ❌ Local updatePerformanceSnapshot failed:', error);
+      return { success: false, error: error.message };
+    }
+  },
+
+  // Initialize price cache with common symbols
+  async initializePriceCache() {
+    const commonSymbols = [
+      'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'XRPUSDT', 'DOTUSDT',
+      'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT', 'LINKUSDT', 'UNIUSDT', 'LTCUSDT',
+      'ATOMUSDT', 'XLMUSDT', 'ALGOUSDT', 'VETUSDT', 'FILUSDT', 'TRXUSDT', 'ETCUSDT'
+    ];
+    
+    try {
+      console.log('[localClient] 🚀 Initializing price cache with common symbols');
+      await priceCacheService.preloadCommonSymbols(commonSymbols, 'testnet');
+      console.log('[localClient] ✅ Price cache initialized successfully');
+    } catch (error) {
+      console.error('[localClient] ❌ Failed to initialize price cache:', error);
+    }
+  },
+
+  // Get price cache metrics
+  getPriceCacheMetrics() {
+    return priceCacheService.getMetrics();
   },
 
   async fetchKlineData(params) {
@@ -650,7 +947,7 @@ export const functions = {
 
   async scannerSessionManager(params) {
     // Mock implementation for scanner session management with persistent state
-    console.log(`[scannerSessionManager] called with:`, params);
+    // console.log(`[scannerSessionManager] called with:`, params);
     
     // Handle object parameter (new format)
     const action = params?.action || 'unknown';
@@ -776,50 +1073,47 @@ export const functions = {
     }
   },
 
-  async testBinanceKeys(params) {
-    // Test Binance API keys by making a request to the proxy server
-    const { mode, proxyUrl } = params;
-    
-    console.log(`[testBinanceKeys] Testing ${mode} keys with proxy: ${proxyUrl}`);
-    
-    try {
-      // Make a test request to the proxy server to verify API keys
-      const response = await fetch(`${proxyUrl}/api/binance/account?tradingMode=${mode}`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        }
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        return {
-          success: true,
-          data: {
-            success: true,
-            message: `${mode.charAt(0).toUpperCase() + mode.slice(1)} API keys are valid and working`
-          }
-        };
-      } else {
-        throw new Error(data.error || 'API key test failed');
-      }
-    } catch (error) {
-      console.error(`[testBinanceKeys] Error testing ${mode} keys:`, error.message);
-      return {
-        success: false,
-        data: {
-          success: false,
-          message: error.message
-        }
-      };
-    }
-  },
+   async testBinanceKeys(params) {
+     // Test Binance API keys by making a request to the proxy server
+     const { mode, proxyUrl } = params;
+     
+     try {
+       // Make a test request to the proxy server to verify API keys
+       const response = await fetch(`${proxyUrl}/api/binance/account?tradingMode=${mode}`, {
+         method: 'GET',
+         headers: {
+           'Content-Type': 'application/json',
+         }
+       });
+       
+       if (!response.ok) {
+         const errorData = await response.json().catch(() => ({}));
+         throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+       }
+       
+       const data = await response.json();
+       
+       if (data.success) {
+         return {
+           success: true,
+           data: {
+             success: true,
+             message: `${mode.charAt(0).toUpperCase() + mode.slice(1)} API keys are valid and working`
+           }
+         };
+       } else {
+         throw new Error(data.error || 'API key test failed');
+       }
+     } catch (error) {
+       return {
+         success: false,
+         data: {
+           success: false,
+           message: error.message
+         }
+       };
+     }
+   },
 
   async archiveOldTrades(params = {}) {
     // Real implementation of archiveOldTrades function
@@ -1048,9 +1342,9 @@ export const localClient = {
     MarketAlert,
     ScannerSession,
     ScannerStats,
-    LiveWalletState,
     LivePosition,
     WalletSummary,
+    CentralWalletState,
     TradingSignal,
     SignalPerformance,
     OptedOutCombination

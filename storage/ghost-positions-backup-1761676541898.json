@@ -1,0 +1,677 @@
+[
+  {
+    "trade_id": "pos_1761675228492_9d6eyid64-ghost-purge",
+    "strategy_name": "Raging Dragon of ETHUSDT-MACDIA",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 4142.78,
+    "exit_price": 4142.78,
+    "quantity_crypto": "0.02550000",
+    "entry_value_usdt": 105.64089,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -105.64089,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T18:13:48.492Z",
+    "exit_timestamp": "2025-10-28T18:20:42.298Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bearish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "ADX",
+        "value": "Bearish Directional Movement",
+        "strength": 47
+      },
+      {
+        "type": "PSAR",
+        "value": "Uptrending",
+        "strength": 57
+      },
+      {
+        "type": "DEMA",
+        "value": "Price Above DEMA",
+        "strength": 46
+      }
+    ],
+    "combined_strength": 430.2,
+    "conviction_score": 62.16476276568713,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.164762765687126,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.21"
+      },
+      "signalStrength": {
+        "score": 32,
+        "details": "Avg Strength: 55.00, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8263620425099402,
+    "atr_value": 20.269817648887944,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 56,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T18:20:42.298Z",
+    "updated_date": "2025-10-28T18:20:42.298Z"
+  },
+  {
+    "trade_id": "pos_1761675235154_nus7sezt5-ghost-purge",
+    "strategy_name": "Furious Tornado of ETHUSDT-MACDMA",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 4142.78,
+    "exit_price": 4142.78,
+    "quantity_crypto": "0.02550000",
+    "entry_value_usdt": 105.64089,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -105.64089,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T18:13:55.154Z",
+    "exit_timestamp": "2025-10-28T18:20:42.298Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "MA200",
+        "value": "bearish_rejection",
+        "strength": 85
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bearish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "ADX",
+        "value": "Bearish Directional Movement",
+        "strength": 47
+      },
+      {
+        "type": "DEMA",
+        "value": "Price Above DEMA",
+        "strength": 46
+      }
+    ],
+    "combined_strength": 493.59999999999997,
+    "conviction_score": 64.40476276568712,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.164762765687126,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.21"
+      },
+      "signalStrength": {
+        "score": 34.239999999999995,
+        "details": "Avg Strength: 60.60, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8263620425099402,
+    "atr_value": 20.269817648887944,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 56,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T18:20:42.298Z",
+    "updated_date": "2025-10-28T18:20:42.298Z"
+  },
+  {
+    "trade_id": "pos_1761675242427_b2i6mvq8v-ghost-purge",
+    "strategy_name": "Nuclear Knight of ETHUSDT-MACDEM",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 4142.78,
+    "exit_price": 4142.78,
+    "quantity_crypto": "0.02550000",
+    "entry_value_usdt": 105.64089,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -105.64089,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T18:14:02.427Z",
+    "exit_timestamp": "2025-10-28T18:20:42.298Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Bullish EMA Alignment",
+        "strength": 46
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bearish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "PSAR",
+        "value": "Uptrending",
+        "strength": 57
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Above TEMA",
+        "strength": 48
+      }
+    ],
+    "combined_strength": 459.80000000000007,
+    "conviction_score": 62.24476276568713,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.164762765687126,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.21"
+      },
+      "signalStrength": {
+        "score": 32.08,
+        "details": "Avg Strength: 55.20, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8263620425099402,
+    "atr_value": 20.269817648887944,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 56,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T18:20:42.298Z",
+    "updated_date": "2025-10-28T18:20:42.298Z"
+  },
+  {
+    "trade_id": "pos_1761675325008_d2tzkpner-ghost-purge",
+    "strategy_name": "Cyber Assassin of BNBUSDT-MACDEM",
+    "symbol": "BNB/USDT",
+    "direction": "long",
+    "entry_price": 1145.09,
+    "exit_price": 1145.09,
+    "quantity_crypto": "0.09800000",
+    "entry_value_usdt": 112.21882,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -112.21882,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T18:15:25.008Z",
+    "exit_timestamp": "2025-10-28T18:20:42.298Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Price Above EMA",
+        "strength": 38
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bullish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "ADX",
+        "value": "Bearish DI Crossover",
+        "strength": 75
+      },
+      {
+        "type": "PSAR",
+        "value": "Uptrending",
+        "strength": 57
+      }
+    ],
+    "combined_strength": 479.40000000000003,
+    "conviction_score": 63.764762765687124,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.164762765687126,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.21"
+      },
+      "signalStrength": {
+        "score": 33.599999999999994,
+        "details": "Avg Strength: 59.00, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8263620425099402,
+    "atr_value": 4.33104900970445,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 63,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T18:20:42.298Z",
+    "updated_date": "2025-10-28T18:20:42.298Z"
+  },
+  {
+    "trade_id": "pos_1761675332075_sv5245jsv-ghost-purge",
+    "strategy_name": "Raging Falcon of BNBUSDT-MACDEM",
+    "symbol": "BNB/USDT",
+    "direction": "long",
+    "entry_price": 1145.09,
+    "exit_price": 1145.09,
+    "quantity_crypto": "0.09800000",
+    "entry_value_usdt": 112.21882,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -112.21882,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T18:15:32.075Z",
+    "exit_timestamp": "2025-10-28T18:20:42.298Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Bullish EMA Alignment",
+        "strength": 47
+      },
+      {
+        "type": "MA200",
+        "value": "Bearish MA Alignment",
+        "strength": 55
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bullish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "ADX",
+        "value": "Bearish DI Crossover",
+        "strength": 75
+      }
+    ],
+    "combined_strength": 512.2,
+    "conviction_score": 64.32476276568713,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.164762765687126,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.21"
+      },
+      "signalStrength": {
+        "score": 34.16,
+        "details": "Avg Strength: 60.40, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8263620425099402,
+    "atr_value": 4.33104900970445,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 63,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T18:20:42.298Z",
+    "updated_date": "2025-10-28T18:20:42.298Z"
+  },
+  {
+    "trade_id": "pos_1761675339360_dpi15hx8y-ghost-purge",
+    "strategy_name": "Dark Hurricane of BNBUSDT-MACDMA",
+    "symbol": "BNB/USDT",
+    "direction": "long",
+    "entry_price": 1145.09,
+    "exit_price": 1145.09,
+    "quantity_crypto": "0.09800000",
+    "entry_value_usdt": 112.21882,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -112.21882,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T18:15:39.360Z",
+    "exit_timestamp": "2025-10-28T18:20:42.298Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "MA200",
+        "value": "Price Above MA200",
+        "strength": 43
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bullish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "ADX",
+        "value": "Bearish DI Crossover",
+        "strength": 75
+      },
+      {
+        "type": "PSAR",
+        "value": "Uptrending",
+        "strength": 57
+      }
+    ],
+    "combined_strength": 483.1,
+    "conviction_score": 64.16476276568713,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.164762765687126,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.21"
+      },
+      "signalStrength": {
+        "score": 34,
+        "details": "Avg Strength: 60.00, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8263620425099402,
+    "atr_value": 4.33104900970445,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 63,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T18:20:42.298Z",
+    "updated_date": "2025-10-28T18:20:42.298Z"
+  },
+  {
+    "trade_id": "pos_1761675345979_medg50k9v-ghost-purge",
+    "strategy_name": "Brutal Viper of BNBUSDT-MACDEM",
+    "symbol": "BNB/USDT",
+    "direction": "long",
+    "entry_price": 1145.09,
+    "exit_price": 1145.09,
+    "quantity_crypto": "0.09800000",
+    "entry_value_usdt": 112.21882,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -112.21882,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T18:15:45.979Z",
+    "exit_timestamp": "2025-10-28T18:20:42.298Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Price Above EMA",
+        "strength": 38
+      },
+      {
+        "type": "MA200",
+        "value": "Price Above MA200",
+        "strength": 43
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bullish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "PSAR",
+        "value": "Uptrending",
+        "strength": 57
+      }
+    ],
+    "combined_strength": 463.90000000000003,
+    "conviction_score": 61.20476276568712,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.164762765687126,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.21"
+      },
+      "signalStrength": {
+        "score": 31.04,
+        "details": "Avg Strength: 52.60, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8263620425099402,
+    "atr_value": 4.33104900970445,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 63,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T18:20:42.298Z",
+    "updated_date": "2025-10-28T18:20:42.298Z"
+  },
+  {
+    "trade_id": "pos_1761675221281_jr17j5r9m-ghost-purge",
+    "strategy_name": "Nuclear Tornado of ETHUSDT-MACDEM",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 4142.78,
+    "exit_price": 4142.78,
+    "quantity_crypto": "0.02550000",
+    "entry_value_usdt": 105.64089,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -105.64089,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T18:13:41.281Z",
+    "exit_timestamp": "2025-10-28T18:20:42.297Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Bullish EMA Alignment",
+        "strength": 46
+      },
+      {
+        "type": "MA200",
+        "value": "bearish_rejection",
+        "strength": 85
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bearish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Above TEMA",
+        "strength": 48
+      }
+    ],
+    "combined_strength": 523.2,
+    "conviction_score": 64.48476276568712,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.164762765687126,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.21"
+      },
+      "signalStrength": {
+        "score": 34.32,
+        "details": "Avg Strength: 60.80, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8263620425099402,
+    "atr_value": 20.269817648887944,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 56,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T18:20:42.297Z",
+    "updated_date": "2025-10-28T18:20:42.297Z"
+  },
+  {
+    "trade_id": "pos_1761667241943_ptowypcel-ghost-purge",
+    "strategy_name": "Dark Hurricane of BNBUSDT-MACDMA",
+    "symbol": "BNB/USDT",
+    "direction": "long",
+    "entry_price": 1136.23,
+    "exit_price": 1136.23,
+    "quantity_crypto": "0.09100000",
+    "entry_value_usdt": 103.39693,
+    "exit_value_usdt": 0,
+    "pnl_usdt": -103.39693,
+    "pnl_percentage": -100,
+    "entry_timestamp": "2025-10-28T16:00:41.944Z",
+    "exit_timestamp": "2025-10-28T17:30:46.392Z",
+    "exit_reason": "ghost_position_purge",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70
+      },
+      {
+        "type": "MA200",
+        "value": "Bearish MA Alignment",
+        "strength": 55
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bullish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "ADX",
+        "value": "Bearish Directional Movement",
+        "strength": 65
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 54
+      }
+    ],
+    "combined_strength": 485.2,
+    "conviction_score": 63.94304123417123,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 30.02304123417123,
+        "details": "Regime: uptrend, Strategy Dominant: uptrend, Multiplier: 1.20"
+      },
+      "signalStrength": {
+        "score": 33.92,
+        "details": "Avg Strength: 59.80, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 0,
+        "details": "Squeeze indicator not available"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1,
+    "market_regime": "uptrend",
+    "regime_confidence": 0.8036865974673969,
+    "atr_value": 4.742514795010968,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "50",
+    "fear_greed_classification": "Neutral",
+    "lpm_score": 54,
+    "total_fees_usdt": 0,
+    "created_date": "2025-10-28T17:30:46.392Z",
+    "updated_date": "2025-10-28T17:30:46.392Z"
+  }
+]

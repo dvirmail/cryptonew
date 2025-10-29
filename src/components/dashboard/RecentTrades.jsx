@@ -70,8 +70,8 @@ export default function RecentTrades({ trades = [] }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {trades.map((trade) => (
-              <TableRow key={trade.id || trade.trade_id} className="border-b-gray-200 dark:border-b-gray-700">
+            {trades.map((trade, index) => (
+              <TableRow key={`${trade.id || trade.trade_id || 'unknown'}-${index}`} className="border-b-gray-200 dark:border-b-gray-700">
                 <TableCell className="font-medium text-gray-900 dark:text-white">{trade.symbol || trade.pair || 'N/A'}</TableCell>
                 <TableCell>
                   <Badge 

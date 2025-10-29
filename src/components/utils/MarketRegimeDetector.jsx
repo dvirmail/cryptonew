@@ -156,15 +156,6 @@ class MarketRegimeDetector {
         const bbw = this._getValueAt('bbw', targetIndex);
         const currentPrice = this.klines[targetIndex]?.close;
         
-        /*console.log(`[REGIME_CALC] 📊 Latest indicator values:`, {
-            currentPrice: currentPrice?.toFixed(2),
-            adx: adx?.toFixed(2),
-            ema: ema?.toFixed(2),
-            sma: sma?.toFixed(2),
-            macd: macd ? `${macd.macd?.toFixed(4)} / ${macd.signal?.toFixed(4)}` : 'N/A',
-            rsi: rsi?.toFixed(2),
-            bbw: bbw?.toFixed(4)
-        });*/
 
         // Initialize scores
         let uptrendScore = 0;
@@ -308,7 +299,7 @@ class MarketRegimeDetector {
   }
 
   _calculateConfidence(regime) {
-      //console.log(`[REGIME_CALC] 🎯 Calculating confidence for ${regime.toUpperCase()}...`);
+      // console.log(`[regime_debug] 🎯 Calculating confidence for ${regime.toUpperCase()}...`);
       
       const latest = this.klines.length - 1; // Assuming latest candle
       const adxData = this._getLatestValue('adx');
@@ -318,19 +309,23 @@ class MarketRegimeDetector {
       const macd = macdData && typeof macdData.macd === 'number' && typeof macdData.signal === 'number' ? macdData : undefined;
       const bbw = this._getLatestValue('bbw');
 
+
       let confidence = 0.5; // Base confidence
+      // console.log(`[regime_debug] 🎯 Base confidence: ${(confidence * 100).toFixed(1)}%`);
 
       // ADX contribution to confidence
       if (adx !== undefined) {
           if (adx > 25) {
               const adxConfidence = Math.min(0.3, (adx - 25) / 100);
               confidence += adxConfidence;
-              //console.log(`[REGIME_CALC] 💪 ADX adds confidence: +${(adxConfidence * 100).toFixed(1)}% (ADX: ${adx.toFixed(2)})`);
+              // console.log(`[regime_debug] 💪 ADX adds confidence: +${(adxConfidence * 100).toFixed(1)}% (ADX: ${adx.toFixed(2)}) - Total: ${(confidence * 100).toFixed(1)}%`);
           } else {
               const adxPenalty = Math.min(0.2, (25 - adx) / 100);
               confidence -= adxPenalty;
-              //console.log(`[REGIME_CALC] 😴 ADX reduces confidence: -${(adxPenalty * 100).toFixed(1)}% (ADX: ${adx.toFixed(2)})`);
+              // console.log(`[regime_debug] 😴 ADX reduces confidence: -${(adxPenalty * 100).toFixed(1)}% (ADX: ${adx.toFixed(2)}) - Total: ${(confidence * 100).toFixed(1)}%`);
           }
+      } else {
+          // console.log(`[regime_debug] ⚠️ ADX data not available`);
       }
 
       // MACD contribution
@@ -338,7 +333,9 @@ class MarketRegimeDetector {
           const macdStrength = Math.abs(macd.macd - macd.signal);
           const macdConfidence = Math.min(0.15, macdStrength * 10);
           confidence += macdConfidence;
-          //console.log(`[REGIME_CALC] 📈 MACD adds confidence: +${(macdConfidence * 100).toFixed(1)}% (strength: ${macdStrength.toFixed(4)})`);
+          // console.log(`[regime_debug] 📈 MACD adds confidence: +${(macdConfidence * 100).toFixed(1)}% (strength: ${macdStrength.toFixed(4)}) - Total: ${(confidence * 100).toFixed(1)}%`);
+      } else {
+          // console.log(`[regime_debug] ⚠️ MACD data not available`);
       }
 
       // RSI extremes add confidence for trending regimes
@@ -346,8 +343,12 @@ class MarketRegimeDetector {
           if ((regime === 'uptrend' && rsi > 60) || (regime === 'downtrend' && rsi < 40)) {
               const rsiConfidence = Math.min(0.1, Math.abs(rsi - 50) / 500);
               confidence += rsiConfidence;
-              //console.log(`[REGIME_CALC] 🎯 RSI supports regime: +${(rsiConfidence * 100).toFixed(1)}% (RSI: ${rsi.toFixed(2)})`);
+              // console.log(`[regime_debug] 🎯 RSI supports regime: +${(rsiConfidence * 100).toFixed(1)}% (RSI: ${rsi.toFixed(2)}) - Total: ${(confidence * 100).toFixed(1)}%`);
+          } else {
+              // console.log(`[regime_debug] 🎯 RSI doesn't support regime (RSI: ${rsi.toFixed(2)}, regime: ${regime})`);
           }
+      } else {
+          // console.log(`[regime_debug] ⚠️ RSI data not available or regime not trending`);
       }
 
       // Bollinger Band Width
@@ -355,18 +356,22 @@ class MarketRegimeDetector {
           if (regime === 'ranging' && bbw < 0.03) {
               const bbwConfidence = Math.min(0.1, (0.03 - bbw) * 2);
               confidence += bbwConfidence;
-              //console.log(`[REGIME_CALC] 🤏 Low BBW supports ranging: +${(bbwConfidence * 100).toFixed(1)}% (BBW: ${bbw.toFixed(4)})`);
+              // console.log(`[regime_debug] 🤏 Low BBW supports ranging: +${(bbwConfidence * 100).toFixed(1)}% (BBW: ${bbw.toFixed(4)}) - Total: ${(confidence * 100).toFixed(1)}%`);
           } else if ((regime === 'uptrend' || regime === 'downtrend') && bbw > 0.04) {
               const bbwConfidence = Math.min(0.1, bbw * 2);
               confidence += bbwConfidence;
-              //console.log(`[REGIME_CALC] 🌪️ High BBW supports trending: +${(bbwConfidence * 100).toFixed(1)}% (BBW: ${bbw.toFixed(4)})`);
+              // console.log(`[regime_debug] 🌪️ High BBW supports trending: +${(bbwConfidence * 100).toFixed(1)}% (BBW: ${bbw.toFixed(4)}) - Total: ${(confidence * 100).toFixed(1)}%`);
+          } else {
+              // console.log(`[regime_debug] 🤏 BBW doesn't support regime (BBW: ${bbw.toFixed(4)}, regime: ${regime})`);
           }
+      } else {
+          // console.log(`[regime_debug] ⚠️ BBW data not available`);
       }
 
       // Ensure confidence stays within bounds
       confidence = Math.max(0.1, Math.min(1.0, confidence));
       
-      //console.log(`[REGIME_CALC] 🎯 Final confidence: ${(confidence * 100).toFixed(1)}%`);
+      // console.log(`[regime_debug] 🎯 Final confidence: ${(confidence * 100).toFixed(1)}%`);
       
       return confidence;
   }
@@ -399,7 +404,7 @@ class MarketRegimeDetector {
         this.regimeHistory.push({
             index: targetIndex,
             regime: regime,
-            confidence: confidence * 100, // Convert to 0-100 for consistency with existing confirmation logic
+            confidence: confidence, // Keep as decimal (0-1) for consistency
             timestamp: this.klines[targetIndex]?.timestamp || Date.now()
         });
 
@@ -447,18 +452,11 @@ class MarketRegimeDetector {
             }
         }
         
-        /*console.log(`[REGIME_MAIN] 🎯 Complete regime analysis result:`, {
-            regime: confirmationResult.regime?.toUpperCase(),
-            confidence: `${confirmationResult.confidence?.toFixed(1)}%`, // confidence is 0-100 from _determineConfirmedRegime
-            isConfirmed: confirmationResult.isConfirmed,
-            consecutivePeriods: confirmationResult.streakCount,
-            confirmationThreshold: this.confirmationRequired
-        });*/
 
         return {
             regime: confirmationResult.regime,
-            confidence: confirmationResult.confidence, // This is already 0-100 from _determineConfirmedRegime
-            confidencePct: confirmationResult.confidence, // For compatibility
+            confidence: confirmationResult.confidence, // This is now 0-1 from _determineConfirmedRegime
+            confidencePct: confirmationResult.confidence * 100, // Convert to percentage for compatibility
             isConfirmed: confirmationResult.isConfirmed,
             consecutivePeriods: confirmationResult.streakCount,
             confirmationThreshold: this.confirmationRequired,
@@ -469,8 +467,8 @@ class MarketRegimeDetector {
         this.addLog(`[REGIME_ERROR] Failed to detect regime: ${error.message}`, 'error'); // Using addLog here
         return {
             regime: 'neutral',
-            confidence: 50, // Default to 50 for 0-100 scale
-            confidencePct: 50,
+            confidence: 0.5, // Default to 0.5 for 0-1 scale
+            confidencePct: 50, // Convert to percentage for compatibility
             isConfirmed: false,
             consecutivePeriods: 0,
             confirmationThreshold: this.confirmationRequired,
@@ -503,13 +501,6 @@ class MarketRegimeDetector {
 
     if (this.__devDebug) {
       try {
-        /*console.log('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] Streak', {
-          streakRegime,
-          streakCount,
-          needed: N,
-          lastIndex: this.regimeHistory[len - 1]?.index ?? (len - 1),
-          indices: streakIndices.slice(0, N)
-        });*/
       } catch (_) {}
     }
 
@@ -522,11 +513,6 @@ class MarketRegimeDetector {
 
     if (this.__devDebug) {
       try {
-        /*console.log('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] Recent window', {
-          size: window.length,
-          required: N,
-          window: windowPayload
-        });*/
       } catch (_) {}
     }
 
@@ -536,12 +522,6 @@ class MarketRegimeDetector {
       if (latestRegime) {
         if (this.__devDebug) {
           try {
-            /*console.log('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] Unconfirmed (insufficient history)', {
-              regime: latestRegime.regime,
-              confidencePct: typeof latestRegime.confidence === 'number' ? Number(latestRegime.confidence.toFixed(2)) : latestRegime.confidence,
-              historyLen: len,
-              needed: N
-            });*/
           } catch (_) {}
         }
         return {
@@ -551,7 +531,7 @@ class MarketRegimeDetector {
           streakCount: streakCount // Return the actual streak count
         };
       } else {
-        return { regime: 'Neutral', confidence: 50, isConfirmed: false, streakCount: 0 };
+        return { regime: 'Neutral', confidence: 0.5, isConfirmed: false, streakCount: 0 };
       }
     }
 
@@ -561,25 +541,14 @@ class MarketRegimeDetector {
 
     if (isConsistent) {
       const averageConfidence = window.reduce((sum, r) => sum + (typeof r.confidence === 'number' ? r.confidence : 0), 0) / window.length;
-      const boostedConfidence = Math.min(100, averageConfidence + 10);
+      const boostedConfidence = Math.min(1.0, averageConfidence + 0.1);
 
       this.confirmedRegime = firstRegime;
       this.confirmedConfidence = boostedConfidence;
 
       if (this.__devDebug) {
         try {
-          /*console.log('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] CONSISTENT_WINDOW_REACHED', {
-            regime: firstRegime,
-            averageConfidencePct: Number(averageConfidence.toFixed(2)),
-            boostedConfidencePct: Number(boostedConfidence.toFixed(2)),
-            window: windowPayload
-          });*/
           if (streakCount >= N) {
-            /*console.log('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] 5_CONSECUTIVE_REACHED', {
-              regime: firstRegime,
-              streakCount,
-              indices: streakIndices.slice(0, N)
-            });*/
           }
         } catch (_) {}
       }
@@ -599,18 +568,12 @@ class MarketRegimeDetector {
 
       if (this.__devDebug) {
         try {
-          /*console.log('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] INCONSISTENT_WINDOW', {
-            required: N,
-            counts,
-            latestRegime: latest?.regime,
-            latestConfidencePct: typeof latest?.confidence === 'number' ? Number(latest.confidence.toFixed(2)) : latest?.confidence
-          });*/
         } catch (_) {}
       }
 
       return {
         regime: latest?.regime ?? 'Neutral',
-        confidence: latest?.confidence ?? 50,
+        confidence: latest?.confidence ?? 0.5,
         isConfirmed: false,
         streakCount: streakCount // Return the actual streak count
       };
@@ -648,24 +611,11 @@ try {
       const __origGetRegime = P.getRegime;
       P.getRegime = function(...args) { // Use ...args to capture potential future index parameter if it's re-added
         try {
-          /*console.log('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] getRegime entered (wrapper)', {
-            indexRequested: args[0] ?? -1, // Log args[0] if it exists
-            klinesLen: Array.isArray(this?.klines) ? this.klines.length : null
-          });*/
         } catch (_) {}
 
         const res = __origGetRegime.apply(this, args);
 
         try {
-          /*console.log('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] getRegime final (wrapper)', {
-            indexResolved: args[0] ?? -1,
-            regime: res?.regime,
-            confidencePct: typeof res?.confidence === 'number'
-              ? Number(res.confidence.toFixed(2))
-              : res?.confidence,
-            isConfirmed: !!res?.isConfirmed,
-            hasDetails: !!res?.details
-          });*/
         } catch (_) {}
 
         return res;
@@ -678,5 +628,118 @@ try {
   console.warn('[components/utils/MarketRegimeDetector.js] [CONF_DEBUG] Patch failed:', e?.message);
 }
 // ========== END RUNTIME CONF_DEBUG INSTRUMENTATION ==========
+
+/**
+ * Test function to debug market regime detection
+ */
+MarketRegimeDetector.testRegimeDetection = async function() {
+    console.log('🧪 [REGIME_DETECTION_TEST] Starting market regime detection test...');
+    
+    try {
+        console.log('📊 [REGIME_DETECTION_TEST] Testing current regime detection...');
+        
+        const result = this.getRegime();
+        
+        console.log('🎯 [REGIME_DETECTION_TEST] Detection result:', {
+            regime: result.regime,
+            confidence: result.confidence,
+            confidencePct: result.confidencePct,
+            indicators: result.indicators,
+            history: result.history
+        });
+        
+        // Test confidence calculation
+        console.log('🔍 [REGIME_DETECTION_TEST] Testing confidence calculation...');
+        const confidenceResult = this._calculateConfidence(result.regime, result.indicators);
+        
+        console.log('📈 [REGIME_DETECTION_TEST] Confidence calculation:', {
+            regime: result.regime,
+            confidence: confidenceResult,
+            indicators: result.indicators
+        });
+        
+        return result;
+        
+    } catch (error) {
+        console.error('❌ [REGIME_DETECTION_TEST] Error:', error);
+        return null;
+    }
+};
+
+// Global test function for browser console
+window.testRegimeDetection = async () => {
+    console.log('🧪 [REGIME_DETECTION_TEST] Creating MarketRegimeDetector instance...');
+    const detector = new MarketRegimeDetector();
+    return await MarketRegimeDetector.testRegimeDetection.call(detector);
+};
+
+// Test function to check current production regime
+window.checkCurrentRegime = () => {
+    console.log('🔍 [CURRENT_REGIME_CHECK] Checking current regime detection...');
+    
+    // Check if we have access to the scanner service
+    if (window.scannerService) {
+        const currentRegime = window.scannerService.state.marketRegimeState;
+        console.log('📊 [CURRENT_REGIME_CHECK] Current regime state:', currentRegime);
+        
+        if (currentRegime) {
+            console.log('🎯 [CURRENT_REGIME_CHECK] Regime details:', {
+                regime: currentRegime.regime,
+                confidence: currentRegime.confidence,
+                confidencePct: currentRegime.confidencePct,
+                lastUpdate: currentRegime.lastUpdate
+            });
+        } else {
+            console.log('⚠️ [CURRENT_REGIME_CHECK] No regime state found');
+        }
+    } else {
+        console.log('❌ [CURRENT_REGIME_CHECK] Scanner service not available');
+        console.log('🔍 [CURRENT_REGIME_CHECK] Available window objects:', Object.keys(window).filter(key => key.includes('scanner') || key.includes('Scanner')));
+    }
+    
+    // Check localStorage for regime data
+    try {
+        const storedState = localStorage.getItem('cryptoSentinelScannerState');
+        if (storedState) {
+            const parsed = JSON.parse(storedState);
+            console.log('💾 [CURRENT_REGIME_CHECK] Stored regime state:', parsed.marketRegimeState);
+        } else {
+            console.log('💾 [CURRENT_REGIME_CHECK] No stored regime state found');
+        }
+    } catch (error) {
+        console.error('❌ [CURRENT_REGIME_CHECK] Error reading localStorage:', error);
+    }
+};
+
+// Test function to force refresh regime widget
+window.forceRefreshRegimeWidget = () => {
+    console.log('🔄 [REGIME_WIDGET_REFRESH] Forcing regime widget refresh...');
+    
+    try {
+        const scannerService = window.scannerService || window.getAutoScannerService?.();
+        
+        if (scannerService) {
+            console.log('📊 [REGIME_WIDGET_REFRESH] Current state before refresh:', scannerService.getState().marketRegime);
+            
+            // Force a regime calculation
+            scannerService._updateMarketRegime().then(() => {
+                console.log('✅ [REGIME_WIDGET_REFRESH] Regime updated, new state:', scannerService.getState().marketRegime);
+                
+                // Notify subscribers
+                scannerService.notifySubscribers();
+                console.log('📢 [REGIME_WIDGET_REFRESH] Subscribers notified');
+                
+            }).catch(error => {
+                console.error('❌ [REGIME_WIDGET_REFRESH] Error updating regime:', error);
+            });
+            
+        } else {
+            console.log('❌ [REGIME_WIDGET_REFRESH] Scanner service not available');
+        }
+        
+    } catch (error) {
+        console.error('❌ [REGIME_WIDGET_REFRESH] Error:', error);
+    }
+};
 
 export default MarketRegimeDetector;

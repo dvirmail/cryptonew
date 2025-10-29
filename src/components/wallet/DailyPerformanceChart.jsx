@@ -206,6 +206,17 @@ export default function DailyPerformanceChart({
   const { isLiveMode } = useTradingMode();
   const { loading: walletLoading } = useWallet();
 
+  // Debug logging for props
+  console.log('[DailyPerformanceChart] 🔍 Props received:', {
+    walletLoading,
+    dailyPerformanceHistoryLength: dailyPerformanceHistory?.length || 0,
+    hourlyPerformanceHistoryLength: hourlyPerformanceHistory?.length || 0,
+    dailyPerformanceHistorySample: dailyPerformanceHistory?.slice(0, 2),
+    hourlyPerformanceHistorySample: hourlyPerformanceHistory?.slice(0, 2),
+    walletSummary: walletSummary ? 'present' : 'null',
+    timestamp: new Date().toISOString()
+  });
+
   const dailyHP = React.useMemo(
     () => (Array.isArray(dailyPerformanceHistory) ? dailyPerformanceHistory : []),
     [dailyPerformanceHistory]
@@ -214,6 +225,15 @@ export default function DailyPerformanceChart({
     () => (Array.isArray(hourlyPerformanceHistory) ? hourlyPerformanceHistory : []),
     [hourlyPerformanceHistory]
   );
+
+  // Debug logging for processed data
+  console.log('[DailyPerformanceChart] 🔍 Processed data:', {
+    dailyHPLength: dailyHP?.length || 0,
+    hourlyHPLength: hourlyHP?.length || 0,
+    dailyHPSample: dailyHP?.slice(0, 2),
+    hourlyHPSample: hourlyHP?.slice(0, 2),
+    timestamp: new Date().toISOString()
+  });
 
   const modeTrades = useMemo(() => {
     const mode = isLiveMode ? 'live' : 'testnet';
@@ -250,8 +270,36 @@ export default function DailyPerformanceChart({
       ((timeframe === '24h' && (hourlyHP?.length || 0) > 0) ||
        ((timeframe === '7d' || timeframe === '30d' || timeframe === 'lifetime') && (dailyHP?.length || 0) > 0));
     
+    // Debug logging to help troubleshoot data loading
+    console.log('[DailyPerformanceChart] Data readiness check:', {
+      walletLoading,
+      timeframe,
+      dailyHPLength: dailyHP?.length || 0,
+      hourlyHPLength: hourlyHP?.length || 0,
+      ready,
+      dailyHP: dailyHP?.slice(0, 2), // First 2 records for debugging
+      hourlyHP: hourlyHP?.slice(0, 2) // First 2 records for debugging
+    });
+    
     return ready;
   }, [walletLoading, timeframe, dailyHP.length, hourlyHP.length]);
+
+  // Add a timeout mechanism to prevent infinite loading
+  const [loadingTimeout, setLoadingTimeout] = useState(false);
+  
+  useEffect(() => {
+    if (walletLoading) {
+      setLoadingTimeout(false);
+      const timeout = setTimeout(() => {
+        console.warn('[DailyPerformanceChart] ⚠️ Loading timeout reached - showing no data state');
+        setLoadingTimeout(true);
+      }, 10000); // 10 second timeout
+      
+      return () => clearTimeout(timeout);
+    } else {
+      setLoadingTimeout(false);
+    }
+  }, [walletLoading]);
 
   const chartData = useMemo(() => {
     
@@ -623,7 +671,7 @@ export default function DailyPerformanceChart({
     );
   };
 
-  const isLoadingForTimeframe = !dataReadyForTimeframe;
+  const isLoadingForTimeframe = !dataReadyForTimeframe && !loadingTimeout;
 
   const chartKey = useMemo(() => {
     return [
@@ -648,7 +696,50 @@ export default function DailyPerformanceChart({
         </CardHeader>
         <CardContent className="pt-4">
           <div className="text-center py-10 text-muted-foreground">
-            <p>Loading performance data...</p>
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+              <p>Loading performance data...</p>
+            </div>
+            <p className="text-xs text-gray-400">
+              {timeframe === '24h' ? 'Fetching hourly data...' : 'Fetching daily data...'}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // If loading timed out, show no data state
+  if (loadingTimeout && !dataReadyForTimeframe) {
+    return (
+      <Card className="bg-white">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5" />
+            Performance History
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-4">
+          <Tabs value={timeframe} onValueChange={onTimeframeChange} className="mb-6">
+            <TabsList className="grid w-full grid-cols-4">
+              <TabsTrigger value="24h">24 Hours</TabsTrigger>
+              <TabsTrigger value="7d">7 Days</TabsTrigger>
+              <TabsTrigger value="30d">30 Days</TabsTrigger>
+              <TabsTrigger value="lifetime">Lifetime</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          
+          <div className="text-center py-10 text-muted-foreground">
+            <TrendingUp className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+            <p className="text-lg font-medium mb-2">No performance data available</p>
+            <p className="text-sm text-gray-500 mb-4">
+              No performance data available for the selected period. Data will appear as trading activity is recorded.
+            </p>
+            <div className="text-xs text-gray-400">
+              <p>• Start trading to generate performance data</p>
+              <p>• Performance data is recorded {timeframe === '24h' ? 'hourly' : 'daily'}</p>
+              <p>• Switch to a different timeframe to see available data</p>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -668,8 +759,26 @@ export default function DailyPerformanceChart({
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-4">
+          <Tabs value={timeframe} onValueChange={onTimeframeChange} className="mb-6">
+            <TabsList className="grid w-full grid-cols-4">
+              <TabsTrigger value="24h">24 Hours</TabsTrigger>
+              <TabsTrigger value="7d">7 Days</TabsTrigger>
+              <TabsTrigger value="30d">30 Days</TabsTrigger>
+              <TabsTrigger value="lifetime">Lifetime</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          
           <div className="text-center py-10 text-muted-foreground">
-            <p>No performance data available for the selected period.</p>
+            <TrendingUp className="h-12 w-12 mx-auto mb-4 text-gray-300" />
+            <p className="text-lg font-medium mb-2">No performance data available</p>
+            <p className="text-sm text-gray-500 mb-4">
+              No performance data available for the selected period. Data will appear as trading activity is recorded.
+            </p>
+            <div className="text-xs text-gray-400">
+              <p>• Start trading to generate performance data</p>
+              <p>• Performance data is recorded {timeframe === '24h' ? 'hourly' : 'daily'}</p>
+              <p>• Switch to a different timeframe to see available data</p>
+            </div>
           </div>
         </CardContent>
       </Card>

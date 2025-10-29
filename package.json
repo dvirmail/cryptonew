@@ -4,13 +4,16 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run api-server\" \"npm run frontend\"",
+    "dev": "caffeinate -dimsu concurrently \"npm run api-server\" \"npm run frontend\"",
     "frontend": "vite",
-    "api-server": "node proxy-server.cjs",
+    "api-server": "./start-proxy.sh",
+    "api-server-direct": "node proxy-server.cjs",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "setup": "npm install && cd ../functions && npm install"
+    "setup": "npm install && cd ../functions && npm install",
+    "kill-proxy": "lsof -ti:3003 | xargs kill -9 2>/dev/null || echo 'No processes found on port 3003'",
+    "check-ports": "lsof -i:3003,5174 || echo 'All ports are free'"
   },
   "dependencies": {
     "@hookform/resolvers": "^4.1.2",
@@ -65,6 +68,7 @@
     "sonner": "^2.0.1",
     "tailwind-merge": "^3.0.2",
     "tailwindcss-animate": "^1.0.7",
+    "uuid": "^13.0.0",
     "vaul": "^1.1.2",
     "zod": "^3.24.2"
   },

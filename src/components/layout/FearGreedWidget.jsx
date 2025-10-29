@@ -3,49 +3,90 @@ import { getAutoScannerService } from '@/components/services/AutoScannerService'
 import { getFearAndGreedIndex } from '@/api/functions';
 
 const FearGreedWidget = () => {
-  const [data, setData] = useState({ value: '50', classification: 'Neutral' });
+  const [data, setData] = useState({ value: '--', classification: 'Loading' });
   const [isLoading, setIsLoading] = useState(true);
   const [showTooltip, setShowTooltip] = useState(false);
 
   useEffect(() => {
-    const fetchFearAndGreedData = async () => {
-      try {
-        console.log('[FearGreedWidget] Fetching Fear & Greed Index independently...');
-        const response = await getFearAndGreedIndex();
-        
-        if (response?.data?.data && response.data.data.length > 0) {
-          const fngData = response.data.data[0];
-          const newData = {
-            value: fngData.value,
-            classification: fngData.value_classification,
-          };
-          setData(newData);
-          setIsLoading(false);
-          console.log('[FearGreedWidget] Successfully loaded Fear & Greed data:', newData);
-        } else {
-          console.warn('[FearGreedWidget] Invalid Fear & Greed response format:', response);
-          setIsLoading(false);
-        }
-      } catch (error) {
-        console.error('[FearGreedWidget] Error fetching Fear & Greed Index:', error);
-        setIsLoading(false);
-      }
-    };
-
-    // Fetch data immediately, don't wait for scanner
-    fetchFearAndGreedData();
-
-    // Also subscribe to scanner updates for periodic refresh
+    // Get initial data from scanner service (no independent API call)
     const scannerService = getAutoScannerService();
+    
+    // Start with loading state
+    setIsLoading(true);
+    
+    // Check if scanner is initialized and has real data
+    if (scannerService.state?.isInitialized && scannerService.state?.fearAndGreedData && scannerService.state.fearAndGreedData.value) {
+      const fngData = scannerService.state.fearAndGreedData;
+      const newData = {
+        value: fngData.value,
+        classification: fngData.value_classification,
+      };
+      setData(newData);
+      setIsLoading(false);
+    } else if (scannerService.state?.fearAndGreedData && scannerService.state.fearAndGreedData.value) {
+      // Even if scanner isn't initialized, show the default data
+      const fngData = scannerService.state.fearAndGreedData;
+      const newData = {
+        value: fngData.value,
+        classification: fngData.value_classification,
+      };
+      setData(newData);
+      setIsLoading(false);
+    } else if (scannerService.state?.isInitialized) {
+      // If scanner is initialized but no F&G data, try to fetch it
+      scannerService._fetchFearAndGreedIndex().catch(error => {
+        console.warn('[FearGreedWidget] Failed to fetch F&G data:', error);
+      });
+    }
+
+    // Subscribe to scanner updates with strict throttling and change detection
+    let lastUpdateTime = 0;
+    let lastKnownValue = null;
+    const UPDATE_THROTTLE_MS = 10000; // Only update every 10 seconds max
+    
+    let hasLoggedWaiting = false;
+    let hasLoggedScannerInit = false;
+    
     const unsubscribe = scannerService.subscribe(() => {
-      const fngData = scannerService.fearAndGreedData;
-      if (fngData) {
+      const now = Date.now();
+      
+      // Check if scanner is now initialized and has real data
+      if (scannerService.state?.isInitialized && scannerService.state?.fearAndGreedData && scannerService.state.fearAndGreedData.value) {
+        const fngData = scannerService.state.fearAndGreedData;
         const newData = {
           value: fngData.value,
           classification: fngData.value_classification,
         };
-        setData(newData);
-        setIsLoading(false);
+        
+        // Update immediately when real data becomes available (no throttling for initial load)
+        if (lastKnownValue !== newData.value) {
+          setData(newData);
+          setIsLoading(false);
+          lastKnownValue = newData.value;
+          lastUpdateTime = now;
+        }
+      } else if (scannerService.state?.fearAndGreedData && scannerService.state.fearAndGreedData.value && !scannerService.state?.isInitialized) {
+        // Show default data even if scanner isn't initialized yet
+        const fngData = scannerService.state.fearAndGreedData;
+        const newData = {
+          value: fngData.value,
+          classification: fngData.value_classification,
+        };
+        
+        if (lastKnownValue !== newData.value) {
+          setData(newData);
+          setIsLoading(false);
+          lastKnownValue = newData.value;
+          lastUpdateTime = now;
+        }
+      } else if (scannerService.state?.isInitialized && !scannerService.state?.fearAndGreedData) {
+        // If scanner is initialized but still no F&G data, try to fetch it periodically
+        if (now - lastUpdateTime > UPDATE_THROTTLE_MS) {
+          scannerService._fetchFearAndGreedIndex().catch(error => {
+            console.warn('[FearGreedWidget] Periodic F&G fetch failed:', error);
+          });
+          lastUpdateTime = now;
+        }
       }
     });
 

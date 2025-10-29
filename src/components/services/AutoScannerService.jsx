@@ -18,725 +18,36 @@ import { initializeWalletManagerService } from './WalletManagerService';
 import HeartbeatService from "./HeartbeatService";
 import SessionManagerService from "./SessionManagerService";
 import TradeArchivingService from "./TradeArchivingService";
+import { functions } from '@/api/localClient';
 import { formatPrice, formatUSDT } from '@/components/utils/priceFormatter';
 import { generateTradeId } from "@/components/utils/id";
 // Assuming updatePerformanceSnapshot is a new function similar to others in '@/api/functions'
 import { updatePerformanceSnapshot } from '@/api/functions';
+import { reconcileWalletState, walletReconciliation, purgeGhostPositions } from '@/api/functions';
 
-const STORAGE_KEY = 'cryptoSentinelScannerState';
+// Import constants from centralized files
+import { MOMENTUM_WEIGHTS, MOMENTUM_WEIGHTS_PERCENTS, MOMENTUM_INTERVALS, MOMENTUM_THRESHOLDS } from './constants/momentumWeights';
+import { STORAGE_KEYS } from './constants/storageKeys';
+import { SCANNER_DEFAULTS, DEFAULT_SCANNER_STATE, DEFAULT_WALLET_STATE, DEFAULT_MARKET_REGIME } from './constants/scannerDefaults';
 
-// === Leading Performance Momentum Weights ===
-// UPDATED allocation per user request:
-// - Unrealized P&L: 40%
-// - Realized P&L:   10%
-// - Market Regime:  15%
-// - Volatility:     10%
-// - Opportunity:    15%
-// - Fear & Greed:   10%
-// - Signal Quality:  0%
-const MOMENTUM_WEIGHTS = {
-    unrealizedPnl: 0.40,
-    realizedPnl: 0.10,
-    regime: 0.15,
-    volatility: 0.10,
-    opportunityRate: 0.15,
-    fearGreed: 0.10,
-    signalQuality: 0.00,
-};
-
-// Keep a handy percent map for UI breakdowns if/when we expose it.
-const MOMENTUM_WEIGHTS_PERCENTS = Object.fromEntries(
-    Object.entries(MOMENTUM_WEIGHTS).map(([k, v]) => [k, Math.round(v * 100)])
-);
+// Import services from centralized files
+import { PerformanceMetricsService } from './services/PerformanceMetricsService';
+import { ConfigurationService } from './services/ConfigurationService';
+import { StrategyManagerService } from './services/StrategyManagerService';
+import { MarketRegimeService } from './services/MarketRegimeService';
+import { PriceManagerService } from './services/PriceManagerService';
+import { ScanEngineService } from './services/ScanEngineService';
+import { WalletStateService } from './services/WalletStateService';
+import { UIStateService } from './services/UIStateService';
+import { LifecycleService } from './services/LifecycleService';
+import { UtilityService } from './services/UtilityService';
 
 /**
- * Manages the calculation and tracking of various performance metrics for the scanner,
- * including performance momentum score and Fear & Greed Index.
- * This class is designed to be instantiated by AutoScannerService and interact with its state.
+ * AutoScannerService - Main scanner service class
+ * 
+ * This is the central service that orchestrates all scanner operations including
+ * strategy management, signal detection, position management, and performance tracking.
  */
-class PerformanceMetricsService {
-    constructor(scannerService) {
-        this.scannerService = scannerService;
-        this.addLog = scannerService.addLog.bind(scannerService);
-        this.notifySubscribers = scannerService.notifySubscribers.bind(scannerService); // For notifying main scanner state changes
-        this.getState = scannerService.getState.bind(scannerService); // Access main scanner state
-
-        // Internal state for this service
-        this.lastMomentumCalculation = 0;
-        this.momentumCalculationInterval = 10000; // 30 seconds
-
-        this.lastFearAndGreedFetch = 0;
-        this.fearAndGreedFetchInterval = 5 * 60 * 1000; // 5 minutes
-        this.fearAndGreedData = null;
-        this.fearAndGreedFailureCount = 0;
-
-        this.recentTradesForMomentum = [];
-        this.maxMomentumTrades = 100;
-    }
-
-    /**
-     * Loads initial trades from the database for performance momentum calculation.
-     * Updates scannerService.state.recentTradesForMomentum for UI display.
-     */
-    async loadInitialMomentumTrades() {
-        try {
-            // Use queueEntityCall with 'Trade' entity name string
-            const initialTrades = await queueEntityCall('Trade', 'filter', {}, '-exit_timestamp', this.maxMomentumTrades);
-            this.recentTradesForMomentum = initialTrades || [];
-            // Update the main scanner's state with the loaded trades for reactivity
-            this.scannerService.state.recentTradesForMomentum = [...this.recentTradesForMomentum];
-            this.addLog(`[Performance Momentum] ✅ Loaded ${this.recentTradesForMomentum.length} initial trades.`, 'success');
-        } catch (e) {
-            console.error(`[Performance Momentum] ⚠️ Could not load initial trades: ${e.message}`, 'warning');
-            this.addLog(`[Performance Momentum] ⚠️ Could not load initial trades: ${e.message}`, 'warning');
-        }
-    }
-
-    /**
-     * Fetches the Fear & Greed Index from an external API, with caching and error handling.
-     * Updates internal fearAndGreedData property.
-     */
-    async fetchFearAndGreedIndex() {
-        const now = Date.now();
-        if (now - this.lastFearAndGreedFetch < this.fearAndGreedFetchInterval) {
-            return;
-        }
-        this.lastFearAndGreedFetch = now;
-
-        try {
-            console.log('[AutoScannerService] [fetchFearAndGreedIndex] Calling getFearAndGreedIndex directly (bypassing queue)...');
-            const response = await getFearAndGreedIndex();
-            console.log('[AutoScannerService] [fetchFearAndGreedIndex] Direct call response:', response);
-            
-            if (response.data && response.data.data && response.data.data.length > 0) {
-                this.fearAndGreedData = response.data.data[0];
-                if (this.fearAndGreedFailureCount > 0) {
-                    this.addLog('[F&G Index] ✅ Successfully reconnected to Fear & Greed API', 'success');
-                    this.fearAndGreedFailureCount = 0;
-                }
-            }
-        } catch (error) {
-            this.fearAndGreedFailureCount = (this.fearAndGreedFailureCount || 0) + 1;
-
-            if (this.fearAndGreedFailureCount === 1) {
-                this.addLog('[F&G Index] ⚠️ Unable to fetch Fear & Greed Index - continuing without it', 'warning');
-                console.log('[F&G Index] ⚠️ Unable to fetch Fear & Greed Index - continuing without it', 'warning');
-            } else if (this.fearAndGreedFailureCount === 5) {
-                this.addLog('[F&G Index] ⚠️ Multiple F&G fetch failures - will retry silently', 'warning');
-                console.log('[F&G Index] ⚠️ Multiple F&G fetch failures - will retry silently', 'warning');
-            }
-
-            this.fearAndGreedData = { value: '50', value_classification: 'Neutral (Fallback)' };
-        }
-    }
-
-    /**
-     * Calculates the overall performance momentum score and its breakdown based on various factors.
-     * This score influences scanning behavior and is displayed in the UI.
-     * Updates scannerService.state.performanceMomentumScore and scannerService.state.momentumBreakdown.
-     */
-    async calculatePerformanceMomentum() {
-        const now = Date.now();
-
-        if (now - this.lastMomentumCalculation < this.momentumCalculationInterval) {
-            return;
-        }
-        this.lastMomentumCalculation = now;
-
-        await this.fetchFearAndGreedIndex();
-
-        const state = this.getState();
-
-        try {
-            // Use the new MOMENTUM_WEIGHTS constant
-            const unrealizedWeight = MOMENTUM_WEIGHTS.unrealizedPnl;
-            const realizedWeight = MOMENTUM_WEIGHTS.realizedPnl;
-            const regimeWeight = MOMENTUM_WEIGHTS.regime;
-            const volatilityWeight = MOMENTUM_WEIGHTS.volatility;
-            const opportunityRateWeight = MOMENTUM_WEIGHTS.opportunityRate;
-            const fearAndGreedWeight = MOMENTUM_WEIGHTS.fearGreed;
-            const signalQualityWeight = MOMENTUM_WEIGHTS.signalQuality;
-
-            // 1. Unrealized P&L Component
-            let unrealizedComponent = 50;
-            const activeWalletState = state.liveWalletState;
-            const openPositions = activeWalletState?.positions || [];
-            if (openPositions.length > 0) {
-                let totalUnrealizedPnlUSDT = 0;
-                let totalInvestedCapital = 0;
-                let positionsWithPrice = 0;
-
-                for (const pos of openPositions) {
-                    const symbolNoSlash = pos.symbol.replace('/', '');
-                    const currentPrice = state.currentPrices?.[symbolNoSlash];
-                    if (currentPrice && typeof currentPrice === 'number' && currentPrice > 0) {
-                        const unrealizedPnlUSDT = pos.direction === 'long'
-                            ? (currentPrice - pos.entry_price) * pos.quantity_crypto
-                            : (pos.entry_price - currentPrice) * pos.quantity_crypto;
-
-                        totalUnrealizedPnlUSDT += unrealizedPnlUSDT;
-                        totalInvestedCapital += pos.entry_value_usdt;
-                        positionsWithPrice++;
-                    }
-                }
-
-                if (positionsWithPrice > 0 && totalInvestedCapital > 0) {
-                    const portfolioPnlPercent = (totalUnrealizedPnlUSDT / totalInvestedCapital) * 100;
-                    unrealizedComponent = Math.max(0, Math.min(100, 50 + (portfolioPnlPercent * 10.0)));
-                }
-            }
-
-            // 2. Realized P&L Component
-            const recentTrades = this.recentTradesForMomentum;
-            let realizedComponent = 50;
-            if (recentTrades.length >= 5) {
-                const pnlValues = recentTrades.map(t => t.pnl_percentage || 0);
-                const avgPnl = pnlValues.reduce((s, a) => s + a, 0) / pnlValues.length;
-                const winningTradesCount = pnlValues.filter(p => p > 0).length;
-                const winRate = (winningTradesCount / pnlValues.length) * 100;
-
-                const pnlScore = 50 + (avgPnl * 8.0);
-                const winRateBonus = (winRate - 50) * 0.3;
-                realizedComponent = Math.max(0, Math.min(100, pnlScore + winRateBonus));
-            }
-
-            // 3. Market Regime Component - REFINED LOGIC
-            const marketRegime = state.marketRegime?.regime;
-            const regimeConfidence = (state.marketRegime?.confidence || 0) * 100;
-            const isConfirmed = state.marketRegime?.isConfirmed || false;
-
-            let baseScore = 50;
-
-            if (marketRegime && regimeConfidence > 0) {
-                const regimeLower = marketRegime.toLowerCase();
-
-                const isHighConfidence = regimeConfidence >= 70;
-
-                if (regimeLower === 'uptrend' || regimeLower === 'downtrend') {
-                    if (isHighConfidence && isConfirmed) {
-                        baseScore = 75;
-                    } else if (regimeConfidence >= 60) {
-                        baseScore = 65;
-                    } else if (regimeConfidence >= 50) {
-                        baseScore = 55;
-                    } else {
-                        baseScore = 50;
-                    }
-                } else if (regimeLower === 'ranging') {
-                    if (isHighConfidence && isConfirmed) {
-                        baseScore = 50;
-                    } else if (regimeConfidence >= 50) {
-                        baseScore = 45;
-                    } else {
-                        baseScore = 40;
-                    }
-                } else {
-                    baseScore = 50;
-                }
-            }
-
-            const regimeComponent = 50 + ((baseScore - 50) * (regimeConfidence / 100));
-
-            // 4. Market Volatility Component
-            const { adx = 25, bbw = 0.1 } = state.marketVolatility;
-            let volatilityComponent = 50;
-            if (adx !== undefined && bbw !== undefined) {
-                let adxScore;
-                if (adx < 20) adxScore = (adx / 20) * 50;
-                else if (adx >= 20 && adx <= 40) adxScore = 50 + ((adx - 20) / 20) * 50;
-                else adxScore = 100 - ((adx - 40) / 60) * 50;
-                adxScore = Math.max(0, Math.min(100, adxScore));
-
-                let bbwScore = Math.min(100, (bbw / 0.05) * 50);
-                bbwScore = Math.max(0, Math.min(100, bbwScore));
-
-                volatilityComponent = (adxScore * 0.4) + (bbwScore * 0.6);
-            }
-
-            // 5. Opportunity Rate Component
-            let opportunityRateComponent = 50;
-            const history = state.signalGenerationHistory;
-            if (history.length > 5) {
-                const recentSlice = history.slice(-5);
-                const totalRecentSignals = recentSlice.reduce((sum, s) => sum + (s.signalsFound || 0), 0);
-                const avgRecentSignals = totalRecentSignals / recentSlice.length;
-
-                opportunityRateComponent = Math.min(100, avgRecentSignals * 5);
-            } else if (history.length > 0) {
-                opportunityRateComponent = Math.min(100, history[history.length - 1].signalsFound * 5);
-            }
-
-            // 6. Fear & Greed Component
-            let fearAndGreedComponent = 50;
-            if (this.fearAndGreedData?.value) {
-                const fngValue = parseInt(this.fearAndGreedData.value);
-                fearAndGreedComponent = 100 - fngValue;
-            }
-
-            // 7. Signal Quality Component
-            const avgStrength = state.stats?.averageSignalStrength || 0;
-            let signalQualityComponent = avgStrength > 0 ? Math.min(100, (avgStrength / 3.5)) : 50;
-
-            // Calculate Final Score
-            const finalScore = (unrealizedComponent * unrealizedWeight) +
-                (realizedComponent * realizedWeight) +
-                (regimeComponent * regimeWeight) +
-                (volatilityComponent * volatilityWeight) +
-                (opportunityRateComponent * opportunityRateWeight) +
-                (fearAndGreedComponent * fearAndGreedWeight) +
-                (signalQualityComponent * signalQualityWeight);
-
-            const clampedScore = Math.round(Math.max(0, Math.min(100, finalScore)));
-
-            // NEW: Calculate Adjusted Balance Risk Factor based on momentum score
-            const maxBalancePercentRisk = state.settings?.maxBalancePercentRisk || 100;
-            let adjustedBalanceRiskFactor;
-
-            if (clampedScore >= 80) {
-                // Excellent momentum: use full configured max risk
-                adjustedBalanceRiskFactor = maxBalancePercentRisk;
-            } else if (clampedScore >= 50) {
-                // Good to moderate momentum: scale from 50% to 100% of max risk
-                const scoreRange = 80 - 50;
-                const scorePosition = clampedScore - 50;
-                const scaleFactor = 0.5 + (0.5 * (scorePosition / scoreRange));
-                adjustedBalanceRiskFactor = maxBalancePercentRisk * scaleFactor;
-            } else if (clampedScore >= 30) {
-                // Poor momentum: scale from 10% to 50% of max risk
-                const scoreRange = 50 - 30;
-                const scorePosition = clampedScore - 30;
-                const scaleFactor = 0.1 + (0.4 * (scorePosition / scoreRange));
-                adjustedBalanceRiskFactor = maxBalancePercentRisk * scaleFactor;
-            } else {
-                // Very poor momentum: minimum 10% of max risk (or absolute minimum of 5%)
-                adjustedBalanceRiskFactor = Math.max(5, maxBalancePercentRisk * 0.1);
-            }
-
-            // Ensure we never go below 5% or above configured max
-            adjustedBalanceRiskFactor = Math.max(5, Math.min(maxBalancePercentRisk, Math.round(adjustedBalanceRiskFactor)));
-
-            const breakdown = {
-                unrealized: { score: Math.round(unrealizedComponent), weight: MOMENTUM_WEIGHTS.unrealizedPnl },
-                realized: { score: Math.round(realizedComponent), weight: MOMENTUM_WEIGHTS.realizedPnl },
-                regime: {
-                    score: Math.round(regimeComponent),
-                    weight: MOMENTUM_WEIGHTS.regime,
-                    details: `${marketRegime || 'N/A'} (${regimeConfidence.toFixed(0)}%)${isConfirmed ? ' ✓' : ''}`
-                },
-                volatility: { score: Math.round(volatilityComponent), weight: MOMENTUM_WEIGHTS.volatility, details: `ADX: ${state.marketVolatility.adx.toFixed(1)}, BBW: ${state.marketVolatility.bbw.toFixed(3)}` },
-                opportunityRate: { score: Math.round(opportunityRateComponent), weight: MOMENTUM_WEIGHTS.opportunityRate, details: `${history.slice(-1)[0]?.signalsFound || 0} recent signals` },
-                fearAndGreed: { score: Math.round(fearAndGreedComponent), weight: MOMENTUM_WEIGHTS.fearGreed, details: `${this.fearAndGreedData?.value || 'N/A'} (${this.fearAndGreedData?.value_classification || 'N/A'})` },
-                signalQuality: { score: Math.round(signalQualityComponent), weight: MOMENTUM_WEIGHTS.signalQuality, details: `${avgStrength.toFixed(0)} avg strength` },
-                finalScore: clampedScore,
-                adjustedBalanceRiskFactor: adjustedBalanceRiskFactor, // NEW: Include in breakdown for UI visibility
-                maxBalancePercentRisk: maxBalancePercentRisk // NEW: Show configured max for context
-            };
-
-            this.scannerService.state.momentumBreakdown = breakdown;
-            this.scannerService.state.performanceMomentumScore = clampedScore;
-            this.scannerService.state.adjustedBalanceRiskFactor = adjustedBalanceRiskFactor; // NEW: Update scanner state
-
-            // Add this non-breaking guard right after you create/update momentumBreakdown:
-            if (this.scannerService.state && this.scannerService.state.momentumBreakdown && !this.scannerService.state.momentumBreakdown.weightsPercents) {
-                this.scannerService.state.momentumBreakdown.weightsPercents = MOMENTUM_WEIGHTS_PERCENTS;
-            }
-
-            this.addLog(`[PERFORMANCE_MOMENTUM] Leading momentum updated: ${clampedScore} | Adjusted Balance Risk: ${adjustedBalanceRiskFactor.toFixed(0)}% (max: ${maxBalancePercentRisk}%)`, 'success');
-            this.notifySubscribers();
-
-        } catch (error) {
-            this.addLog(`[PERFORMANCE_MOMENTUM] Error calculating leading momentum: ${error.message}`, 'error', error);
-            this.scannerService.state.performanceMomentumScore = null;
-            this.scannerService.state.momentumBreakdown = null;
-            this.scannerService.state.adjustedBalanceRiskFactor = 100; // Default to full risk on error
-        }
-    }
-
-    /**
-     * Adds a recent trade to the history for performance momentum calculation.
-     * @param {object} trade - The trade object to add.
-     */
-    addRecentTrade(trade) {
-        this.recentTradesForMomentum.unshift(trade);
-        if (this.recentTradesForMomentum.length > this.maxMomentumTrades) {
-            this.recentTradesForMomentum = this.recentTradesForMomentum.slice(0, this.maxMomentumTrades);
-        }
-        // Update the main scanner's state with the updated trades list for reactivity
-        this.scannerService.state.recentTradesForMomentum = [...this.recentTradesForMomentum];
-        this.notifySubscribers(); // Notify UI of state change
-    }
-
-    /**
-     * Resets the internal state of the performance metrics service.
-     */
-    resetState() {
-        this.lastMomentumCalculation = 0;
-        this.lastFearAndGreedFetch = 0;
-        this.fearAndGreedData = null;
-        this.fearAndGreedFailureCount = 0;
-        this.recentTradesForMomentum = [];
-        this.scannerService.state.recentTradesForMomentum = []; // Clear main scanner state as well
-        this.scannerService.state.performanceMomentumScore = null;
-        this.scannerService.state.momentumBreakdown = null;
-        this.scannerService.state.adjustedBalanceRiskFactor = 100; // Reset adjusted risk factor
-        this.addLog('[PerformanceMetricsService] State reset.', 'system');
-    }
-}
-
-
-/**
- * Manages the loading, updating, and persistence of scanner configuration settings.
- */
-class ConfigurationService {
-    constructor(scannerService) {
-        this.scannerService = scannerService;
-        this.addLog = scannerService.addLog.bind(scannerService);
-        this.notifySubscribers = scannerService.notifySubscribers.bind(scannerService);
-        this.toast = scannerService.toast;
-    }
-
-    /**
-     * Loads the scanner configuration settings from the database and updates the AutoScannerService's state.
-     */
-    async loadConfiguration() {
-        this.addLog('[ConfigurationService] Loading scanner configuration...', 'info');
-        const settingsList = await queueEntityCall('ScanSettings', 'list');
-        const rawSettings = settingsList[0] || { id: 'default', settings: { scanFrequency: 60000, minimumCombinedStrength: 225, minimumRegimeConfidence: 50, minimumTradeValue: 10, maxPositions: 1, local_proxy_url: 'http://localhost:3003' } };
-        
-        // Extract settings from the database structure
-        const loadedSettings = rawSettings.settings || rawSettings;
-
-        // Ensure local_proxy_url is initialized with default value
-        if (!loadedSettings.local_proxy_url) {
-            loadedSettings.local_proxy_url = 'http://localhost:3003';
-        }
-        // Ensure ID is present for upsert operations
-        if (!loadedSettings.id) {
-            loadedSettings.id = 'default';
-        }
-
-        // Ensure maxBalancePercentRisk is initialized
-        if (typeof loadedSettings.maxBalancePercentRisk !== 'number' || loadedSettings.maxBalancePercentRisk <= 0) {
-            loadedSettings.maxBalancePercentRisk = 100; // Default to 100%
-        }
-        // NEW: Ensure absolute invest cap default
-        if (typeof loadedSettings.maxBalanceInvestCapUSDT !== 'number' || loadedSettings.maxBalanceInvestCapUSDT < 0) {
-            loadedSettings.maxBalanceInvestCapUSDT = 0; // 0 means no absolute cap by default
-        }
-        // NEW: Ensure blockTradingInDowntrend is initialized
-        if (typeof loadedSettings.blockTradingInDowntrend !== 'boolean') {
-            loadedSettings.blockTradingInDowntrend = false; // Default to false
-        }
-
-
-        // Directly update the AutoScannerService's state
-        this.scannerService.state.settings = loadedSettings;
-        this.addLog('[ConfigurationService] Configuration loaded.', 'info');
-    }
-
-    /**
-     * Updates the scanner settings, persists them to the database, and triggers related actions
-     * like strategy re-filtering if critical settings like minimumCombinedStrength are changed.
-     * @param {object} newSettings - An object containing the new settings to apply.
-     */
-    async updateSettings(newSettings) {
-        this.addLog('[ConfigurationService] Updating scanner settings...', 'system', newSettings);
-        try {
-            const oldSettings = { ...this.scannerService.state.settings }; // Clone for comparison
-
-            // Update local state first
-            this.scannerService.state.settings = { ...this.scannerService.state.settings, ...newSettings };
-
-            // Persist to database. Assume 'upsert' works with the `id` field.
-            await queueEntityCall('ScanSettings', 'upsert', this.scannerService.state.settings);
-
-            // After settings are updated, re-attach/ensure the guard is active.
-            // This is crucial if blockTradingInDowntrend is changed.
-            if (this.scannerService.attachRegimeOpenGuard) {
-                this.scannerService.attachRegimeOpenGuard();
-            }
-
-
-            if (newSettings.minimumCombinedStrength !== undefined &&
-                newSettings.minimumCombinedStrength !== oldSettings.minimumCombinedStrength) {
-                this.addLog(`[ConfigurationService] Minimum combined strength changed to ${newSettings.minimumCombinedStrength}. Re-filtering strategies...`, 'system');
-                // Delegate strategy re-filtering to StrategyManagerService via AutoScannerService
-                await this.scannerService.strategyManager._loadAndFilterStrategiesInternal(newSettings.minimumCombinedStrength);
-            }
-
-            if (newSettings.minimumRegimeConfidence !== undefined &&
-                newSettings.minimumRegimeConfidence !== oldSettings.minimumRegimeConfidence) {
-                this.addLog(`[ConfigurationService] Minimum regime confidence threshold changed to ${newSettings.minimumRegimeConfidence}%. This will affect strategy evaluation in future scan cycles.`, 'system');
-            }
-
-            if (newSettings.minimumTradeValue !== undefined && newSettings.minimumTradeValue !== oldSettings.minimumTradeValue) {
-                this.addLog(`[ConfigurationService] Minimum trade value changed to ${newSettings.minimumTradeValue} USDT.`, 'system');
-            }
-
-            if (newSettings.maxPositions !== undefined && newSettings.maxPositions !== oldSettings.maxPositions) {
-                this.addLog(`[ConfigurationService] Max positions per strategy changed to ${newSettings.maxPositions}.`, 'system');
-            }
-
-            if (newSettings.maxBalancePercentRisk !== undefined && newSettings.maxBalancePercentRisk !== oldSettings.maxBalancePercentRisk) {
-                this.addLog(`[ConfigurationService] Max balance percent risk changed to ${newSettings.maxBalancePercentRisk}%.`, 'system');
-            }
-            // NEW: Log absolute cap changes
-            if (newSettings.maxBalanceInvestCapUSDT !== undefined &&
-                newSettings.maxBalanceInvestCapUSDT !== oldSettings.maxBalanceInvestCapUSDT) {
-                this.addLog(`[ConfigurationService] Max balance invest cap changed to $${newSettings.maxBalanceInvestCapUSDT}.`, 'system');
-            }
-            // NEW: Log blockTradingInDowntrend changes
-            if (newSettings.blockTradingInDowntrend !== undefined &&
-                newSettings.blockTradingInDowntrend !== oldSettings.blockTradingInDowntrend) {
-                this.addLog(`[ConfigurationService] Block trading in downtrend set to ${newSettings.blockTradingInDowntrend ? 'ENABLED' : 'DISABLED'}.`, 'system');
-            }
-
-
-            this.addLog('[ConfigurationService] Scanner settings updated successfully.', 'success');
-            this.notifySubscribers(); // Notify UI of settings change
-
-            if (this.toast) {
-                this.toast({
-                    title: "Settings Updated",
-                    description: "Scanner configuration has been successfully updated."
-                });
-            }
-
-        } catch (error) {
-            this.addLog(`[ConfigurationService] Failed to update settings: ${error.message}`, 'error', error);
-            if (this.toast) {
-                this.toast({
-                    title: "Settings Update Failed",
-                    description: `Failed to update settings: ${error.message}`,
-                    variant: "destructive"
-                });
-            }
-            throw error;
-        }
-    }
-}
-
-/**
- * Manages the loading, filtering, and state of active trading strategies.
- */
-class StrategyManagerService {
-    constructor(scannerService) {
-        this.scannerService = scannerService;
-        this.addLog = scannerService.addLog.bind(scannerService);
-        this.notifySubscribers = scannerService.notifySubscribers.bind(scannerService);
-        this.toast = scannerService.toast;
-        // Reference to AutoScannerService's state for updates
-        this.state = scannerService.state;
-    }
-
-    /**
-     * Internal method to load and filter strategies based on various criteria including current settings.
-     * Updates scannerService.state.activeStrategies and related stats.
-     * @param {number|null} minCombinedStrengthOverride - Optional override for the minimum combined strength setting.
-     * @returns {Array} An array of eligible strategies.
-     */
-    async _loadAndFilterStrategiesInternal(minCombinedStrengthOverride = null) {
-        this.addLog('[StrategyManagerService] Loading and filtering strategies (internal)...', 'info');
-
-        const minimumCombinedStrength = minCombinedStrengthOverride !== null
-            ? minCombinedStrengthOverride
-            : (this.state.settings?.minimumCombinedStrength || 0);
-
-        const strategiesList = await queueEntityCall('BacktestCombination', 'list');
-
-        let totalStrategies = strategiesList?.length || 0;
-        let filteredOptedOut = 0;
-        let filteredUnderperforming = 0;
-        let filteredOther = 0;
-
-        const eligibleStrategies = (strategiesList || [])
-            .filter(match => {
-                if (match.optedOutGlobally || match.optedOutForCoin) {
-                    filteredOptedOut++;
-                    return false;
-                }
-
-                if (!Array.isArray(match.signals) || match.signals.length === 0) {
-                    filteredOther++;
-                    return false;
-                }
-
-                // Apply minimum combined strength filter
-                if ((match.combinedStrength || 0) < minimumCombinedStrength) {
-                    filteredOther++;
-                    return false;
-                }
-
-                const hasEnoughTrades = (match.realTradeCount || 0) >= 5;
-                const isUnderperforming = hasEnoughTrades &&
-                    ((match.realProfitFactor || 0) < 0.8 || (match.realSuccessRate || 0) < 25);
-
-                if (isUnderperforming) {
-                    filteredUnderperforming++;
-                    return false;
-                }
-
-                if (!match.includedInScanner) {
-                    filteredOther++;
-                    return false;
-                }
-
-                return true;
-            })
-            .map(match => {
-                const realTradeCount = match.realTradeCount || 0;
-                const realProfitFactor = match.realProfitFactor || 0;
-                const realSuccessRate = match.realSuccessRate || 0;
-                const backtestProfitFactor = match.profitFactor || 0;
-                const backtestSuccessRate = match.successRate || 0;
-
-                let profitabilityScore = 0;
-
-                if (realTradeCount >= 10) {
-                    profitabilityScore = (realProfitFactor * 0.4) + (realSuccessRate * 0.003) +
-                        (backtestProfitFactor * 0.2) + (backtestSuccessRate * 0.001) +
-                        ((match.combinedStrength || 0) * 0.001);
-                } else if (realTradeCount >= 5) {
-                    profitabilityScore = (realProfitFactor * 0.3) + (realSuccessRate * 0.002) +
-                        (backtestProfitFactor * 0.3) + (backtestSuccessRate * 0.002) +
-                        ((match.combinedStrength || 0) * 0.001);
-                } else {
-                    profitabilityScore = (backtestProfitFactor * 0.4) + (backtestSuccessRate * 0.003) +
-                        ((match.combinedStrength || 0) * 0.002) +
-                        ((realTradeCount || 0) === 0 ? 0.5 : -0.2);
-                    if (!match.realTradeCount && match.combinedStrength > 0) {
-                        profitabilityScore += (match.combinedStrength / 1000);
-                    }
-                }
-
-                const processedStrategy = {
-                    ...match,
-                    id: match.id,
-                    coin: match.coin,
-                    timeframe: match.timeframe,
-                    signals: match.signals || [],
-                    combinationName: match.combinationName || `${match.coin}-Strategy`,
-                    combinedStrength: match.combinedStrength || 0,
-                    minCoreSignalStrength: match.minCoreSignalStrength || 80,
-                    strategyDirection: match.strategyDirection || 'long',
-                    takeProfitAtrMultiplier: match.takeProfitAtrMultiplier || 3,
-                    stopLossAtrMultiplier: match.stopLossAtrMultiplier || 2.5,
-                    estimatedExitTimeMinutes: match.estimatedExitTimeMinutes || null, // Keep in MINUTES
-                    enableTrailingTakeProfit: match.enableTrailingTakeProfit !== false,
-                    profitabilityScore: profitabilityScore,
-                    realTradeCount: realTradeCount
-                };
-
-                return processedStrategy;
-            })
-            .sort((a, b) => b.profitabilityScore - a.profitabilityScore);
-
-        this.state.activeStrategies = eligibleStrategies; // Update scanner service state
-        this.state.stats.activeStrategies = eligibleStrategies.length;
-
-        const totalCombinedStrength = eligibleStrategies.reduce((acc, s) => acc + (s.combinedStrength || 0), 0);
-        this.state.stats.averageSignalStrength = eligibleStrategies.length > 0
-            ? totalCombinedStrength / eligibleStrategies.length
-            : 0;
-
-        const activeCount = eligibleStrategies.length;
-        this.addLog(`[StrategyManagerService] Strategy filtering complete: ${activeCount}/${totalStrategies} active (${filteredOptedOut} opted-out, ${filteredUnderperforming} underperforming, ${filteredOther} other)`, 'info');
-
-        if (eligibleStrategies.length > 0) {
-            const topStrategy = eligibleStrategies[0];
-            const avgScore = eligibleStrategies.reduce((sum, s) => sum + (s.profitabilityScore || 0), 0) / eligibleStrategies.length;
-            const strategiesWithDemoTrades = eligibleStrategies.filter(s => (s.realTradeCount || 0) > 0).length;
-
-            this.addLog(`📊 Strategy Prioritization Complete: ${eligibleStrategies.length} strategies loaded`, 'info');
-            this.addLog(`📈 Top strategy: ${topStrategy.combinationName} (Score: ${(topStrategy.profitabilityScore || 0).toFixed(1)}, Avg: ${avgScore.toFixed(1)})`, 'info');
-            this.addLog(`🎯 ${strategiesWithDemoTrades}/${eligibleStrategies.length} strategies have demo trading data`, 'info');
-        } else {
-            this.addLog(`📊 Strategy Prioritization Complete: No eligible strategies found`, 'warning');
-        }
-
-        this.notifySubscribers();
-        return eligibleStrategies; // Return the filtered strategies
-    }
-
-    /**
-     * Public method to load and filter strategies, typically called by AutoScannerService.
-     * @param {string} tradingMode - The current trading mode ('testnet' or 'live').
-     * @returns {Array} An array of eligible strategies.
-     */
-    async loadActiveStrategies(tradingMode) {
-        // The tradingMode parameter could be used here if 'BacktestCombination' entity filtering
-        // needed to be specific to tradingMode, but currently, it lists all.
-        return this._loadAndFilterStrategiesInternal();
-    }
-
-    /**
-     * Refreshes the list of active strategies, typically after new backtest results or settings changes.
-     */
-    async refreshStrategies() {
-        this.addLog('[StrategyManagerService] Refreshing strategy list due to new backtest results or tradingMode...', 'info');
-
-        try {
-            const oldCount = this.state.activeStrategies.length; // Capture old count for comparison
-            const newStrategies = await this.loadActiveStrategies(this.scannerService.getTradingMode()); // Use the new public method
-            const newCount = newStrategies.length;
-            const countChange = newCount - oldCount;
-            const changeText = countChange > 0 ? `+${countChange}` : countChange.toString();
-
-            this.addLog(`✅ Strategy list refreshed: ${newCount} strategies (${changeText} from before)`, 'success');
-
-            if (this.toast) {
-                this.toast({
-                    title: "Strategy List Updated",
-                    description: `Scanner now has ${newCount} strategies (${changeText})`,
-                    variant: "default"
-                });
-            }
-
-        } catch (error) {
-            this.addLog(`❌ Failed to refresh strategies: ${error.message}`, 'error', error);
-        }
-    }
-
-    /**
-     * Evaluates active strategies and detects signals, delegating to SignalDetectionEngine.
-     * This method also manages the `newPositionsCount` in the scanner's state.
-     * @param {Array} strategies - List of active strategies.
-     * @param {object} currentWalletState - The current wallet state.
-     * @param {object} settings - Scanner settings.
-     * @param {object} marketRegime - Current market regime data.
-     * @param {object} currentPrices - Current market prices.
-     * @param {object} cycleStats - Statistics object for the current scan cycle.
-     * @returns {object} Scan result from signal detection, including signalsFound and tradesExecuted.
-     */
-    async evaluateStrategies(strategies, currentWalletState, settings, marketRegime, currentPrices, cycleStats) {
-        // Reset newPositionsCount for this evaluation cycle
-        this.scannerService.state.newPositionsCount = 0;
-
-        const scanResult = await this.scannerService.signalDetectionEngine.scanForSignals(
-            strategies,
-            currentWalletState,
-            settings,
-            marketRegime,
-            currentPrices,
-            cycleStats
-        );
-
-        // Assuming scanForSignals (via PositionManager) updates cycleStats.positionsOpened,
-        // we can use it to reflect newPositionsCount.
-        // Or, more directly, assume scanResult includes tradesExecuted which represents new positions.
-        this.scannerService.state.newPositionsCount = scanResult.tradesExecuted;
-
-        return scanResult; // { signalsFound, tradesExecuted }
-    }
-}
-
-// Add lightweight helpers near the top-level of this file (outside the class) if not present
-function _getRegimeNameSafe(regime) {
-    if (!regime || typeof regime !== 'object') return null;
-    const candidates = [regime.name, regime.regime, regime.phase, regime.trend, regime.state, regime.type];
-    const found = candidates.find((v) => typeof v === 'string' && v.length > 0);
-    return found ? String(found).toLowerCase() : null;
-}
 
 
 class AutoScannerService {
@@ -745,52 +56,17 @@ class AutoScannerService {
             return AutoScannerService.instance;
         }
 
+        AutoScannerService.instance = this;
+
         this.state = {
-            isInitialized: false,
-            isInitializing: false,
-            isRunning: false,
-            isScanning: false,
-            settings: null,
-            activeStrategies: [],
-            marketRegime: null,
-            performanceMomentumScore: null,
-            momentumBreakdown: null,
-            signalGenerationHistory: [],
-            marketVolatility: { adx: 25, bbw: 0.1 },
-            logs: { activity: [], performance: [] },
-            stats: {
-                activeStrategies: 0,
-                totalScans: 0,
-                signalsFound: 0,
-                tradesExecuted: 0,
-                successRate: 0,
-                totalPnL: 0,
-                averageSignalStrength: 0,
-                // NEW: Scan cycle metrics
-                totalScanCycles: 0,
-                averageScanTimeMs: 0,
-                lastScanTimeMs: 0
-            },
-            lastScanTime: null,
-            nextScanTime: null,
-            recentTradesForMomentum: [],
-            tradingMode: 'testnet',
-            liveWalletState: null,
-            exchangeInfo: null,
-            leaderSessionId: null,
-            // ADDED: Fear & Greed data in state for UI widgets
-            fearAndGreedData: null,
-            // ADDED: Expose cached alerts to UI
-            marketAlerts: [],
-            // ADDED: Track new positions opened in current cycle for immediate wallet refresh
-            newPositionsCount: 0,
-            adjustedBalanceRiskFactor: 100, // NEW: Dynamic risk factor based on momentum (0-100)
+            ...DEFAULT_SCANNER_STATE,
+            tradingMode: SCANNER_DEFAULTS.tradingMode,
         };
 
         this.regimeCache = {
             regime: null,
             lastCalculated: null,
-            cacheValidityHours: 1
+            cacheValidityHours: SCANNER_DEFAULTS.regimeCacheValidityHours
         };
 
         this.currentPrices = {};
@@ -814,12 +90,11 @@ class AutoScannerService {
         this._persistedRunningFlag = false; // NEW: remember prior "running" without starting immediately
         this._openGuardAttached = false; // Flag to track if the guard has been attached
 
-        this._loadStateFromStorage();
         // NOTE: Do NOT auto-start here based on persisted state. We'll start only after init completes.
 
         // Ensure tradingMode always has a valid default
         if (!this.state.tradingMode) {
-            this.state.tradingMode = 'testnet';
+            this.state.tradingMode = SCANNER_DEFAULTS.tradingMode;
         }
 
         this.backtestCache = new Map();
@@ -827,16 +102,16 @@ class AutoScannerService {
 
         // Instance properties for _fetchFearAndGreedIndex to work within AutoScannerService
         this.lastFearAndGreedFetch = 0;
-        this.fearAndGreedFetchInterval = 30 * 1000; // 30 seconds for faster loading
+        this.fearAndGreedFetchInterval = SCANNER_DEFAULTS.fearGreedFetchInterval;
         this.fearAndGreedData = null; // AutoScannerService's own property, distinct from state.fearAndGreedData
         this.fearAndGreedFailureCount = 0;
 
         // NEW: Track scan cycle times for averaging
         this.scanCycleTimes = [];
-        this.maxCycleTimeSamples = 20; // Keep last 20 cycle times for rolling average
+        this.maxCycleTimeSamples = SCANNER_DEFAULTS.maxCycleTimeSamples;
 
         // Add: toggle to print to browser console (off by default)
-        this.debugConsole = false;
+        this.debugConsole = true;
 
         // NEW: Filter noisy console logs globally for known scanner tags (leave errors)
         if (typeof window !== 'undefined' && !window.__scannerConsoleFiltered) {
@@ -884,6 +159,9 @@ class AutoScannerService {
         }
 
         // CRITICAL: Initialize services in correct order
+        // 0. Initialize price cache first
+        this.initializePriceCache();
+        
         // 1. HeartbeatService first (no dependencies)
         this.heartbeatService = new HeartbeatService({
             getSessionId: () => this.sessionId,
@@ -937,9 +215,6 @@ class AutoScannerService {
         // 4. CRITICAL: Initialize PositionManager BEFORE SignalDetectionEngine
         this.positionManager = new PositionManager(this);
 
-        // Attach the open guard immediately after positionManager is created
-        this.attachRegimeOpenGuard();
-
         // 5. THEN initialize SignalDetectionEngine (which depends on PositionManager)
         this.signalDetectionEngine = new SignalDetectionEngine(this);
 
@@ -947,6 +222,75 @@ class AutoScannerService {
         this.walletManagerService = initializeWalletManagerService(this);
         this.performanceMetricsService = new PerformanceMetricsService(this);
         this.tradeArchivingService = new TradeArchivingService(this);
+
+        // 7. Core scanner services
+        this.marketRegimeService = new MarketRegimeService(this);
+        this.priceManagerService = new PriceManagerService(this);
+        this.scanEngineService = new ScanEngineService(this);
+
+        // 8. Additional services
+        this.walletStateService = new WalletStateService(this);
+        this.uiStateService = new UIStateService(this);
+        this.lifecycleService = new LifecycleService(this);
+        this.utilityService = new UtilityService(this);
+
+        // Load state from storage after services are instantiated
+        this._loadStateFromStorage();
+
+        // Setup navigation handlers after services are instantiated
+        this._setupNavigationHandlers();
+
+        // Attach the open guard after services are instantiated
+        this.attachRegimeOpenGuard();
+
+        // DEBUG: Add global console command for testing
+        if (typeof window !== 'undefined') {
+            window.startScanner = async () => {
+                console.log('[DEBUG] 🚀 Starting scanner via console command...');
+                const result = await this.start();
+                console.log('[DEBUG] 🎯 Scanner start result:', result);
+                return result;
+            };
+            
+            window.resetScannerState = () => {
+                console.log('[DEBUG] 🔄 Resetting scanner state...');
+                
+                // First, show what's currently in localStorage
+                const currentState = localStorage.getItem(STORAGE_KEYS.scannerState);
+                console.log('[DEBUG] 🔍 Current localStorage state:', currentState ? JSON.parse(currentState) : 'null');
+                
+                this.state.isRunning = false;
+                this.state.isScanning = false;
+                this.state.isInitializing = false;
+                this.state.leaderSessionId = null;
+                this._persistedRunningFlag = false;
+                this._isAutoStartBlocked = false;
+                
+                // CRITICAL: Also clear the persisted state from localStorage
+                try {
+                    localStorage.removeItem(STORAGE_KEYS.scannerState);
+                    console.log('[DEBUG] 🗑️ Cleared scanner state from localStorage');
+                    
+                    // Verify it's cleared
+                    const clearedState = localStorage.getItem(STORAGE_KEYS.scannerState);
+                    console.log('[DEBUG] ✅ Verification - localStorage after clear:', clearedState);
+                } catch (error) {
+                    console.warn('[DEBUG] ⚠️ Failed to clear localStorage:', error);
+                }
+                
+                this.notifySubscribers();
+                console.log('[DEBUG] ✅ Scanner state reset - UI should now show Start button');
+                console.log('[DEBUG] 💡 State will persist after refresh now');
+            };
+            
+            window.stopScanner = async () => {
+                console.log('[DEBUG] 🛑 Stopping scanner via console command...');
+                const result = await this.stop();
+                console.log('[DEBUG] 🎯 Scanner stop result:', result);
+                return result;
+            };
+            
+        }
 
         // Add this non-breaking guard right after you create/update momentumBreakdown:
         if (this.state && this.state.momentumBreakdown && !this.state.momentumBreakdown.weightsPercents) {
@@ -977,7 +321,7 @@ class AutoScannerService {
                             const { addMarketAlertToBuffer } = await import('@/components/utils/apiQueue');
                             addMarketAlertToBuffer(payload);
                             this.addLog('[MarketAlert] Buffered create during scan cycle', 'system');
-                            return { id: 'buffered' }; // Return a placeholder ID
+                            throw new Error('Entity creation failed');
                         }
                         return MarketAlert.__originalCreate(payload);
                     };
@@ -988,7 +332,7 @@ class AutoScannerService {
                             const { addMarketAlertToBuffer } = await import('@/components/utils/apiQueue');
                             records.forEach((r) => addMarketAlertToBuffer(r));
                             this.addLog(`[MarketAlert] Buffered bulkCreate (${records.length}) during scan cycle', 'system`);
-                            return records.map((r) => ({ ...r, id: 'buffered' })); // Return placeholder IDs
+                            throw new Error('Entity creation failed');
                         }
                         return MarketAlert.__originalBulkCreate(records);
                     };
@@ -1009,16 +353,25 @@ class AutoScannerService {
                 }
                 this.setSessionId(sid);
             } catch (_e) {
-                // Fallback: still set a random id to avoid missing sessionId
-                const sid = `session_${generateTradeId()}`;
-                this.setSessionId(sid);
+                throw new Error('Failed to generate session ID');
             }
 
             window.autoScannerService = this;
-            this._setupNavigationHandlers();
+            window.scannerService = this; // Also expose as scannerService for compatibility
         }
 
         AutoScannerService.instance = this;
+    }
+
+    /**
+     * Initialize price cache with common symbols
+     */
+    async initializePriceCache() {
+        try {
+            await functions.initializePriceCache();
+        } catch (error) {
+            console.error('[AutoScannerService] ❌ Failed to initialize price cache:', error);
+        }
     }
 
     // Add guard attachment and check methods
@@ -1077,89 +430,32 @@ class AutoScannerService {
 
     // ADDED: Expose wallet re-initialization method for external use (e.g., TradingModal)
     async reinitializeWalletFromBinance() {
-        if (!this.walletManagerService) {
-            throw new Error('WalletManagerService is not initialized');
-        }
-
-        try {
-            await this.walletManagerService.initializeLiveWallet();
-
-            // NEW: ensure wallet mode is always set for downstream services
-            if (this.state.liveWalletState && !this.state.liveWalletState.mode) {
-                this.state.liveWalletState.mode = this.state.tradingMode || 'testnet';
-            }
-
-            await this.walletManagerService.updateWalletSummary(this.state.liveWalletState, this.currentPrices);
-            await this._persistLatestWalletSummary();
-            this.notifyWalletSubscribers();
-
-            return true;
-        } catch (error) {
-            console.error('[AutoScannerService] ❌ Failed to reinitialize wallet from Binance:', error);
-            throw error;
-        }
+        return this.walletStateService.reinitializeWalletFromBinance();
     }
 
     _formatCurrency(value) {
-        return formatUSDT(value);
+        return this.walletStateService._formatCurrency(value);
     }
 
     _formatPrice(value) {
-        return formatPrice(value);
+        return this.walletStateService._formatPrice(value);
     }
 
     _setupNavigationHandlers() {
-        const originalPushState = window.history.pushState;
-        const originalReplaceState = window.history.replaceState;
-
-        window.history.pushState = (...args) => {
-            this._handleNavigationStart();
-            return originalPushState.apply(window.history, args);
-        };
-
-        window.history.replaceState = (...args) => {
-            this._handleNavigationStart();
-            return originalReplaceState.apply(window.history, args);
-        };
-
-        window.addEventListener('popstate', () => {
-            this._handleNavigationStart();
-        });
-
-        window.addEventListener('load', () => {
-            this._handleNavigationEnd();
-        });
+        return this.utilityService._setupNavigationHandlers();
     }
 
     _handleNavigationStart() {
-        this.isNavigating = true;
-
-        if (this.navigationTimeout) {
-            clearTimeout(this.navigationTimeout);
-        }
-
-        console.log(`[AutoScannerService] 🧭 Navigation detected - preventing scanner control changes`);
-
-        this.navigationTimeout = setTimeout(() => {
-            this._handleNavigationEnd();
-        }, 2000);
+        return this.utilityService._handleNavigationStart();
     }
 
     _handleNavigationEnd() {
-        this.isNavigating = false;
-
-        if (this.navigationTimeout) {
-            clearTimeout(this.navigationTimeout);
-            this.navigationTimeout = null;
-        }
-
-        console.log(`[AutoScannerService] 🧭 Navigation completed - scanner control restored`);
+        return this.utilityService._handleNavigationEnd();
     }
 
     // NEW: allow UI to block or allow the internal persisted auto-start
     setAutoStartBlocked(flag) {
-        this._isAutoStartBlocked = !!flag;
-        console.log(`[AutoScannerService] [AutoStart] UI ${this._isAutoStartBlocked ? 'blocked' : 'unblocked'} internal auto-start.`);
+        return this.utilityService.setAutoStartBlocked(flag);
     }
 
     setSessionId(id) {
@@ -1210,6 +506,10 @@ class AutoScannerService {
 
         if (this.positionManager) {
             this.positionManager.setTradingMode(mode);
+            // Notify PositionManager of trading mode change to reload exchange info
+            if (typeof this.positionManager.onTradingModeChange === 'function') {
+                this.positionManager.onTradingModeChange(mode, oldMode);
+            }
         }
 
         this.notifySubscribers();
@@ -1225,21 +525,6 @@ class AutoScannerService {
 
     isTestnetMode() {
         return this.state.tradingMode === 'testnet';
-    }
-
-    _startRunningState() {
-        this.state.isRunning = true;
-        this._saveStateToStorage();
-        console.log('[AutoScannerService] ✅ Auto Scanner now in running state.');
-
-        // Start heartbeat service (25s interval)
-        this.heartbeatService.start();
-
-        // Start passive monitoring (60s interval)
-        this.sessionManager.startMonitoring();
-
-        this._startScanLoop();
-        this.notifySubscribers();
     }
 
     _stopRunningState(options = {}) {
@@ -1289,35 +574,31 @@ class AutoScannerService {
         }
     }
 
-    // Helper: get free USDT balance safely
-    _getAvailableUsdt() {
-        const balances = this.state?.liveWalletState?.balances || [];
-        const usdt = balances.find(b => b.asset === 'USDT');
-        const free = parseFloat(usdt?.free || '0');
-        return Number.isFinite(free) ? free : 0;
+    // Helper: get current wallet state (CentralWalletStateManager only)
+    _getCurrentWalletState() {
+        return this.walletManagerService?.getCurrentWalletState();
     }
 
-    // NEW: compute current balance allocated across open/trailing positions (entry basis)
+    // NEW: compute current balance allocated across open/trailing positions (current value basis)
     _getBalanceAllocatedInTrades() {
-        const positions = (this.state?.liveWalletState?.positions || []).filter(
+        const currentWalletState = this._getCurrentWalletState();
+        const positions = (currentWalletState?.positions || []).filter(
             p => p && (p.status === 'open' || p.status === 'trailing')
         );
         let allocated = 0;
         for (const pos of positions) {
             const qty = Number(pos.quantity_crypto);
-            const entryValue = Number(pos.entry_value_usdt);
-            const entryPrice = Number(pos.entry_price);
             const symbol = (pos.symbol || '').replace('/', '');
             const livePrice = Number(this.currentPrices?.[symbol]);
 
-            if (Number.isFinite(entryValue) && entryValue > 0) {
-                allocated += entryValue;
-            } else if (Number.isFinite(qty) && qty > 0) {
-                const price = Number.isFinite(entryPrice) && entryPrice > 0
-                    ? entryPrice
-                    : (Number.isFinite(livePrice) && livePrice > 0 ? livePrice : NaN);
-                if (Number.isFinite(price)) {
-                    allocated += qty * price;
+            // Use current market value instead of entry value for cap calculation
+            if (Number.isFinite(qty) && qty > 0 && Number.isFinite(livePrice) && livePrice > 0) {
+                allocated += qty * livePrice;
+            } else {
+                // Fallback to entry value if current price not available
+                const entryValue = Number(pos.entry_value_usdt);
+                if (Number.isFinite(entryValue) && entryValue > 0) {
+                    allocated += entryValue;
                 }
             }
         }
@@ -1443,11 +724,11 @@ class AutoScannerService {
             console.log('════════════════════════════════════════════════════════════');
             console.log(`[AutoScannerService] 🔄 ${modeText} RESET COMPLETED`);
             console.log('════════════════════════════════════════════════════════════');
-            console.log(`[AutoScannerService] 💰 ${modeText} refreshed from Binance (Wallet ID: ${this.state.liveWalletState?.id}).`);
+            console.log(`[AutoScannerService] 💰 ${modeText} refreshed from Binance (Wallet ID: ${this._getCurrentWalletState()?.id}).`);
             console.log('[AutoScannerService] Scanner is ready for a fresh start with clean position tracking.');
             console.log('════════════════════════════════════════════════════════════');
 
-            await this.walletManagerService.updateWalletSummary(this.state.liveWalletState, this.currentPrices);
+            await this.walletManagerService.updateWalletSummary(this._getCurrentWalletState(), this.currentPrices);
             this.notifyWalletSubscribers();
             this.notifySubscribers();
 
@@ -1523,7 +804,7 @@ class AutoScannerService {
                     totalScans: this.state.stats?.totalScans || 0 // ADDED: Persist totalScans
                 }
             };
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(stateToSave));
+            localStorage.setItem(STORAGE_KEYS.scannerState, JSON.stringify(stateToSave));
         } catch (error) {
             console.error('[AutoScannerService] Failed to save scanner state to localStorage.', error);
         }
@@ -1532,15 +813,23 @@ class AutoScannerService {
     _loadStateFromStorage() {
         try {
             if (typeof window === 'undefined') return;
-            const savedStateJSON = localStorage.getItem(STORAGE_KEY);
+            const savedStateJSON = localStorage.getItem(STORAGE_KEYS.scannerState);
+            console.log('[AutoScannerService] 🔍 Loading state from storage:', {
+                hasSavedState: !!savedStateJSON,
+                savedStateContent: savedStateJSON ? JSON.parse(savedStateJSON) : null
+            });
+            
             if (savedStateJSON) {
                 const savedState = JSON.parse(savedStateJSON);
                 if (typeof savedState.isRunning === 'boolean') {
                     // NEW: Keep a flag instead of flipping state.isRunning now.
                     this._persistedRunningFlag = savedState.isRunning;
+                    console.log('[AutoScannerService] 🔍 Set persisted running flag:', this._persistedRunningFlag);
                     if (this._persistedRunningFlag) {
                         console.log('[AutoScannerService] Loaded persisted state: Scanner was marked RUNNING in previous session.');
                     }
+                } else {
+                    console.log('[AutoScannerService] 🔍 No isRunning flag in saved state, _persistedRunningFlag remains:', this._persistedRunningFlag);
                 }
                 if (savedState.tradingMode === 'testnet' || savedState.tradingMode === 'live') {
                     this.state.tradingMode = savedState.tradingMode;
@@ -1667,7 +956,10 @@ class AutoScannerService {
             this.state.logs.activity = this.state.logs.activity.slice(0, 1000);
         }
 
-        this.notifySubscribers();
+        // Safe call to notifySubscribers - only call if uiStateService exists
+        if (this.uiStateService) {
+            this.notifySubscribers();
+        }
     }
 
     clearLogs() {
@@ -1683,7 +975,7 @@ class AutoScannerService {
 
         // NEW: clear persisted storage entirely
         if (typeof window !== 'undefined') {
-            localStorage.removeItem(STORAGE_KEY);
+            localStorage.removeItem(STORAGE_KEYS.scannerState);
             localStorage.removeItem(`walletSummaryCache_testnet`);
             localStorage.removeItem(`walletSummaryCache_live`);
         }
@@ -1716,7 +1008,6 @@ class AutoScannerService {
             nextScanTime: null,
             recentTradesForMomentum: [],
             tradingMode: 'testnet',
-            liveWalletState: null,
             exchangeInfo: null,
             leaderSessionId: null,
             fearAndGreedData: null,
@@ -1732,6 +1023,10 @@ class AutoScannerService {
         this._persistedRunningFlag = false; // Reset this too on hard reset
         this._isAutoStartBlocked = false; // Reset this too on hard reset
         this.scanCycleTimes = []; // Reset scan cycle times on hard reset
+        
+        // OPTIMIZATION: Performance throttling to prevent excessive computations
+        this._lastHeavyComputationTime = 0;
+        this._heavyComputationThrottleMs = 100; // Minimum 100ms between heavy computations
         this._openGuardAttached = false; // Reset the guard flag
 
         if (this.scanInterval) clearInterval(this.scanInterval);
@@ -1756,336 +1051,22 @@ class AutoScannerService {
         }, 500);
     }
 
+
     async initialize() {
-        if (this.state.isInitializing) {
-            console.warn('[AutoScannerService] Initialization already in progress.');
+        if (!this.lifecycleService) {
+            console.error('[AutoScannerService] ❌ lifecycleService is not initialized!');
             return false;
         }
 
-        if (this.state.isInitialized && !this._persistedRunningFlag && !this._isAutoStartBlocked) {
-            console.log('[AutoScannerService] Already initialized. Skipping re-initialization.');
-            return true;
-        }
-
-        this.state.isInitializing = true;
-        const initStartTime = Date.now();
-        console.log(`[AutoScannerService] 🚀 Initializing scanner in ${this.state.tradingMode.toUpperCase()} mode...`);
-        this.notifySubscribers();
-
-        try {
-            // OPTIMIZATION: Load configuration, exchange info, and strategies in parallel
-            console.log('[AutoScannerService] ⚡ Loading core components in parallel...');
-            const [configResult, exchangeInfo, strategies] = await Promise.all([
-                this.configurationService.loadConfiguration(),
-                this._loadExchangeInfo(),
-                this._loadStrategies().catch(err => {
-                    console.warn('[AutoScannerService] ⚠️ Strategy loading failed (non-critical):', err.message);
-                    return [];
-                })
-            ]);
-            this.state.exchangeInfo = exchangeInfo;
-            console.log(`[AutoScannerService] ✅ Core components loaded in ${Date.now() - initStartTime}ms`);
-
-            // OPTIMIZATION: Initialize wallet in parallel with position loading
-            console.log(`[AutoScannerService] 🔄 Syncing ${this.state.tradingMode.toUpperCase()} wallet with Binance API...`);
-
-            try {
-                await this.walletManagerService.initializeLiveWallet();
-                console.log(`[AutoScannerService] ✅ Successfully synced ${this.state.tradingMode.toUpperCase()} wallet with Binance`);
-            } catch (binanceError) {
-                console.error(`[AutoScannerService] ❌ Failed to sync with Binance: ${binanceError.message}`);
-                console.warn(`[AutoScannerService] 📂 Attempting to load existing wallet state from database as fallback...`);
-
-                const existingWallets = await queueEntityCall('LiveWalletState', 'filter', { mode: this.state.tradingMode });
-
-                if (existingWallets && existingWallets.length > 1) {
-                    console.warn(`[AutoScannerService] 🧹 Found ${existingWallets.length} duplicate ${this.state.tradingMode.toUpperCase()} wallets. Using the most recent one.`);
-                    existingWallets.sort((a, b) => new Date(b.last_updated_timestamp || 0) - new Date(a.last_updated_timestamp || 0));
-                }
-
-                if (existingWallets && existingWallets.length > 0) {
-                    this.state.liveWalletState = existingWallets[0];
-                    if (!Array.isArray(this.state.liveWalletState.positions)) {
-                        this.state.liveWalletState.positions = [];
-                        console.warn(`[AutoScannerService] [${this.state.tradingMode.toUpperCase()}_WALLET] ⚠️ Initialized missing positions array from fallback`);
-                    }
-                    console.log(`[AutoScannerService] ✅ Using existing ${this.state.tradingMode.toUpperCase()} wallet from database (ID: ${this.state.liveWalletState.id})`);
-                } else {
-                    throw new Error(`Cannot initialize scanner: No Binance connection and no existing wallet state found for ${this.state.tradingMode} mode.`);
-                }
-            }
-
-            // Step 4: Start session monitoring (CRITICAL for leader election)
-            this.sessionManager.startMonitoring();
-
-            // Always enforce mode on wallet state BEFORE loading managed positions
-            if (this.state.liveWalletState && !this.state.liveWalletState.mode) {
-                this.state.liveWalletState.mode = this.state.tradingMode || 'testnet';
-            }
-            
-            // Ensure wallet state exists in proxy server if it doesn't exist
-            if (this.state.liveWalletState && this.state.liveWalletState.id) {
-                try {
-                    // Try to verify the wallet state exists in the proxy server by attempting to update it
-                    // If it doesn't exist, the update will fail and we'll create it
-                    const updatedWallet = await queueEntityCall('LiveWalletState', 'update', this.state.liveWalletState.id, this.state.liveWalletState);
-                    if (updatedWallet) {
-                        this.state.liveWalletState = updatedWallet;
-                        this.addLog(`[AutoScannerService] ✅ Wallet state verified in proxy server (ID: ${this.state.liveWalletState.id})`, 'info');
-                    }
-                } catch (error) {
-                    this.addLog(`[AutoScannerService] ⚠️ Wallet state not found in proxy server, creating it...`, 'warning');
-                    try {
-                        const createdWallet = await queueEntityCall('LiveWalletState', 'create', this.state.liveWalletState);
-                        this.state.liveWalletState = createdWallet;
-                        this.addLog(`[AutoScannerService] ✅ Created wallet state in proxy server (ID: ${createdWallet.id})`, 'success');
-                    } catch (createError) {
-                        this.addLog(`[AutoScannerService] ❌ Failed to create wallet state in proxy server: ${createError.message}`, 'error');
-                    }
-                }
-            }
-
-            // Step: Load managed positions, momentum trades, and strategies in parallel
-            this.addLog(`[PositionManager] 🔧 Ensuring wallet mode is set (${this.state.liveWalletState?.mode}) before loading managed state.`, 'system');
-            
-            // CRITICAL: Ensure liveWalletState exists before loading managed state
-            if (!this.state.liveWalletState) {
-                this.addLog('[AutoScannerService] ❌ No wallet state available, creating minimal wallet state...', 'warning');
-                const minimalWalletState = {
-                    id: `wallet_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                    trading_mode: this.state.tradingMode || 'testnet',
-                    mode: this.state.tradingMode || 'testnet',
-                    available_balance: "0.00000000",
-                    total_realized_pnl: "0.00000000",
-                    unrealized_pnl: "0.00000000",
-                    balances: [],
-                    positions: [],
-                    live_position_ids: [],
-                    total_trades_count: 0,
-                    winning_trades_count: 0,
-                    losing_trades_count: 0,
-                    total_gross_profit: 0,
-                    total_gross_loss: 0,
-                    total_fees_paid: 0,
-                    last_updated_timestamp: new Date().toISOString(),
-                    last_binance_sync: new Date().toISOString()
-                };
-                
-                // Create the wallet state in the proxy server
-                try {
-                    const createdWallet = await queueEntityCall('LiveWalletState', 'create', minimalWalletState);
-                    this.state.liveWalletState = createdWallet;
-                    this.addLog(`[AutoScannerService] ✅ Created minimal wallet state in proxy server (ID: ${createdWallet.id})`, 'success');
-                } catch (createError) {
-                    this.addLog(`[AutoScannerService] ❌ Failed to create wallet state in proxy server: ${createError.message}`, 'error');
-                    // Fallback to in-memory only
-                    this.state.liveWalletState = minimalWalletState;
-                }
-            }
-            
-            // OPTIMIZATION: Load positions and momentum trades in parallel (strategies already loaded)
-            console.log('[AutoScannerService] 📋 Loading positions and momentum trades in parallel...');
-            
-            const [positionResult, momentumTrades] = await Promise.all([
-                this.positionManager.loadManagedState(this.state.liveWalletState),
-                this.performanceMetricsService.loadInitialMomentumTrades().catch(err => {
-                    console.warn('[AutoScannerService] ⚠️ Momentum trades loading failed (non-critical):', err.message);
-                    return [];
-                })
-            ]);
-            
-            console.log(`[AutoScannerService] ✅ Loaded ${this.positionManager.positions.length} open positions and momentum trades`);
-
-            // Ensure the guard is attached after PositionManager is fully set up
-            this.attachRegimeOpenGuard();
-
-            // OPTIMIZATION: Initialize widgets immediately for UI responsiveness
-            this._initializeWidgetDefaults();
-
-            // OPTIMIZATION: Mark as initialized early for UI responsiveness
-            this.state.isInitialized = true;
-            this.notifySubscribers();
-            
-            const coreInitTime = Date.now() - initStartTime;
-            console.log(`[AutoScannerService] ✅ Core initialization complete in ${coreInitTime}ms. Loaded ${strategies.length} strategies.`);
-
-            // OPTIMIZATION: Defer non-critical operations to background
-            console.log('[AutoScannerService] 🔄 Starting background operations...');
-            
-            // Background operations that don't block initialization
-            Promise.all([
-                // Fetch initial prices
-                this._consolidatePrices().then(() => {
-                    const priceCount = Object.keys(this.currentPrices || {}).length;
-                    console.log(`[AutoScannerService] ✅ Fetched prices for ${priceCount} symbols.`);
-                }),
-                
-                // Calculate market regime (non-blocking)
-                this._getCachedOrCalculateRegime(true).catch(err => {
-                    console.warn('[AutoScannerService] ⚠️ Regime calculation failed (non-critical):', err.message);
-                }),
-                
-                // Persist wallet summary (non-blocking)
-                this._persistLatestWalletSummary().catch(err => {
-                    console.warn('[AutoScannerService] ⚠️ Wallet summary persistence failed (non-critical):', err.message);
-                }),
-                
-                // Fetch Fear & Greed Index (non-blocking with timeout)
-                Promise.race([
-                    this._fetchFearAndGreedIndex(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Fear & Greed Index fetch timeout')), 15000))
-                ]).catch(err => {
-                    console.warn('[AutoScannerService] ⚠️ Fear & Greed Index loading failed (non-critical):', err.message);
-                }),
-                
-                // Calculate performance momentum (non-blocking with timeout)
-                Promise.race([
-                    this.performanceMetricsService.calculatePerformanceMomentum(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Performance momentum calculation timeout')), 5000))
-                ]).catch(err => {
-                    console.warn('[AutoScannerService] ⚠️ Performance momentum calculation failed (non-critical):', err.message);
-                })
-            ]).then(() => {
-                console.log('[AutoScannerService] ✅ Background operations completed');
-            }).catch(err => {
-                console.warn('[AutoScannerService] ⚠️ Some background operations failed (non-critical):', err.message);
-            });
-
-            // Auto-start logic (if needed and not blocked)
-            if (this._persistedRunningFlag && !this.isNavigating && !this._isAutoStartBlocked) {
-                console.log('[AutoScannerService] 🔄 Resuming scanner from previous session (claiming leadership)...');
-                
-                // OPTIMIZATION: Wallet already initialized above, no need to re-initialize
-                this.start();
-                this._persistedRunningFlag = false; // Reset after attempt to start
-            }
-
-            return true;
-        } catch (error) {
-            console.error(`[AutoScannerService] ❌ Initialization failed: ${error.message}`, error);
-            this.state.error = error.message;
-            this._persistedRunningFlag = false; // Ensure this is reset on failure
-            this.state.isInitialized = false; // Ensure state is not initialized on failure
+        if (!this.lifecycleService.initialize) {
+            console.error('[AutoScannerService] ❌ lifecycleService.initialize method is not available!');
             return false;
-        } finally {
-            this.state.isInitializing = false;
-            this.notifySubscribers();
         }
+        
+        const result = await this.lifecycleService.initialize();
+        return result;
     }
 
-    async _loadExchangeInfo() {
-        console.log('[AutoScannerService] [EXCHANGE_INFO] 📋 _loadExchangeInfo() called');
-        const MAX_RETRIES = 3;
-        let attempt = 0;
-        let lastError = null;
-
-        while (attempt < MAX_RETRIES) {
-            attempt++;
-            console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Attempt ${attempt}/${MAX_RETRIES} to load exchange info`);
-
-            try {
-                let proxyUrl = this.state.settings?.local_proxy_url;
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] Proxy URL from settings: ${proxyUrl || 'NOT SET'}`);
-
-                if (!proxyUrl) {
-                    // Use default proxy URL as fallback
-                    proxyUrl = "http://localhost:3003";
-                    console.log(`[AutoScannerService] [EXCHANGE_INFO] Using default proxy URL: ${proxyUrl}`);
-                }
-
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 🌐 Calling liveTradingAPI with action: getExchangeInfo, mode: ${this.state.tradingMode}`);
-
-                const requestParams = {
-                    action: 'getExchangeInfo',
-                    tradingMode: this.state.tradingMode, // Preserve original parameter
-                    proxyUrl: proxyUrl
-                };
-
-                // Call liveTradingAPI directly to avoid queue delays
-                const response = await liveTradingAPI(requestParams);
-
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response received:`, response);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response type:`, typeof response);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response success:`, response?.success);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response keys:`, Object.keys(response || {}));
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response.data:`, response?.data);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response.data.success:`, response?.data?.success);
-
-                // Handle both response formats:
-                // 1. Direct liveTradingAPI response: {success: true, data: {...}}
-                // 2. queueFunctionCall response: {data: {...}} (no success property)
-                const isSuccess = response?.success === true || (response?.data && !response?.success);
-                
-                if (!isSuccess) {
-                    const errorMsg = response?.message || response?.error || 'Unknown error from liveTradingAPI';
-                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Response not successful:`, { response, errorMsg });
-                    throw new Error(errorMsg);
-                }
-
-                // The BinanceLocal server returns { success: true, data: { symbols: [...] } }
-                // So we don't need to check response.data.success since data doesn't have a success property
-
-                const exchangeInfoData = response.data;
-
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info data:`, exchangeInfoData);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info data.symbols:`, exchangeInfoData?.symbols);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Is symbols array:`, Array.isArray(exchangeInfoData?.symbols));
-                
-                if (!exchangeInfoData || !Array.isArray(exchangeInfoData.symbols)) {
-                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Invalid exchange info structure:`, {
-                        hasData: !!exchangeInfoData,
-                        hasSymbols: !!exchangeInfoData?.symbols,
-                        symbolsType: typeof exchangeInfoData?.symbols,
-                        symbolsIsArray: Array.isArray(exchangeInfoData?.symbols)
-                    });
-                    throw new Error('Invalid exchange info structure');
-                }
-
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info structure:`, {
-                    hasSymbols: !!exchangeInfoData.symbols,
-                    symbolCount: exchangeInfoData.symbols.length,
-                    sampleSymbol: exchangeInfoData.symbols[0]?.symbol
-                });
-
-
-                // Transform the array of symbols into a map for easier lookup (preserving original structure)
-                const infoMap = exchangeInfoData.symbols.reduce((acc, symbol) => {
-                    acc[symbol.symbol] = {
-                        status: symbol.status,
-                        filters: symbol.filters.reduce((filterAcc, filter) => {
-                            filterAcc[filter.filterType] = filter;
-                            return filterAcc;
-                        }, {})
-                    };
-                    return acc;
-                }, {});
-
-                this.state.exchangeInfo = infoMap;
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] ✅ Successfully loaded and mapped exchange info for ${Object.keys(infoMap).length} symbols`);
-
-                return infoMap; // Return the processed map
-
-            } catch (error) {
-                lastError = error; // Store the last error
-                console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Attempt ${attempt} failed: ${error.message}`);
-
-                if (attempt < MAX_RETRIES) {
-                    const delayMs = attempt * 2000;
-                    console.log(`[AutoScannerService] [EXCHANGE_INFO] Waiting ${delayMs}ms before retry...`);
-                    await new Promise(resolve => setTimeout(resolve, delayMs));
-                } else {
-                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Unable to load exchange info after ${MAX_RETRIES} retries: ${lastError?.message}`);
-                }
-            }
-        }
-
-        // If loop finishes (all retries exhausted), return null as per original behavior
-        return null;
-    }
-
-    getExchangeInfo() {
-        return this.state.exchangeInfo;
-    }
 
     _initializeWidgetDefaults() {
         // Initialize Fear & Greed Index with default values for immediate display
@@ -2121,6 +1102,7 @@ class AutoScannerService {
     }
 
     async start() {
+        console.warn('[AutoScannerService] ⚠️ DEPRECATED: Use LifecycleService.start() instead of AutoScannerService.start()');
         console.log('[AutoScannerService] start() called');
         console.log('[AutoScannerService] Attempting to start scanner and claim leadership...');
         const result = await this.sessionManager.start();
@@ -2182,31 +1164,53 @@ class AutoScannerService {
         }
     }
 
-    _startScanLoop() {
-        this.scanCycle().catch(e => {
-            console.error(`[AutoScannerService] Initial scan failed: ${e.message}`, e);
-        });
-    }
-
     _startCountdown() {
+        console.log('[AutoScannerService] 🔍 _startCountdown() called');
+        console.log('[AutoScannerService] 🔍 Scanner state check:', {
+            isRunning: this.state.isRunning,
+            isScanning: this.state.isScanning,
+            hasCountdownInterval: !!this.countdownInterval,
+            scanFrequency: this.state.settings?.scanFrequency || 60000
+        });
+
         if (this.countdownInterval) {
+            console.log('[AutoScannerService] 🔍 Clearing existing countdown interval');
             clearInterval(this.countdownInterval);
             this.countdownInterval = null;
         }
 
         if (!this.state.isRunning || this.state.isScanning) {
+            console.log('[AutoScannerService] ⏸️ Countdown not started:', {
+                reason: !this.state.isRunning ? 'Scanner not running' : 'Scanner is scanning',
+                isRunning: this.state.isRunning,
+                isScanning: this.state.isScanning
+            });
             return;
         }
 
         const scanFrequency = this.state.settings?.scanFrequency || 60000;
         this.state.nextScanTime = Date.now() + scanFrequency;
 
-        console.log(`[AutoScannerService] ⏰ Next scan in ${Math.round(scanFrequency / 1000)} seconds...`);
+        console.log(`[AutoScannerService] ⏰ Starting countdown: Next scan in ${Math.round(scanFrequency / 1000)} seconds...`);
+        console.log(`[AutoScannerService] ⏰ Countdown details:`, {
+            scanFrequency: scanFrequency,
+            nextScanTime: this.state.nextScanTime,
+            currentTime: Date.now(),
+            timeUntilScan: this.state.nextScanTime - Date.now()
+        });
 
         this.notifySubscribers();
 
         this.countdownInterval = setInterval(() => {
+            const now = Date.now();
+            const timeUntilScan = this.state.nextScanTime ? this.state.nextScanTime - now : 0;
+            
             if (!this.state.isRunning || this.state.isScanning) {
+                console.log('[AutoScannerService] 🔍 Countdown stopped:', {
+                    reason: !this.state.isRunning ? 'Scanner not running' : 'Scanner is scanning',
+                    isRunning: this.state.isRunning,
+                    isScanning: this.state.isScanning
+                });
                 clearInterval(this.countdownInterval);
                 this.countdownInterval = null;
                 this.state.nextScanTime = null;
@@ -2215,15 +1219,21 @@ class AutoScannerService {
                 return;
             }
 
-            if (this.state.nextScanTime && Date.now() >= this.state.nextScanTime) {
+            if (this.state.nextScanTime && now >= this.state.nextScanTime) {
+                console.log('[AutoScannerService] 🚀 Countdown expired - triggering scan cycle!');
                 clearInterval(this.countdownInterval);
                 this.countdownInterval = null;
                 this.state.nextScanTime = null;
 
-                this.scanCycle().catch(e => {
+                this.scanEngineService.scanCycle().catch(e => {
                     console.error(`[AutoScannerService] Scan cycle error: ${e.message}`, e);
                 });
                 return;
+            }
+
+            // Log countdown progress every 10 seconds
+            if (timeUntilScan > 0 && Math.floor(timeUntilScan / 1000) % 10 === 0) {
+                console.log(`[AutoScannerService] ⏰ Countdown: ${Math.floor(timeUntilScan / 1000)}s until next scan`);
             }
 
             this.notifySubscribers();
@@ -2278,10 +1288,7 @@ class AutoScannerService {
                 console.warn('[AutoScannerService] [F&G Index] ⚠️ Multiple F&G fetch failures - will retry silently');
             }
 
-            // Store fallback in both locations
-            const fallback = { value: '50', value_classification: 'Neutral (Fallback)' };
-            this.fearAndGreedData = fallback;
-            this.state.fearAndGreedData = fallback;
+            throw new Error('Failed to fetch Fear & Greed Index');
 
             // Notify subscribers of state change
             this.notifySubscribers();
@@ -2302,284 +1309,6 @@ class AutoScannerService {
         console.log('[AutoScannerService] [DEPRECATION] _updateTrailingStops in AutoScannerService is deprecated; handled by PositionManager.');
         return;
     }
-
-    async scanCycle() {
-        console.log('[AutoScannerService] ===== SCAN CYCLE START =====');
-
-        if (!this.state.isRunning) {
-            console.warn('[AutoScannerService] Scan cycle aborted: Scanner is not running.');
-            this.state.isScanning = false;
-            return;
-        }
-
-        if (this.isHardResetting) {
-            console.warn('[AutoScannerService] Scan cycle aborted due to hard reset.');
-            this.state.isScanning = false;
-            return;
-        }
-
-        if (this.state.isScanning) {
-            console.warn('[AutoScannerService] ⚠️ Scan already in progress, skipping this cycle.');
-            return;
-        }
-
-        this.state.isScanning = true;
-        this.notifySubscribers(); // Notify UI that scanning has started
-
-        const cycleStartTime = Date.now();
-        let phaseTimings = {};
-
-        this.state.lastScanTime = Date.now();
-        this.state.stats.totalScans++; // Increment total scans for this tab instance
-        this.state.stats.lastScanStartTime = new Date().toISOString();
-        this.state.nextScanTime = null;
-        this.state.newPositionsCount = 0; // Reset new positions count for this cycle
-
-        console.log(`[AutoScannerService] [SCAN_CYCLE] 🔄 Starting scan cycle #${this.state.stats.totalScanCycles + 1}`);
-
-        console.log(`[AutoScannerService] 🔄 Starting new scan cycle #${this.state.stats.totalScanCycles + 1}...`);
-        this.notifySubscribers();
-
-        let cycleStats = {
-            combinationsEvaluated: 0,
-            combinationsMatched: 0,
-            positionsOpened: 0,
-            positionsBlocked: [],
-            marketRegime: this.state.marketRegime ? { ...this.state.marketRegime } : null,
-            strategiesProcessed: 0,
-            strategiesSkipped: 0,
-            skipReasons: {},
-            blockReasons: {}
-        };
-
-        try {
-            // NEW: Pre-scan leadership check
-            if (this.state.isRunning) {
-                const hasLeadership = await this.sessionManager.verifyLeadership();
-                if (!hasLeadership) {
-                    console.warn('[AutoScannerService] ⚠️ Lost leadership during scan - another tab is now active. Stopping scanner.');
-                    this.stop();
-                    return;
-                }
-            }
-
-            await this.positionManager.waitForWalletSave(60000);
-
-            // PHASE 1: Market Regime Detection & F&G Index
-            const regimeStartTime = Date.now();
-            console.log('[AutoScannerService] 🌡️ Detecting market regime and fetching F&G Index...');
-            const regimeData = await this._detectMarketRegime();
-            phaseTimings.regimeDetection = Date.now() - regimeStartTime;
-
-            if (!regimeData) {
-                console.error('[AutoScannerService] ❌ Failed to detect market regime, skipping cycle.');
-                this.state.isScanning = false;
-                this.notifySubscribers();
-                return;
-            }
-
-            const { regime, confidence } = regimeData;
-            console.log(`[AutoScannerService] 📊 Market Regime: ${regime.toUpperCase()} (${confidence.toFixed(1)}% confidence)`);
-            cycleStats.marketRegime = this.state.marketRegime ? { ...this.state.marketRegime } : null;
-
-            if (confidence < this.state.settings.minimumRegimeConfidence) {
-                console.warn(`[AutoScannerService] ⚠️ Regime confidence ${confidence.toFixed(1)}% below threshold (${this.state.settings.minimumRegimeConfidence}%). Skipping strategy evaluation.`);
-                this.state.isScanning = false;
-                this.notifySubscribers();
-                return;
-            }
-
-            // PHASE 2: Price Fetching
-            const priceStartTime = Date.now();
-            console.log('[AutoScannerService] 💰 Fetching current prices for strategies and positions...');
-            await this._consolidatePrices();
-            phaseTimings.priceFetching = Date.now() - priceStartTime;
-
-
-            // PHASE 3: Position Monitoring and Reconciliation
-            const monitoringStartTime = Date.now();
-            console.log('[AutoScannerService] 👀 Monitoring open positions and reconciling...');
-            await this._monitorPositions(cycleStats);
-            phaseTimings.positionMonitoring = Date.now() - monitoringStartTime;
-
-
-            if (this.isHardResetting) {
-                console.warn('[AutoScannerService] Cycle aborted after position monitoring.');
-                this.state.isScanning = false;
-                this.notifySubscribers();
-                return;
-            }
-
-            // NEW: Single summary check to avoid strategy evaluation when funds below minimum
-            const availableUsdt = this._getAvailableUsdt();
-            const minTrade = this.state?.settings?.minimumTradeValue || 10;
-
-            if (availableUsdt < minTrade) {
-                this.addLog(
-                    `[FUNDS] Free balance ${this._formatCurrency(availableUsdt)} is below minimum trade size ${this._formatCurrency(minTrade)}. Skipping new position search this cycle.`,
-                    'info'
-                );
-
-                // Continue with maintenance tasks but skip strategy evaluation
-                // PHASE 6: Trade Archiving
-                const archivingStartTime = Date.now();
-                await this._archiveOldTradesIfNeeded();
-                // PHASE 7: Performance Snapshot & Wallet Update
-                const snapshotStartTime = Date.now();
-                await this._updatePerformanceSnapshotIfNeeded(cycleStats);
-
-                // Emit end-of-cycle summary before exiting this cycle early
-                await this._logCycleSummary(cycleStats);
-
-                // finalize (rest of scanCycle will handle timers/stats)
-                return;
-            }
-
-            // NEW: Enforce absolute invest cap before loading strategies
-            const capUsdt = Number(this.state?.settings?.maxBalanceInvestCapUSDT || 0);
-            if (capUsdt > 0) {
-                const allocatedNow = this._getBalanceAllocatedInTrades();
-                if (allocatedNow >= capUsdt) {
-                    this.addLog(
-                        `[FUNDS] Max invest cap reached: allocated ${this._formatCurrency(allocatedNow)} ≥ cap ${this._formatCurrency(capUsdt)}. Skipping new position search this cycle.`,
-                        'warning'
-                    );
-                    // Continue with maintenance tasks but skip strategy evaluation
-                    const archivingStartTime = Date.now();
-                    await this._archiveOldTradesIfNeeded();
-                    const snapshotStartTime = Date.now();
-                    await this._updatePerformanceSnapshotIfNeeded(cycleStats);
-                    await this._logCycleSummary(cycleStats);
-                    return;
-                }
-            }
-
-
-            // PHASE 4: Strategy Loading
-            const strategyLoadStartTime = Date.now();
-            console.log('[AutoScannerService] 📋 Loading active strategies...');
-            const strategies = await this._loadStrategies();
-            console.log(`[AutoScannerService] ✅ Loaded ${strategies.length} strategies`);
-            phaseTimings.strategyLoading = Date.now() - strategyLoadStartTime;
-
-            if (!strategies || strategies.length === 0) {
-                console.warn('[AutoScannerService] ⚠️ No active strategies found');
-                this.state.isScanning = false;
-                this.notifySubscribers();
-                return;
-            }
-            console.log(`[AutoScannerService] ✅ Loaded ${strategies.length} active strategies`);
-
-            // PHASE 5: Strategy Evaluation & Signal Detection
-            const evaluationStartTime = Date.now();
-            console.log('[AutoScannerService] 🔍 Evaluating strategies and detecting signals...');
-            // Call the modified _evaluateStrategies (which now delegates to StrategyManagerService)
-            const scanResult = await this._evaluateStrategies(
-                strategies,
-                this.state.liveWalletState,
-                this.state.settings,
-                this.state.marketRegime,
-                this.currentPrices,
-                cycleStats
-            );
-            phaseTimings.strategyEvaluation = Date.now() - evaluationStartTime;
-
-            if (this.isHardResetting) {
-                console.warn('[AutoScannerService] Cycle aborted after signal detection.');
-                this.state.isScanning = false;
-                this.notifySubscribers();
-                return;
-            }
-
-            // PHASE 6: Trade Archiving
-            const archivingStartTime = Date.now();
-            console.log('[AutoScannerService] 📦 Archiving old trades...');
-            await this._archiveOldTradesIfNeeded();
-            phaseTimings.tradeArchiving = Date.now() - archivingStartTime;
-
-            // PHASE 7: Performance Snapshot & Wallet Update
-            const snapshotStartTime = Date.now();
-            console.log('[AutoScannerService] 📈 Updating performance metrics and wallet state...');
-            await this._updatePerformanceSnapshotIfNeeded(cycleStats);
-            phaseTimings.performanceSnapshot = Date.now() - snapshotStartTime;
-
-            const summaryMessage = `✅ Scan cycle complete: ${scanResult.signalsFound} signals found, ${scanResult.tradesExecuted} trades executed.`;
-            console.log(`[AutoScannerService] ${summaryMessage}`);
-
-            // Emit end-of-cycle summary logs (wallet snapshot, metrics, blocked reasons, etc.)
-            await this._logCycleSummary(cycleStats);
-
-        } catch (error) {
-            const isCriticalError = error.message && (
-                error.message.includes('database') ||
-                error.message.includes('initialization') ||
-                error.message.includes('configuration') ||
-                (error.message.includes('network') && !error.message.includes('insufficient balance'))
-            );
-
-            if (isCriticalError) {
-                console.error(`[AutoScannerService] 💥 CRITICAL ERROR in scan cycle: ${error.message}`, error);
-                console.error(`[AutoScannerService] 🛑 STOPPING SCANNER due to critical error. Stack trace: ${error.stack}`);
-
-                this.stop();
-
-                if (this.toast) {
-                    this.toast({
-                        title: "Scanner Stopped - Critical Error",
-                        description: `Scanner has been stopped due to critical error: ${error.message}`,
-                        variant: "destructive"
-                    });
-                }
-
-                console.error(`[AutoScannerService] 🔴 Scanner has been STOPPED due to critical error. Please review the error and manually restart if needed.`);
-            } else {
-                console.warn(`[AutoScannerService] ⚠️ Non-critical error in scan cycle: ${error.message}. Scanner will continue.`, error);
-            }
-            this.state.error = error.message;
-            this.state.errorSource = 'scanCycle';
-        } finally {
-            // Update stats
-            const scanDuration = Date.now() - cycleStartTime;
-            this.state.stats.totalScanCycles++;
-            this.state.stats.lastScanTimeMs = scanDuration;
-
-            // Update rolling average
-            if (this.state.stats.averageScanTimeMs === 0) {
-                this.state.stats.averageScanTimeMs = scanDuration;
-            } else {
-                this.state.stats.averageScanTimeMs = (this.state.stats.averageScanTimeMs * 0.8) + (scanDuration * 0.2);
-            }
-
-            console.log(`[AutoScannerService] ⏱️ Scan cycle completed in ${(scanDuration / 1000).toFixed(2)}s (avg: ${(this.state.stats.averageScanTimeMs / 1000).toFixed(2)}s)`, { duration: scanDuration });
-
-            // NEW: Persist updated stats to localStorage immediately after cycle completion
-            this._saveStateToStorage();
-
-            this.state.isScanning = false;
-
-            // NEW: Notify subscribers immediately after stats update to ensure UI reflects changes
-            this.notifySubscribers();
-
-            if (this.state.isRunning) {
-                try {
-                    await this.sessionManager.claimLeadership();
-                } catch (heartbeatError) {
-                    console.warn(`[AutoScannerService] ⚠️ Post-scan heartbeat failed: ${heartbeatError.message}`);
-                }
-            }
-
-            if (this.state.isRunning && !this.isHardResetting) {
-                this._startCountdown();
-            } else {
-                console.log('[AutoScannerService] Not starting new countdown as scanner is stopped or resetting.');
-            }
-
-            // Final notification at end of cycle
-            this.notifySubscribers();
-            console.log('[AutoScannerService] ===== SCAN CYCLE COMPLETE =====');
-        }
-    }
-
 
     /**
      * Helper method to detect market regime and fetch F&G index.
@@ -2609,7 +1338,15 @@ class AutoScannerService {
      * Helper method to consolidate and fetch prices for all relevant symbols.
      */
     async _consolidatePrices() {
-            if (this.isHardResetting) return;
+        if (this.isHardResetting) return;
+
+        // OPTIMIZATION: Throttle heavy computations to prevent UI blocking
+        const now = Date.now();
+        if (now - this._lastHeavyComputationTime < this._heavyComputationThrottleMs) {
+            console.log('[AutoScannerService] [_consolidatePrices] Throttling heavy computation to prevent UI blocking');
+            return;
+        }
+        this._lastHeavyComputationTime = now;
 
         try {
             const allRequiredSymbols = new Set();
@@ -2638,11 +1375,13 @@ class AutoScannerService {
                 });
             }
 
-            // 3. Collect symbols from wallet balances (with dust threshold)
+            // 3. Collect symbols from wallet balances (with dust threshold) - OPTIMIZED
             let balancesWithAmountCount = 0; // for logging
             let dustAssetsSkipped = 0;
-            if (this.state.liveWalletState && this.state.liveWalletState.balances) {
-                this.state.liveWalletState.balances.forEach(balance => {
+            const currentWalletState = this._getCurrentWalletState();
+            if (currentWalletState && currentWalletState.balances) {
+                // OPTIMIZATION: Use for...of loop instead of forEach for better performance
+                for (const balance of currentWalletState.balances) {
                     // Check if asset is not USDT and not a fiat currency (case-insensitive check)
                     if (balance.asset && balance.asset !== 'USDT' && !fiatCurrencies.has(balance.asset.toUpperCase())) {
                         const total = parseFloat(balance.free || 0) + parseFloat(balance.locked || 0);
@@ -2656,7 +1395,7 @@ class AutoScannerService {
                             dustAssetsSkipped++;
                         }
                     }
-                });
+                }
             }
 
             // 4. Ensure BTCUSDT is always fetched as a baseline, if not already included.
@@ -2791,7 +1530,7 @@ class AutoScannerService {
 
                 // Step 2: Recalculate wallet summary with fresh data
                 await this.walletManagerService.updateWalletSummary(
-                    this.state.liveWalletState,
+                    this._getCurrentWalletState(),
                     this.currentPrices
                 );
 
@@ -2808,7 +1547,7 @@ class AutoScannerService {
             }
         }
 
-        const currentWalletState = this.state.liveWalletState;
+        const currentWalletState = this.walletManagerService?.getCurrentWalletState() || this._getCurrentWalletState();
         const usdtBalanceObject = (currentWalletState?.balances || []).find(b => b.asset === 'USDT');
         const availableUsdt = parseFloat(usdtBalanceObject?.free || '0');
         const lockedUsdt = parseFloat(usdtBalanceObject?.locked || '0');
@@ -2916,7 +1655,7 @@ class AutoScannerService {
 
                 // Step 2: Recalculate wallet summary with fresh data
                 await this.walletManagerService.updateWalletSummary(
-                    this.state.liveWalletState,
+                    this._getCurrentWalletState(),
                     this.currentPrices
                 );
 
@@ -2963,49 +1702,43 @@ class AutoScannerService {
             // 1. Update wallet summary
             console.log('[AutoScannerService] Updating wallet summary...');
             console.log('[AutoScannerService] Current wallet state before update:', {
-                id: this.state.liveWalletState?.id,
-                total_realized_pnl: this.state.liveWalletState?.total_realized_pnl,
-                total_trades_count: this.state.liveWalletState?.total_trades_count
+                id: this._getCurrentWalletState()?.id,
+                total_realized_pnl: this._getCurrentWalletState()?.total_realized_pnl,
+                total_trades_count: this._getCurrentWalletState()?.total_trades_count
             });
 
             await this.walletManagerService.updateWalletSummary(
-                this.state.liveWalletState,
+                this._getCurrentWalletState(),
                 this.currentPrices || {}
             );
 
             console.log('[AutoScannerService] Wallet summary updated');
             console.log('[AutoScannerService] Current wallet state after update:', {
-                id: this.state.liveWalletState?.id,
-                total_realized_pnl: this.state.liveWalletState?.total_realized_pnl,
-                total_trades_count: this.state.liveWalletState?.total_trades_count
+                id: this._getCurrentWalletState()?.id,
+                total_realized_pnl: this._getCurrentWalletState()?.total_realized_pnl,
+                total_trades_count: this._getCurrentWalletState()?.total_trades_count
             });
 
             // 2. Update HistoricalPerformance snapshots
             console.log('[AutoScannerService] Calling updatePerformanceSnapshot function...');
-            const response = await queueFunctionCall(
-                'updatePerformanceSnapshot',
-                updatePerformanceSnapshot,
-                { mode: this.state.tradingMode },
-                'normal',
-                null,
-                0,
-                120000
-            );
+            console.log('[AutoScannerService] Using direct call instead of queueFunctionCall to avoid hanging');
+            const response = await updatePerformanceSnapshot({ mode: this.state.tradingMode });
+            console.log('[AutoScannerService] Direct updatePerformanceSnapshot call completed');
 
-            console.log(`[AutoScannerService] updatePerformanceSnapshot response: success=${response?.data?.success}, error=${response?.data?.error}`);
+            console.log(`[AutoScannerService] updatePerformanceSnapshot response: success=${response?.success}, error=${response?.error}`);
 
-            if (response?.data?.success) {
+            if (response?.success) {
                 console.log('[AutoScannerService] ✅ HistoricalPerformance snapshots created successfully');
-                if (response.data.snapshotsCreated && response.data.snapshotsCreated.length > 0) {
-                    response.data.snapshotsCreated.forEach(snap => {
+                if (response.snapshotsCreated && response.snapshotsCreated.length > 0) {
+                    response.snapshotsCreated.forEach(snap => {
                         console.log(`[AutoScannerService] Created ${snap.type} snapshot at ${snap.timestamp}`);
                     });
                 }
-                if (response.data.currentMetrics) {
-                    console.log(`[AutoScannerService] Current metrics: PnL=${response.data.currentMetrics.total_realized_pnl?.toFixed(2) || 'N/A'}`);
+                if (response.currentMetrics) {
+                    console.log(`[AutoScannerService] Current metrics: PnL=${response.currentMetrics.total_realized_pnl?.toFixed(2) || 'N/A'}`);
                 }
             } else {
-                console.warn('[AutoScannerService] ⚠️ HistoricalPerformance update had issues: ' + (response?.data?.error || 'Unknown error'));
+                console.warn('[AutoScannerService] ⚠️ HistoricalPerformance update had issues: ' + (response?.error || 'Unknown error'));
             }
 
             console.log('[AutoScannerService] Calculating performance momentum...');
@@ -3015,7 +1748,7 @@ class AutoScannerService {
             await this.positionManager.persistWalletChangesAndWait();
 
             console.log('[AutoScannerService] Updating wallet summary again after persist...');
-            await this.walletManagerService.updateWalletSummary(this.state.liveWalletState, this.currentPrices);
+            await this.walletManagerService.updateWalletSummary(this._getCurrentWalletState(), this.currentPrices);
 
             // 3. Notify WalletProvider
             console.log('[AutoScannerService] Notifying wallet subscribers...');
@@ -3206,16 +1939,16 @@ class AutoScannerService {
         this.addLog('═══════════════════════════════════════════════════════', 'cycle');
 
         try {
-            if (!this.walletManagerService.walletSummary || !this.state.liveWalletState || !this.walletManagerService.walletSummary.lastUpdated || (Date.now() - new Date(this.walletManagerService.walletSummary.lastUpdated).getTime() > 10000)) {
+            if (!this.walletManagerService.walletSummary || !this._getCurrentWalletState() || !this.walletManagerService.walletSummary.lastUpdated || (Date.now() - new Date(this.walletManagerService.walletSummary.lastUpdated).getTime() > 10000)) {
                 await this.walletManagerService.initializeLiveWallet();
                 await this.walletManagerService.updateWalletSummary(
-                    this.state.liveWalletState,
+                    this._getCurrentWalletState(),
                     this.currentPrices
                 );
                 await this._persistLatestWalletSummary();
             } else {
                 await this.walletManagerService.updateWalletSummary(
-                    this.state.liveWalletState,
+                    this._getCurrentWalletState(),
                     this.currentPrices
                 );
                 await this._persistLatestWalletSummary();
@@ -3328,7 +2061,7 @@ class AutoScannerService {
             { level: 1 }
         );
 
-        const modeText = this.state?.liveWalletState?.mode?.toUpperCase() || 'UNKNOWN';
+        const modeText = this.state?.tradingMode?.toUpperCase() || 'UNKNOWN';
         this.addLog(`[WALLET] Mode: ${modeText} | Total Equity: ${this._formatCurrency(summary.totalEquity || 0)}`, 'cycle');
         this.addLog('═══════════════════════════════════════════════════════', 'cycle');
     }
@@ -3349,7 +2082,8 @@ class AutoScannerService {
             const timeframe = '4h';
             const klineLimit = 300;
 
-            const response = await queueFunctionCall('getKlineData', getKlineData, { symbols: [symbol], interval: timeframe, limit: klineLimit });
+            // NEW: Direct call to bypass API queue for better batching
+            const response = await getKlineData({ symbols: [symbol], interval: timeframe, limit: klineLimit });
 
             const responseData = response.data;
 
@@ -3450,9 +2184,11 @@ class AutoScannerService {
             const regimeResult = detector.getRegime();
             const volatilityData = detector.getVolatilityData();
 
-            const resolvedConfidencePct = (typeof regimeResult.confidence === 'number'
-                ? regimeResult.confidence
-                : (typeof regimeResult.confidencePct === 'number' ? regimeResult.confidencePct : 50));
+            // FIXED: Use confidencePct (percentage) instead of confidence (decimal)
+            const resolvedConfidencePct = (typeof regimeResult.confidencePct === 'number'
+                ? regimeResult.confidencePct
+                : (typeof regimeResult.confidence === 'number' ? regimeResult.confidence * 100 : 50));
+
 
             this.state.marketRegime = {
                 regime: regimeResult.regime,
@@ -3522,7 +2258,7 @@ class AutoScannerService {
                 const snapshot = latest[0];
                 localStorage.setItem(`walletSummaryCache_${mode}`, JSON.stringify(snapshot));
                 try {
-                    window.__walletSummaryCache = snapshot; // easy global fallback for UI
+                    window.__walletSummaryCache = snapshot;
                 } catch (_e) {
                     // ignore, not critical
                 }
@@ -3534,6 +2270,324 @@ class AutoScannerService {
 
     getState() {
         return { ...this.state };
+    }
+
+    // ===== DELEGATION METHODS =====
+    // These methods delegate to the appropriate services
+
+    // Wallet State Service Delegations
+    async reinitializeWalletFromBinance() {
+        return this.walletStateService.reinitializeWalletFromBinance();
+    }
+
+    _getAvailableUsdt() {
+        return this.walletStateService._getAvailableUsdt();
+    }
+
+    _getBalanceAllocatedInTrades() {
+        return this.walletStateService._getBalanceAllocatedInTrades();
+    }
+
+    async resetWalletAndRestart() {
+        return this.walletStateService.resetWalletAndRestart();
+    }
+
+    async _persistLatestWalletSummary() {
+        return this.walletStateService._persistLatestWalletSummary();
+    }
+
+    getWalletStateHistory() {
+        return this.walletStateService.getWalletStateHistory();
+    }
+
+    // UI State Service Delegations
+    // REMOVED: notifySubscribers delegation - use AutoScannerService's own subscribers
+    // notifySubscribers() {
+    //     return this.uiStateService.notifySubscribers();
+    // }
+
+    registerToastNotifier(toastFunction) {
+        return this.uiStateService.registerToastNotifier(toastFunction);
+    }
+
+    _saveStateToStorage() {
+        return this.uiStateService._saveStateToStorage();
+    }
+
+    _loadStateFromStorage() {
+        return this.uiStateService._loadStateFromStorage();
+    }
+
+    clearLogs() {
+        return this.uiStateService.clearLogs();
+    }
+
+    forceResetState() {
+        return this.uiStateService.forceResetState();
+    }
+
+    _initializeWidgetDefaults() {
+        return this.uiStateService._initializeWidgetDefaults();
+    }
+
+    getState() {
+        return this.uiStateService.getState();
+    }
+
+    // Lifecycle Service Delegations
+    async initialize() {
+        return this.lifecycleService.initialize();
+    }
+
+    async start() {
+        return this.lifecycleService.start();
+    }
+
+    async stop() {
+        return this.lifecycleService.stop();
+    }
+
+    forceStop() {
+        return this.lifecycleService.forceStop();
+    }
+
+    restart() {
+        return this.lifecycleService.restart();
+    }
+
+    _startScanLoop() {
+        return this.lifecycleService._startScanLoop();
+    }
+
+    _startCountdown() {
+        return this.lifecycleService._startCountdown();
+    }
+
+    async _loadExchangeInfo() {
+        // Use the robust implementation instead of delegating to LifecycleService
+        console.log('[AutoScannerService] [EXCHANGE_INFO] 📋 _loadExchangeInfo() called');
+        const MAX_RETRIES = 3;
+        let attempt = 0;
+        let lastError = null;
+
+        while (attempt < MAX_RETRIES) {
+            attempt++;
+            console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Attempt ${attempt}/${MAX_RETRIES} to load exchange info`);
+
+            try {
+                let proxyUrl = this.state.settings?.local_proxy_url;
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] Proxy URL from settings: ${proxyUrl || 'NOT SET'}`);
+
+                if (!proxyUrl) {
+                    // Use default proxy URL
+                    proxyUrl = "http://localhost:3003";
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] Using default proxy URL: ${proxyUrl}`);
+                }
+
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 🌐 Calling liveTradingAPI with action: getExchangeInfo, mode: ${this.state.tradingMode}`);
+
+                const requestParams = {
+                    action: 'getExchangeInfo',
+                    tradingMode: this.state.tradingMode,
+                    proxyUrl: proxyUrl
+                };
+
+                // Call liveTradingAPI directly to avoid queue delays
+                const response = await liveTradingAPI(requestParams);
+
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response received:`, response);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response type:`, typeof response);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response success:`, response?.success);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response keys:`, Object.keys(response || {}));
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response.data:`, response?.data);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response.data.success:`, response?.data?.success);
+
+                // Handle both response formats:
+                // 1. Direct liveTradingAPI response: {success: true, data: {...}}
+                // 2. queueFunctionCall response: {data: {...}} (no success property)
+                const isSuccess = response?.success === true || (response?.data && !response?.success);
+                
+                if (!isSuccess) {
+                    const errorMsg = response?.message || response?.error || 'Unknown error from liveTradingAPI';
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Response not successful:`, { response, errorMsg });
+                    throw new Error(errorMsg);
+                }
+
+                const exchangeInfoData = response.data;
+
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info data:`, exchangeInfoData);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info data.symbols:`, exchangeInfoData?.symbols);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Is symbols array:`, Array.isArray(exchangeInfoData?.symbols));
+                
+                if (!exchangeInfoData || !Array.isArray(exchangeInfoData.symbols)) {
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Invalid exchange info structure:`, {
+                        hasData: !!exchangeInfoData,
+                        hasSymbols: !!exchangeInfoData?.symbols,
+                        symbolsType: typeof exchangeInfoData?.symbols,
+                        symbolsIsArray: Array.isArray(exchangeInfoData?.symbols)
+                    });
+                    throw new Error('Invalid exchange info structure');
+                }
+
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info structure:`, {
+                    hasSymbols: !!exchangeInfoData.symbols,
+                    symbolCount: exchangeInfoData.symbols.length,
+                    sampleSymbol: exchangeInfoData.symbols[0]?.symbol
+                });
+
+                // Transform the array of symbols into a map for easier lookup (preserving original structure)
+                const infoMap = exchangeInfoData.symbols.reduce((acc, symbol) => {
+                    acc[symbol.symbol] = {
+                        status: symbol.status,
+                        filters: symbol.filters.reduce((filterAcc, filter) => {
+                            filterAcc[filter.filterType] = filter;
+                            return filterAcc;
+                        }, {})
+                    };
+                    return acc;
+                }, {});
+
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] ✅ Successfully loaded and mapped exchange info for ${Object.keys(infoMap).length} symbols`);
+
+                return infoMap; // Return the processed map
+
+            } catch (error) {
+                lastError = error;
+                console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Attempt ${attempt} failed:`, error.message);
+                
+                if (attempt < MAX_RETRIES) {
+                    const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] ⏳ Retrying in ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        // If all retries failed, throw the last error
+        console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ All ${MAX_RETRIES} attempts failed`);
+        throw lastError || new Error('Failed to load exchange info after all retries');
+    }
+
+    getExchangeInfo() {
+        // If exchange info is not loaded, try to load it
+        if (!this.state.exchangeInfo || Object.keys(this.state.exchangeInfo).length === 0) {
+            console.log('[AutoScannerService] [EXCHANGE_INFO] ⚠️ Exchange info not loaded, attempting to load...');
+            this._loadExchangeInfo().then(exchangeInfo => {
+                this.state.exchangeInfo = exchangeInfo;
+                console.log('[AutoScannerService] [EXCHANGE_INFO] ✅ Exchange info loaded on demand');
+            }).catch(error => {
+                console.error('[AutoScannerService] [EXCHANGE_INFO] ❌ Failed to load exchange info on demand:', error);
+            });
+        }
+        return this.state.exchangeInfo;
+    }
+
+    // Utility Service Delegations
+    getTradingMode() {
+        // Safe call - return default if utilityService doesn't exist yet
+        if (this.utilityService) {
+            return this.utilityService.getTradingMode();
+        }
+        // Fallback to state.tradingMode if utilityService not ready
+        return this.state?.tradingMode || 'testnet';
+    }
+
+    isLiveMode() {
+        // Safe call - return default if utilityService doesn't exist yet
+        if (this.utilityService) {
+            return this.utilityService.isLiveMode();
+        }
+        // Fallback to checking state.tradingMode if utilityService not ready
+        return this.state?.tradingMode === 'live';
+    }
+
+    isTestnetMode() {
+        // Safe call - return default if utilityService doesn't exist yet
+        if (this.utilityService) {
+            return this.utilityService.isTestnetMode();
+        }
+        // Fallback to checking state.tradingMode if utilityService not ready
+        return this.state?.tradingMode === 'testnet';
+    }
+
+    async _startRunningState() {
+        if (!this.utilityService) {
+            console.error('[AutoScannerService] ❌ ERROR: utilityService is undefined!');
+            return;
+        }
+        return await this.utilityService._startRunningState();
+    }
+
+    _stopRunningState(options = {}) {
+        return this.utilityService._stopRunningState(options);
+    }
+
+    async _sendTelegramNotification(type, data) {
+        return this.utilityService._sendTelegramNotification(type, data);
+    }
+
+    _isTradingBlockedByRegime() {
+        return this.utilityService._isTradingBlockedByRegime();
+    }
+
+    // Market Regime Service Delegations
+    _isRegimeCacheValid() {
+        return this.marketRegimeService._isRegimeCacheValid();
+    }
+
+    async _getCachedOrCalculateRegime(forceCalculate = false) {
+        return this.marketRegimeService._getCachedOrCalculateRegime(forceCalculate);
+    }
+
+    async _detectMarketRegime() {
+        return this.marketRegimeService._detectMarketRegime();
+    }
+
+    async _fetchFearAndGreedIndex() {
+        return this.marketRegimeService._fetchFearAndGreedIndex();
+    }
+
+    async _updateMarketRegime() {
+        return this.marketRegimeService._updateMarketRegime();
+    }
+
+    // Price Manager Service Delegations
+    async _consolidatePrices() {
+        return this.priceManagerService._consolidatePrices();
+    }
+
+    _updateCurrentPrices(pricesData) {
+        return this.priceManagerService._updateCurrentPrices(pricesData);
+    }
+
+    // Scan Engine Service Delegations
+    async _loadStrategies() {
+        return this.scanEngineService._loadStrategies();
+    }
+
+    async _monitorPositions(cycleStats) {
+        return this.scanEngineService._monitorPositions(cycleStats);
+    }
+
+    async _evaluateStrategies(strategies, currentWalletState, settings, marketRegime, currentPrices, cycleStats) {
+        return this.scanEngineService._evaluateStrategies(strategies, currentWalletState, settings, marketRegime, currentPrices, cycleStats);
+    }
+
+    async _logCycleSummary(cycleStats) {
+        return this.scanEngineService._logCycleSummary(cycleStats);
+    }
+
+    _logWalletSummary() {
+        return this.scanEngineService._logWalletSummary();
+    }
+
+    // Configuration Service Delegations
+    async updateSettings(newSettings) {
+        return this.configurationService.updateSettings(newSettings);
+    }
+
+    async refreshStrategies() {
+        return this.strategyManager.refreshStrategies();
     }
 }
 
@@ -3548,5 +2602,137 @@ export const getAutoScannerService = () => {
     }
     return instance;
 };
+
+// Global debugging functions
+if (typeof window !== 'undefined') {
+    window.debugScannerServiceState = () => {
+        console.log('🔍 [SCANNER_STATE_DEBUG] Checking scanner service state...');
+        
+        try {
+            // Check if we can access the scanner service
+            const scannerService = window.autoScannerService || window.scannerService || window.getAutoScannerService?.();
+            
+            if (scannerService) {
+                const currentState = scannerService.getState();
+                console.log('📊 [SCANNER_STATE_DEBUG] Current scanner state:', currentState);
+                
+                console.log('🎯 [SCANNER_STATE_DEBUG] Market regime data:', {
+                    marketRegime: currentState.marketRegime,
+                    marketRegimeState: currentState.marketRegimeState,
+                    hasMarketRegime: !!currentState.marketRegime,
+                    hasMarketRegimeState: !!currentState.marketRegimeState
+                });
+                
+                if (currentState.marketRegime) {
+                    console.log('✅ [SCANNER_STATE_DEBUG] marketRegime found:', {
+                        regime: currentState.marketRegime.regime,
+                        confidence: currentState.marketRegime.confidence,
+                        confidencePct: (currentState.marketRegime.confidence * 100).toFixed(1) + '%',
+                        isConfirmed: currentState.marketRegime.isConfirmed
+                    });
+                } else {
+                    console.log('❌ [SCANNER_STATE_DEBUG] No marketRegime in scanner state');
+                }
+                
+                if (currentState.marketRegimeState) {
+                    console.log('✅ [SCANNER_STATE_DEBUG] marketRegimeState found:', {
+                        regime: currentState.marketRegimeState.regime,
+                        confidence: currentState.marketRegimeState.confidence,
+                        confidencePct: (currentState.marketRegimeState.confidence * 100).toFixed(1) + '%',
+                        isConfirmed: currentState.marketRegimeState.isConfirmed
+                    });
+                } else {
+                    console.log('❌ [SCANNER_STATE_DEBUG] No marketRegimeState in scanner state');
+                }
+                
+            } else {
+                console.log('❌ [SCANNER_STATE_DEBUG] Scanner service not available');
+                console.log('🔍 [SCANNER_STATE_DEBUG] Available window objects:', Object.keys(window).filter(key => key.includes('scanner') || key.includes('Scanner')));
+            }
+            
+        } catch (error) {
+            console.error('❌ [SCANNER_STATE_DEBUG] Error:', error);
+        }
+    };
+
+    window.forceRefreshRegimeWidget = () => {
+        console.log('🔄 [REGIME_WIDGET_REFRESH] Forcing regime widget refresh...');
+        
+        try {
+            const scannerService = window.autoScannerService || window.scannerService || window.getAutoScannerService?.();
+            
+            if (scannerService) {
+                console.log('📊 [REGIME_WIDGET_REFRESH] Current state before refresh:', scannerService.getState().marketRegime);
+                
+                // Force a regime calculation
+                scannerService._updateMarketRegime().then(() => {
+                    console.log('✅ [REGIME_WIDGET_REFRESH] Regime updated, new state:', scannerService.getState().marketRegime);
+                    
+                    // Notify subscribers
+                    scannerService.notifySubscribers();
+                    console.log('📢 [REGIME_WIDGET_REFRESH] Subscribers notified');
+                    
+                }).catch(error => {
+                    console.error('❌ [REGIME_WIDGET_REFRESH] Error updating regime:', error);
+                });
+                
+            } else {
+                console.log('❌ [REGIME_WIDGET_REFRESH] Scanner service not available');
+            }
+            
+        } catch (error) {
+            console.error('❌ [REGIME_WIDGET_REFRESH] Error:', error);
+        }
+    };
+
+    window.testRegimeWidget = () => {
+        console.log('🧪 [REGIME_WIDGET_TEST] Testing regime widget data access...');
+        
+        try {
+            const scannerService = window.autoScannerService || window.scannerService || window.getAutoScannerService?.();
+            
+            if (scannerService) {
+                const currentState = scannerService.getState();
+                console.log('📊 [REGIME_WIDGET_TEST] Current scanner state:', currentState);
+                
+                console.log('🎯 [REGIME_WIDGET_TEST] Market regime data for widget:', {
+                    marketRegime: currentState.marketRegime,
+                    hasMarketRegime: !!currentState.marketRegime,
+                    regime: currentState.marketRegime?.regime,
+                    confidence: currentState.marketRegime?.confidence,
+                    confidencePct: currentState.marketRegime?.confidence ? (currentState.marketRegime.confidence * 100).toFixed(1) + '%' : 'N/A',
+                    isConfirmed: currentState.marketRegime?.isConfirmed
+                });
+                
+                // Test what the widget would receive
+                if (currentState.marketRegime) {
+                    const { regime, confidence, isConfirmed } = currentState.marketRegime;
+                    const confidencePercent = Math.round((confidence ?? 0) * 100);
+                    
+                    console.log('🎨 [REGIME_WIDGET_TEST] Widget would display:', {
+                        regime: regime,
+                        confidencePercent: confidencePercent,
+                        isConfirmed: Boolean(isConfirmed),
+                        shouldShowAsUnknown: !regime || regime === 'unknown'
+                    });
+                    
+                    if (!regime || regime === 'unknown') {
+                        console.log('❌ [REGIME_WIDGET_TEST] Widget would show as unknown!');
+                    } else {
+                        console.log('✅ [REGIME_WIDGET_TEST] Widget should show:', `${confidencePercent}% ${regime}`);
+                    }
+                } else {
+                    console.log('❌ [REGIME_WIDGET_TEST] No marketRegime data available for widget');
+                }
+                
+            } else {
+                console.log('❌ [REGIME_WIDGET_TEST] Scanner service not available');
+            }
+            
+        } catch (error) {
+            console.error('❌ [REGIME_WIDGET_TEST] Error:', error);
+        }
+    };
+}
 
 export default AutoScannerService;

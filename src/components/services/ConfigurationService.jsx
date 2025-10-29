@@ -23,6 +23,7 @@ export default class ConfigurationService {
         riskPerTrade: 2,
         portfolioHeatMax: 20,
         defaultPositionSize: 100,
+        basePositionSize: 100, // Base position size for LPM system
         useWinStrategySize: true,
         signalMatchingMode: "conviction_based",
         maxBalancePercentRisk: 100, // NEW: Default to 100% (no restriction)

@@ -2,7 +2,7 @@
 /**
  * Trend-based technical indicators
  */
-import { calculateEMA, calculateMA, calculateWMA, getTypicalPrice, calculateATRPoints } from './helpers';
+import { calculateEMA, calculateMA, calculateWMA, getTypicalPrice } from './helpers';
 
 /**
  * Calculates the Simple Moving Average (SMA).
