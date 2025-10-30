@@ -12,10 +12,12 @@ export default function WalletStatusWidget() {
         availableBalance,
         balanceInTrades,
         lifetimePnl,
+        unrealizedPnl,
         totalRealizedPnl,
         loading,
         error
     } = walletData;
+    const recentTrades = walletData?.recentTrades || [];
 
     // Debug: Log the raw wallet data to see what we're getting (only when values change)
     const prevWalletData = React.useRef({});
@@ -24,6 +26,7 @@ export default function WalletStatusWidget() {
         availableBalance,
         balanceInTrades,
         lifetimePnl,
+        unrealizedPnl,
         loading,
         error
     };
@@ -68,6 +71,7 @@ export default function WalletStatusWidget() {
                     totalEquity: parseFloat(snap.totalEquity || snap.total_equity || 0),
                     availableBalance: parseFloat(snap.availableBalance || snap.available_balance || 0),
                     lifetimePnl: parseFloat(snap.lifetimePnl || snap.total_realized_pnl || 0),
+                    unrealizedPnl: parseFloat(snap.unrealizedPnl || snap.unrealized_pnl || 0),
                     balanceInTrades: balanceInTradesValue,
                 });
             } else if (typeof window !== 'undefined' && window.__walletSummaryCache) {
@@ -96,6 +100,7 @@ export default function WalletStatusWidget() {
                     totalEquity,
                     availableBalance,
                     lifetimePnl,
+                    unrealizedPnl,
                     balanceInTrades,
                 };
                 // Only log cache saves when values actually change
@@ -106,7 +111,8 @@ export default function WalletStatusWidget() {
                 if (!lastCachedData || 
                     lastCachedData.totalEquity !== summaryToCache.totalEquity ||
                     lastCachedData.availableBalance !== summaryToCache.availableBalance ||
-                    lastCachedData.lifetimePnl !== summaryToCache.lifetimePnl) {
+                    lastCachedData.lifetimePnl !== summaryToCache.lifetimePnl ||
+                    lastCachedData.unrealizedPnl !== summaryToCache.unrealizedPnl) {
                     console.log('[WalletStatusWidget] 💾 Saving to cache:', { mode, summaryToCache });
                 }
                 localStorage.setItem(`walletSummaryCache_${mode}`, JSON.stringify(summaryToCache));
@@ -120,12 +126,27 @@ export default function WalletStatusWidget() {
     const isLiveTotalEquityValid = typeof totalEquity === 'number' && !isNaN(totalEquity);
     const isLiveAvailableBalanceValid = typeof availableBalance === 'number' && !isNaN(availableBalance);
     const isLiveLifetimePnlValid = typeof lifetimePnl === 'number' && !isNaN(lifetimePnl);
+    const isLiveUnrealizedPnlValid = typeof unrealizedPnl === 'number' && !isNaN(unrealizedPnl);
     const isLiveBalanceInTradesValid = typeof balanceInTrades === 'number' && !isNaN(balanceInTrades);
 
     // CRITICAL FIX: Always use live data when available, never fall back to stale cache
     const displayTotalEquity = isLiveTotalEquityValid ? totalEquity : (cachedSummary?.totalEquity ?? 0);
     const displayAvailableBalance = isLiveAvailableBalanceValid ? availableBalance : (cachedSummary?.availableBalance ?? 0);
-    const displayLifetimePnl = isLiveLifetimePnlValid ? lifetimePnl : (cachedSummary?.lifetimePnl ?? 0);
+    // Prefer totalRealizedPnl if provider exposes it, fallback to lifetimePnl, then cache
+    let normalizedRealized = (typeof totalRealizedPnl === 'number' && !isNaN(totalRealizedPnl))
+        ? totalRealizedPnl
+        : (isLiveLifetimePnlValid ? lifetimePnl : (cachedSummary?.lifetimePnl ?? 0));
+    // Fallback: if realized is zero or undefined but we have recent trades, sum realized from trades as a best-effort estimate
+    if ((!normalizedRealized || !Number.isFinite(normalizedRealized)) && Array.isArray(recentTrades) && recentTrades.length > 0) {
+        try {
+            const sumTrades = recentTrades.reduce((sum, t) => sum + (Number(t?.pnl_usdt) || 0), 0);
+            if (Number.isFinite(sumTrades)) normalizedRealized = sumTrades;
+        } catch (_e) {}
+    }
+    const displayLifetimePnl = normalizedRealized;
+    const displayUnrealizedPnl = isLiveUnrealizedPnlValid ? unrealizedPnl : (cachedSummary?.unrealizedPnl ?? 0);
+    // Display only realized P&L (exclude unrealized)
+    const displayTotalPnl = (displayLifetimePnl || 0);
     const displayBalanceInTrades = balanceInTrades; // ALWAYS use live data, never cache for balanceInTrades
 
     // Debug: Log display values (only when values change)
@@ -134,6 +155,8 @@ export default function WalletStatusWidget() {
         totalEquity: displayTotalEquity,
         availableBalance: displayAvailableBalance,
         lifetimePnl: displayLifetimePnl,
+        unrealizedPnl: displayUnrealizedPnl,
+        totalPnl: displayTotalPnl,
         balanceInTrades: displayBalanceInTrades,
         hasCachedData: !!cachedSummary,
         isLiveDataValid: isLiveTotalEquityValid || isLiveAvailableBalanceValid
@@ -150,6 +173,7 @@ export default function WalletStatusWidget() {
                 totalEquity,
                 availableBalance,
                 lifetimePnl,
+                unrealizedPnl,
                 balanceInTrades
             },
             cachedValues: cachedSummary
@@ -259,8 +283,8 @@ export default function WalletStatusWidget() {
                         </div>
                         <div className="flex items-center justify-between">
                             <span className="text-xs text-gray-600 dark:text-gray-400">P&L:</span>
-                            <span className={`text-xs font-medium ${getPnLColor(displayLifetimePnl)}`}>
-                                {formatCurrency(displayLifetimePnl)}
+                            <span className={`text-xs font-medium ${getPnLColor(displayTotalPnl)}`}>
+                                {formatCurrency(displayTotalPnl)}
                             </span>
                         </div>
                     </div>

@@ -48,6 +48,15 @@ async function initDatabase() {
 }
 
 // Database helper functions for Trade
+function ensureUuid(id) {
+    try {
+        return (typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))
+            ? id
+            : uuidv4();
+    } catch (_) {
+        return uuidv4();
+    }
+}
 async function saveTradeToDB(trade) {
     if (!dbClient) {
         console.log('[PROXY] ⚠️ Database client not available, skipping trade save');
@@ -82,7 +91,7 @@ async function saveTradeToDB(trade) {
         
         // 🔍 DEBUG: Log all trade data before database insertion
         console.log('🔍 [PROXY] DEBUG: Trade data being saved to database:', {
-            id: trade.id || require('crypto').randomUUID(),
+            id: ensureUuid(trade.id),
             symbol: trade.symbol,
             side: trade.side || (trade.direction === 'long' ? 'BUY' : trade.direction === 'short' ? 'SELL' : trade.direction),
             quantity: trade.quantity || trade.quantity_crypto,
@@ -113,7 +122,7 @@ async function saveTradeToDB(trade) {
         });
 
         const values = [
-            trade.id || require('crypto').randomUUID(),
+            ensureUuid(trade.id),
             trade.symbol,
             trade.side || (trade.direction === 'long' ? 'BUY' : trade.direction === 'short' ? 'SELL' : trade.direction), // Convert direction to side
             trade.quantity || trade.quantity_crypto,
@@ -145,7 +154,7 @@ async function saveTradeToDB(trade) {
         ];
         
         await dbClient.query(query, values);
-        console.log('[PROXY] 💾 Saved trade to database:', trade.id);
+        console.log('[PROXY] 💾 Saved trade to database:', values[0]);
         return true;
     } catch (error) {
         console.error('[PROXY] ❌ Error saving trade to database:', error.message);
@@ -382,9 +391,10 @@ async function deleteLivePositionFromDB(positionId) {
     
     try {
         const query = 'DELETE FROM live_positions WHERE id = $1';
-        await dbClient.query(query, [positionId]);
-        console.log('[PROXY] 🗑️ Deleted position from database:', positionId);
-        return true;
+        const result = await dbClient.query(query, [positionId]);
+        const deleted = !!(result && result.rowCount && result.rowCount > 0);
+        console.log('[PROXY] 🗑️ Deleted position from database:', positionId, 'rowCount:', result?.rowCount);
+        return deleted;
     } catch (error) {
         console.error('[PROXY] ❌ Error deleting position from database:', error.message);
         return false;
@@ -572,6 +582,19 @@ app.use(cors());
 // Parse JSON bodies with increased limit for large Binance account data
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Global lightweight HTTP request logger (method, path, status, duration)
+app.use((req, res, next) => {
+  const startMs = Date.now();
+  res.on('finish', () => {
+    try {
+      console.log(
+        `[PROXY] HTTP ${req.method} ${req.originalUrl} -> ${res.statusCode} ${Date.now() - startMs}ms`
+      );
+    } catch (_) {}
+  });
+  next();
+});
 
 // Wallet config endpoints (registered early to ensure availability)
 app.post('/api/wallet-config', async (req, res) => {
@@ -2469,9 +2492,10 @@ app.get('/api/entities/:entityName', (req, res) => {
 // Handle entity filtering (used by WalletProvider)
 app.post('/api/entities/:entityName/filter', (req, res) => {
   const entityName = req.params.entityName;
+  const nameLc = String(entityName || '').toLowerCase();
   
-  // Handle LivePosition filtering
-  if (entityName === 'LivePosition') {
+  // Handle LivePosition filtering (accept several casings)
+  if (nameLc === 'liveposition' || nameLc === 'livepositions') {
     const { wallet_id, trading_mode, status } = req.body;
     
     console.log('[PROXY] 📊 POST /api/entities/LivePosition/filter - Filters:', { wallet_id, trading_mode, status });
@@ -2556,9 +2580,10 @@ app.post('/api/entities/:entityName/filter', (req, res) => {
 
 app.post('/api/entities/:entityName', (req, res) => {
   const entityName = req.params.entityName;
+  const nameLc = String(entityName || '').toLowerCase();
   
   // Handle LivePosition entities
-  if (entityName === 'LivePosition') {
+  if (nameLc === 'liveposition' || nameLc === 'livepositions') {
     console.log('[PROXY] 📊 POST /api/entities/LivePosition - Creating position');
     const newPosition = {
       id: `pos_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -2695,9 +2720,10 @@ app.post('/api/entities/:entityName', (req, res) => {
 app.put('/api/entities/:entityName/:id', (req, res) => {
   const entityName = req.params.entityName;
   const id = req.params.id;
+  const nameLc = String(entityName || '').toLowerCase();
   
   // Handle LivePosition entities
-  if (entityName === 'LivePosition') {
+  if (nameLc === 'liveposition' || nameLc === 'livepositions') {
     console.log('[PROXY] 📊 PUT /api/entities/LivePosition/' + id + ' - Updating position');
     const positionIndex = livePositions.findIndex(pos => pos.id === id);
     
@@ -2710,6 +2736,36 @@ app.put('/api/entities/:entityName/:id', (req, res) => {
       ...req.body,
       updated_date: new Date().toISOString()
     };
+    
+    // Persist to Postgres if available (targeted columns only)
+    (async () => {
+      try {
+        if (dbClient) {
+          const { time_exit_hours, last_updated_timestamp } = req.body || {};
+          if (typeof time_exit_hours !== 'undefined' || typeof last_updated_timestamp !== 'undefined') {
+            const setFragments = [];
+            const values = [];
+            let idx = 1;
+            if (typeof time_exit_hours !== 'undefined') {
+              setFragments.push(`time_exit_hours = $${idx++}`);
+              values.push(time_exit_hours);
+            }
+            if (typeof last_updated_timestamp !== 'undefined') {
+              setFragments.push(`last_updated_timestamp = $${idx++}`);
+              values.push(last_updated_timestamp);
+            }
+            // Always bump updated_date
+            setFragments.push(`updated_date = NOW()`);
+            const query = `UPDATE live_positions SET ${setFragments.join(', ')} WHERE id = $${idx}`;
+            values.push(id);
+            const result = await dbClient.query(query, values);
+            console.log('[PROXY] 🗃️ DB LivePosition update', { id, rowCount: result?.rowCount || 0, fields: Object.keys(req.body || {}) });
+          }
+        }
+      } catch (e) {
+        console.error('[PROXY] ❌ DB LivePosition update failed:', e?.message || e);
+      }
+    })();
     
     // Save to persistent storage
     try {
@@ -3025,6 +3081,17 @@ app.delete('/api/entities/:entityName', (req, res) => {
     
     // Save the updated data back to file storage
     saveStoredData(entityName, remainingData);
+
+    // Keep in-memory collections in sync for known entities
+    const lc = String(entityName || '').toLowerCase();
+    if (lc === 'historicalperformance') {
+      try {
+        historicalPerformances = remainingData;
+        console.log('[PROXY] 📊 In-memory HistoricalPerformance updated (bulk):', historicalPerformances.length);
+      } catch (e) {
+        console.warn('[PROXY] ⚠️ Failed to sync in-memory HistoricalPerformance (bulk):', e?.message);
+      }
+    }
     
     const deletedCount = existingData.length - remainingData.length;
     console.log(`[PROXY] 📊 Successfully deleted ${deletedCount} ${entityName} records`);
@@ -3040,12 +3107,13 @@ app.delete('/api/entities/:entityName', (req, res) => {
 app.delete('/api/entities/:entityName/:id', async (req, res) => {
   const entityName = req.params.entityName;
   const id = req.params.id;
+  const nameLc = String(entityName || '').toLowerCase();
   
   console.log(`[PROXY] 📊 DELETE /api/entities/${entityName}/${id} - Deleting ${entityName}:`, id);
   
   try {
     // Get existing data from file storage
-    const existingData = getStoredData(entityName);
+    const existingData = getStoredData(nameLc === 'liveposition' ? 'LivePosition' : entityName);
     console.log(`[PROXY] 📊 Found ${existingData.length} existing ${entityName} records`);
     
     // Filter out the record to be deleted
@@ -3056,7 +3124,7 @@ app.delete('/api/entities/:entityName/:id', async (req, res) => {
     saveStoredData(entityName, remainingData);
     
     // CRITICAL FIX: Also delete from database and update in-memory array for LivePosition entities
-    if (entityName === 'LivePosition') {
+    if (nameLc === 'liveposition' || nameLc === 'livepositions') {
       console.log(`[PROXY] 📊 Attempting database deletion for LivePosition ${id}...`);
       const dbDeleted = await deleteLivePositionFromDB(id);
       console.log(`[PROXY] 📊 Database delete result for LivePosition ${id}:`, dbDeleted ? 'success' : 'failed');
@@ -3066,9 +3134,20 @@ app.delete('/api/entities/:entityName/:id', async (req, res) => {
       
       // CRITICAL: Also update the in-memory array
       const initialLength = livePositions.length;
-      livePositions = livePositions.filter(pos => pos.id !== id);
+      const idxMem = livePositions.findIndex(pos => pos.id === id);
+      if (idxMem !== -1) livePositions.splice(idxMem, 1);
       const finalLength = livePositions.length;
       console.log(`[PROXY] 📊 Updated in-memory array: ${initialLength} -> ${finalLength} positions`);
+    }
+    
+    // Keep in-memory HistoricalPerformance in sync too
+    if (nameLc === 'historicalperformance') {
+      try {
+        historicalPerformances = remainingData;
+        console.log('[PROXY] 📊 In-memory HistoricalPerformance updated (single):', historicalPerformances.length);
+      } catch (e) {
+        console.warn('[PROXY] ⚠️ Failed to sync in-memory HistoricalPerformance (single):', e?.message);
+      }
     }
     
     const deletedCount = existingData.length - remainingData.length;
@@ -3785,6 +3864,11 @@ app.post('/api/functions/walletReconciliation', async (req, res) => {
   const { action, symbol, mode } = req.body;
   
   console.log(`[PROXY] 🔄 walletReconciliation called:`, { action, symbol, mode });
+  const debugLogs = [];
+  const addLog = (msg, data) => {
+    try { debugLogs.push({ ts: Date.now(), msg, data }); } catch (_) {}
+  };
+  addLog('walletReconciliation_called', { action, symbol, mode });
   
   try {
     if (action === 'virtualCloseDustPositions') {
@@ -3796,15 +3880,37 @@ app.post('/api/functions/walletReconciliation', async (req, res) => {
       );
       
       console.log(`[PROXY] 🔄 Found ${positions.length} open positions for ${symbol} in ${mode}`);
+      addLog('found_open_positions', { count: positions.length });
       
       if (positions.length === 0) {
-        return res.json({ 
-          success: true, 
-          virtualClosed: 0, 
-          symbol, 
-          mode,
-          message: 'No open positions found'
-        });
+        // Fallback: if in-memory array lost state, try DB deletion by symbol+mode
+        try {
+          let deletedRows = 0;
+          if (dbClient) {
+            const del = await dbClient.query(
+              `DELETE FROM live_positions WHERE symbol = $1 AND trading_mode = $2 AND status = 'open' RETURNING id`,
+              [symbol, mode]
+            );
+            deletedRows = del?.rowCount || 0;
+            addLog('db_delete_by_symbol_mode', { symbol, mode, deletedRows, ids: (del?.rows || []).map(r => r.id) });
+            console.log(`[PROXY] 🗑️ DB fallback delete by symbol/mode: ${symbol}/${mode} -> ${deletedRows} rows`);
+          } else {
+            addLog('db_unavailable_for_fallback');
+            console.warn('[PROXY] ⚠️ DB client unavailable for fallback delete-by-symbol/mode');
+          }
+          return res.json({ 
+            success: true, 
+            virtualClosed: deletedRows, 
+            symbol, 
+            mode,
+            message: deletedRows > 0 ? `Deleted ${deletedRows} open positions from DB (fallback)` : 'No open positions found',
+            logs: debugLogs
+          });
+        } catch (fallbackErr) {
+          addLog('fallback_delete_error', { error: fallbackErr?.message || String(fallbackErr) });
+          console.error('[PROXY] ❌ Fallback DB delete error:', fallbackErr);
+          return res.status(500).json({ success: false, error: fallbackErr?.message || 'Fallback DB delete failed', logs: debugLogs });
+        }
       }
       
       // 2. Get current market price (simplified - use entry price as fallback)
@@ -3896,16 +4002,32 @@ app.post('/api/functions/walletReconciliation', async (req, res) => {
           console.log('[PROXY] 💾 Saved virtual closure trade to database:', tradeData.trade_id);
         } catch (error) {
           console.error('[PROXY] Error saving virtual closure trade to database:', error);
+          addLog('trade_save_error', { trade_id: tradeData.trade_id, error: error?.message || String(error) });
         }
         
-        // Delete LivePosition record
+        // Delete LivePosition record (memory + database)
         const posIndex = livePositions.findIndex(p => p.id === pos.id);
         if (posIndex !== -1) {
+          console.log('[PROXY] 🧹 Removing position from memory:', pos.id);
           livePositions.splice(posIndex, 1);
+          addLog('memory_remove', { id: pos.id, removed: true });
+        } else {
+          console.log('[PROXY] 🔎 Position not found in memory for removal (may already be removed):', pos.id);
+          addLog('memory_remove', { id: pos.id, removed: false });
+        }
+        try {
+          console.log('[PROXY] 🧪 Attempting DB deletion for live_position id:', pos.id);
+          const deleted = await deleteLivePositionFromDB(pos.id);
+          console.log('[PROXY] ✅ DB deletion attempted for', pos.id, 'result:', deleted);
+          addLog('db_delete_attempt', { id: pos.id, deleted });
+        } catch (delErr) {
+          console.error('[PROXY] ❌ Error deleting live position from DB during virtual close:', delErr?.message || delErr);
+          addLog('db_delete_error', { id: pos.id, error: delErr?.message || String(delErr) });
         }
         
         closedCount++;
         console.log(`[PROXY] 🔄 Virtually closed position ${pos.position_id} for ${symbol}`);
+        addLog('virtually_closed', { position_id: pos.position_id, id: pos.id });
       }
       
       // Save to persistent storage
@@ -3929,13 +4051,15 @@ app.post('/api/functions/walletReconciliation', async (req, res) => {
           trade_id: t.trade_id,
           pnl_usdt: t.pnl_usdt,
           exit_reason: t.exit_reason
-        }))
+        })),
+        logs: debugLogs
       });
       
     } else {
       res.status(400).json({ 
         success: false, 
-        error: `Unknown action: ${action}` 
+        error: `Unknown action: ${action}`,
+        logs: debugLogs 
       });
     }
     
@@ -3943,7 +4067,8 @@ app.post('/api/functions/walletReconciliation', async (req, res) => {
     console.error(`[PROXY] ❌ walletReconciliation error:`, error);
     res.status(500).json({ 
       success: false, 
-      error: error.message 
+      error: error.message,
+      logs: debugLogs 
     });
   }
 });

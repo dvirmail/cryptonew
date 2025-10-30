@@ -348,12 +348,45 @@ class CentralWalletStateManager {
                 return total + (parseFloat(pos.entry_value_usdt) || 0);
             }, 0) || 0;
 
-            // Calculate unrealized P&L
-            const unrealizedPnl = positions?.reduce((total, pos) => {
-                const currentValue = (parseFloat(pos.current_price) || 0) * (parseFloat(pos.quantity_crypto) || 0);
-                const entryValue = parseFloat(pos.entry_value_usdt) || 0;
-                return total + (currentValue - entryValue);
-            }, 0) || 0;
+            // Calculate unrealized P&L using live prices (fallback to stored current_price/entry_price)
+            let unrealizedPnl = 0;
+            try {
+                const symbols = Array.from(new Set((positions || []).map(p => (p.symbol || '').replace('/', '')))).filter(Boolean);
+                let priceMap = {};
+                if (symbols.length > 0) {
+                    const priceResp = await liveTradingAPI({
+                        action: 'getSymbolPriceTicker',
+                        symbols,
+                        tradingMode: tradingMode,
+                        proxyUrl: 'http://localhost:3003'
+                    });
+                    const responseData = priceResp?.data || priceResp;
+                    const list = responseData?.data || responseData;
+                    if (Array.isArray(list)) {
+                        for (const item of list) {
+                            if (item?.symbol && item?.price) priceMap[item.symbol] = parseFloat(item.price);
+                        }
+                    } else if (list?.symbol && list?.price) {
+                        priceMap[list.symbol] = parseFloat(list.price);
+                    }
+                }
+                unrealizedPnl = positions?.reduce((total, pos) => {
+                    const key = (pos.symbol || '').replace('/', '');
+                    const live = priceMap[key];
+                    const current = Number.isFinite(live) ? live : (parseFloat(pos.current_price) || parseFloat(pos.entry_price) || 0);
+                    const qty = parseFloat(pos.quantity_crypto) || 0;
+                    const currentValue = current * qty;
+                    const entryValue = parseFloat(pos.entry_value_usdt) || 0;
+                    return total + (currentValue - entryValue);
+                }, 0) || 0;
+            } catch (pErr) {
+                console.warn('[CentralWalletStateManager] ⚠️ Failed live price fetch for unrealized PnL, falling back:', pErr?.message);
+                unrealizedPnl = positions?.reduce((total, pos) => {
+                    const currentValue = (parseFloat(pos.current_price) || parseFloat(pos.entry_price) || 0) * (parseFloat(pos.quantity_crypto) || 0);
+                    const entryValue = parseFloat(pos.entry_value_usdt) || 0;
+                    return total + (currentValue - entryValue);
+                }, 0) || 0;
+            }
 
             // Calculate crypto assets value (excluding USDT)
             const cryptoAssetsValue = await this.calculateCryptoAssetsValue(accountData.balances);

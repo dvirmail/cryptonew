@@ -558,45 +558,19 @@ export default function AutoScan() {
             if (settings.length > 0) {
                 console.log('🔥 [AutoScan] Updating existing settings with ID:', settings[0].id);
                 try {
-                    // FIXED: Use direct API call instead of hanging queueEntityCall
-                    console.log('🔥 [AutoScan] Using direct API call (bypassing queue)...');
-                    const directResponse = await fetch(`http://localhost:3003/api/scanSettings/${settings[0].id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(configToSave)
-                    });
-                    const directResult = await directResponse.json();
-                    console.log('🔥 [AutoScan] Direct API call result:', directResult);
-                    
-                    if (!directResult.success) {
-                        throw new Error(`API call failed: ${directResult.error || 'Unknown error'}`);
-                    }
-                    
-                    console.log('🔥 [AutoScan] Database update completed successfully');
+                    const updateResult = await queueEntityCall('ScanSettings', 'update', settings[0].id, configToSave);
+                    console.log('🔥 [AutoScan] Queue update result:', updateResult);
                 } catch (error) {
-                    console.error('🔥 [AutoScan] Database update failed:', error);
+                    console.error('🔥 [AutoScan] Queue update failed:', error);
                     throw error;
                 }
             } else {
                 console.log('🔥 [AutoScan] Creating new settings...');
                 try {
-                    // FIXED: Use direct API call instead of hanging queueEntityCall
-                    console.log('🔥 [AutoScan] Using direct API call for create (bypassing queue)...');
-                    const directResponse = await fetch('http://localhost:3003/api/scanSettings', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(configToSave)
-                    });
-                    const directResult = await directResponse.json();
-                    console.log('🔥 [AutoScan] Direct API create result:', directResult);
-                    
-                    if (!directResult.success) {
-                        throw new Error(`API create failed: ${directResult.error || 'Unknown error'}`);
-                    }
-                    
-                    console.log('🔥 [AutoScan] Database create completed successfully');
+                    const createResult = await queueEntityCall('ScanSettings', 'create', configToSave);
+                    console.log('🔥 [AutoScan] Queue create result:', createResult);
                 } catch (error) {
-                    console.error('🔥 [AutoScan] Database create failed:', error);
+                    console.error('🔥 [AutoScan] Queue create failed:', error);
                     throw error;
                 }
             }

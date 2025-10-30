@@ -13,14 +13,14 @@ const DEBUG_APIQ = {
         return v === '1' || v === 'true';
       }
     } catch (_e) {}
-    // DEFAULT OFF (changed from ON) to avoid noisy logs
-    return false;
+    // DEFAULT ON for debugging position closing issues
+    return true;
   },
   log(tag, payload) {
     if (!this.enabled()) return;
     const ts = new Date().toISOString();
     if (payload !== undefined) {
-      try { console.log(`[API_QUEUE] ${ts} ${tag}`, payload); } catch { console.log(`[API_QUEUE] ${ts} ${tag}`); }
+      //try { console.log(`[API_QUEUE] ${ts} ${tag}`, payload); } catch { console.log(`[API_QUEUE] ${ts} ${tag}`); }
     } else {
       console.log(`[API_QUEUE] ${ts} ${tag}`);
     }
@@ -37,8 +37,8 @@ const DEBUG_TRADE = {
         return v === '1' || v === 'true';
       }
     } catch (_e) {}
-    // DEFAULT OFF (changed from ON) to avoid noisy logs
-    return false;
+    // DEFAULT ON for debugging position closing issues
+    return true;
   },
   log(tag, payload) {
     if (!this.enabled()) return;
@@ -1554,6 +1554,38 @@ export const queueFunctionCall = async (...allArgs) => {
         try { await new Promise(r => setTimeout(r, 800)); } catch (_e) {}
 
         // Step 2: Trigger reconciliation/virtual close to clean DB state (with retry)
+        // CRITICAL: For SELL orders, re-throw the error so PositionManager can handle it
+        if (side === 'SELL') {
+          DEBUG_APIQ.log('[SKIP_VIRTUAL_CLOSE_SELL]', { 
+            symbol, 
+            mode, 
+            reason: 'SELL order - re-throwing error for PositionManager to handle',
+            errorCode: error?.code,
+            errorMessage: error?.message,
+            hasCodeProperty: error?.code !== undefined
+          });
+          
+          // CRITICAL: Ensure error code is preserved when re-throwing
+          // If error doesn't have code, extract it from message if possible
+          if (error?.code === undefined && error?.message) {
+            const msg = error.message.toLowerCase();
+            if (msg.includes('insufficient balance') || msg.includes('-2010')) {
+              error.code = -2010;
+              DEBUG_APIQ.log('[ERROR_CODE_ADDED]', { code: -2010, reason: 'Extracted from message' });
+            }
+          }
+          
+          console.log(`[API_QUEUE] 🔍 [RE_THROW_ERROR] Re-throwing error for SELL order:`, {
+            code: error?.code,
+            message: error?.message,
+            hasCode: error?.code !== undefined,
+            symbol,
+            mode
+          });
+          
+          // Re-throw the error immediately for SELL orders so PositionManager can handle it
+          throw error;
+        } else {
         try {
           // Use the new PositionManager virtualCloseDustPositions method instead of backend
           const { getAutoScannerService } = await import('@/components/services/AutoScannerService');
@@ -1573,18 +1605,96 @@ export const queueFunctionCall = async (...allArgs) => {
             }
           } else {
             DEBUG_APIQ.log('[VIRTUAL_CLOSE_AFTER_DUST_SKIP]', { symbol, mode, reason: 'PositionManager not available' });
+            }
+          } catch (e2) {
+            DEBUG_APIQ.log('[RECOVERY_FLOW_EXCEPTION]', { message: e2?.message || String(e2) });
+          }
           }
 
           // Step 3: Verification and last-resort cleanup of ghost positions
-          try {
-            // Verify if any open LivePosition remains for this symbol/mode
-            const open = await base44.entities.LivePosition.filter({ symbol, trading_mode: mode, status: 'open' }, '-created_date', 10);
+        // CRITICAL: For SELL orders, check order history BEFORE deleting positions
+        // Positions might already be closed on Binance, so we need to verify first
+        try {
+          // First, check if this position was already closed by checking order history
+          const requestedQty = params?.quantity;
+          let orderHistoryMatched = false;
+          
+          if (requestedQty && side === 'SELL') {
+            try {
+              DEBUG_APIQ.log('[ORDER_HISTORY_CHECK_START]', { symbol, mode, requestedQty });
+              const { functions } = await import('@/api/localClient');
+              const orderHistoryResponse = await functions.liveTradingAPI({
+                action: 'getAllOrders',
+                tradingMode: mode,
+                proxyUrl: proxyUrl,
+                symbol: symbol,
+                limit: 50
+              });
+              
+              if (orderHistoryResponse?.data?.success && orderHistoryResponse.data.data) {
+                const orders = Array.isArray(orderHistoryResponse.data.data) 
+                  ? orderHistoryResponse.data.data 
+                  : [orderHistoryResponse.data.data];
+                
+                // Check for recent SELL orders (last 2 hours) with matching quantity
+                const twoHoursAgo = Date.now() - (2 * 60 * 60 * 1000);
+                const recentSellOrders = orders.filter(order => {
+                  const isSell = order.side === 'SELL' && order.status === 'FILLED';
+                  const isRecent = new Date(order.time || order.updateTime || order.transactTime).getTime() > twoHoursAgo;
+                  if (isSell && isRecent) {
+                    const executedQty = parseFloat(order.executedQty || order.origQty || 0);
+                    // Allow 20% quantity tolerance for matching
+                    const qtyDiff = Math.abs(executedQty - parseFloat(requestedQty));
+                    const qtyTolerance = parseFloat(requestedQty) * 0.2;
+                    return qtyDiff <= qtyTolerance;
+                  }
+                  return false;
+                });
+                
+                if (recentSellOrders.length > 0) {
+                  orderHistoryMatched = true;
+                  DEBUG_APIQ.log('[ORDER_HISTORY_MATCH_FOUND]', { 
+                    symbol, 
+                    mode, 
+                    matchingOrders: recentSellOrders.length,
+                    orderIds: recentSellOrders.map(o => o.orderId)
+                  });
+                  // Don't delete positions if we found a matching order - let PositionManager handle it
+                } else {
+                  DEBUG_APIQ.log('[ORDER_HISTORY_NO_MATCH]', { symbol, mode, requestedQty });
+                }
+              }
+            } catch (orderHistoryError) {
+              DEBUG_APIQ.log('[ORDER_HISTORY_CHECK_FAILED]', { 
+                symbol, 
+                mode, 
+                error: orderHistoryError?.message || String(orderHistoryError) 
+              });
+              // If order history check fails, proceed with caution - don't delete positions
+              orderHistoryMatched = false;
+            }
+          }
+          
+          // CRITICAL: For SELL orders, NEVER delete positions in apiQueue
+          // PositionManager has proper order history checking logic that should handle this
+          // We only delete positions for BUY orders or when confirmed to be truly ghost
+          if (side === 'SELL') {
+            DEBUG_APIQ.log('[SKIP_GHOST_DELETION_SELL]', { 
+              symbol, 
+              mode, 
+              orderHistoryMatched,
+              reason: 'SELL order - letting PositionManager handle via order history check' 
+            });
+          } else if (!orderHistoryMatched) {
+            // For non-SELL orders and when order history confirms no match, check for ghost positions
+            const { LivePosition } = await import('@/api/entities');
+            const open = await LivePosition.filter({ symbol, trading_mode: mode, status: 'open' }, '-created_date', 10);
             if (Array.isArray(open) && open.length > 0) {
               DEBUG_APIQ.log('[GHOST_POSITIONS_DETECTED]', { count: open.length, symbol, mode });
               // Attempt to delete remaining positions (idempotent; apiQueue has guards)
               for (const pos of open) {
                 try {
-                  await base44.entities.LivePosition.delete(pos.id);
+                  await LivePosition.delete(pos.id);
                   DEBUG_APIQ.log('[GHOST_POSITION_DELETED]', { id: pos.id, symbol, mode });
                 } catch (delErr) {
                   DEBUG_APIQ.log('[GHOST_POSITION_DELETE_FAILED]', { id: pos?.id, message: delErr?.message || String(delErr) });
@@ -1593,19 +1703,19 @@ export const queueFunctionCall = async (...allArgs) => {
             } else {
               DEBUG_APIQ.log('[NO_GHOST_POSITIONS_REMAIN]', { symbol, mode });
             }
+            }
           } catch (verifyErr) {
             DEBUG_APIQ.log('[GHOST_POSITION_VERIFY_FAIL]', { message: verifyErr?.message || String(verifyErr) });
           }
 
           // Optional: Ask backend to refresh wallet state for this symbol (best-effort)
           try {
-            await base44.functions.invoke('reconcileWalletState', { mode, symbol });
+          // Use the proper API to trigger wallet reconciliation
+          const { invokeFunction } = await import('@/api/functions');
+          await invokeFunction('reconcileWalletState', { mode, symbol });
             DEBUG_APIQ.log('[RECONCILE_WALLET_STATE_TRIGGERED]', { symbol, mode });
           } catch (_e) {
             DEBUG_APIQ.log('[RECONCILE_WALLET_STATE_SKIP_OR_FAIL]', { reason: 'function not available or failed silently' });
-          }
-        } catch (e2) {
-          DEBUG_APIQ.log('[RECOVERY_FLOW_EXCEPTION]', { message: e2?.message || String(e2) });
         }
       }
     }

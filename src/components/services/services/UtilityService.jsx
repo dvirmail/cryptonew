@@ -142,9 +142,9 @@ export class UtilityService {
         await this.scannerService.lifecycleService._startScanLoop();
         console.log('[UtilityService] 🔍 _startScanLoop() call completed');
         
-        // Set up continuous scanning interval
-        this.scannerService.lifecycleService._startCountdown();
-        console.log('[UtilityService] 🔄 Started countdown for continuous scanning');
+        // Countdown scheduling is owned by ScanEngineService after each scan completes.
+        // Intentionally not starting countdown here to avoid duplicate timers.
+        console.log('[UtilityService] 🔄 Countdown scheduling delegated to ScanEngineService');
         
         this.scannerService.notifySubscribers();
     }

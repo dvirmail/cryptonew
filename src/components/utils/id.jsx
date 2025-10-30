@@ -5,30 +5,25 @@ let tradeCounter = parseInt(localStorage.getItem('tradeCounter') || '0');
 const generatedTradeIds = new Set();
 
 export function generateTradeId() {
-  // Increment counter
-  tradeCounter++;
+  // Generate a proper UUID v4
+  const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
   
-  // Store updated counter in localStorage for persistence across page reloads
+  // Increment counter for tracking
+  tradeCounter++;
   localStorage.setItem('tradeCounter', tradeCounter.toString());
   
-  // Format: <milliseconds_since_epoch>-<4_digit_random>-<5_digit_progressive>
-  const ms = Date.now();
-  const rand = Math.floor(1000 + Math.random() * 9000);
-  const progressive = tradeCounter.toString().padStart(5, '0');
-  
-  const newId = `${ms}-${rand}-${progressive}`;
-  
   // TEMP: Check for duplicates in this session
-  if (generatedTradeIds.has(newId)) {
-    console.error(`[ID_GENERATION] 🚨 DUPLICATE ID GENERATED: ${newId}`);
-    console.error(`[ID_GENERATION] This should NEVER happen! Current counter: ${tradeCounter}, MS: ${ms}, Random: ${rand}`);
+  if (generatedTradeIds.has(uuid)) {
+    console.error(`[ID_GENERATION] 🚨 DUPLICATE UUID GENERATED: ${uuid}`);
   } else {
-    generatedTradeIds.add(newId);
+    generatedTradeIds.add(uuid);
   }
   
-  //console.log(`[ID_GENERATION] ✅ Generated new trade ID: ${newId} (Counter: ${tradeCounter}, Session IDs: ${generatedTradeIds.size})`);
-  
-  return newId;
+  return uuid;
 }
 
 // Export function to get current counter (for debugging)

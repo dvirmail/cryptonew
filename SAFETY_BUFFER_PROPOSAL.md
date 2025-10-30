@@ -150,7 +150,7 @@ function applyExchangeFilters(rawQuantityCrypto, currentPrice, exchangeInfo, sym
     
     if (beforeBufferQty !== quantityCrypto) {
         appliedFilters.push(`Added 5% buffer: qty ${beforeBufferQty.toFixed(8)} → ${quantityCrypto.toFixed(8)}, notional $${beforeBufferNotional.toFixed(2)} → $${notionalValue.toFixed(2)}`);
-        console.log(`[EXCHANGE_FILTERS] ✅ Added 5% buffer: ${beforeBufferQty.toFixed(8)} → ${quantityCrypto.toFixed(8)}`);
+        //console.log(`[EXCHANGE_FILTERS] ✅ Added 5% buffer: ${beforeBufferQty.toFixed(8)} → ${quantityCrypto.toFixed(8)}`);
     }
     
     // ✅ NEW: Step 5: Final validation with 10% safety margin

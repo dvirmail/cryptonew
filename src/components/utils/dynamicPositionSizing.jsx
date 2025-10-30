@@ -144,7 +144,7 @@ function applyExchangeFilters(rawQuantityCrypto, currentPrice, exchangeInfo, sym
             quantityCrypto = bufferedQuantity;
             notionalValue = bufferedNotional;
             appliedFilters.push(`Added 5% buffer: qty ${beforeBufferQty.toFixed(8)} → ${quantityCrypto.toFixed(8)}, notional $${beforeBufferNotional.toFixed(2)} → $${notionalValue.toFixed(2)}`);
-            console.log(`[EXCHANGE_FILTERS] ✅ Added 5% buffer: ${beforeBufferQty.toFixed(8)} → ${quantityCrypto.toFixed(8)} (cost: $${bufferedNotional.toFixed(2)} of $${availableBalance.toFixed(2)} available)`);
+            //console.log(`[EXCHANGE_FILTERS] ✅ Added 5% buffer: ${beforeBufferQty.toFixed(8)} → ${quantityCrypto.toFixed(8)} (cost: $${bufferedNotional.toFixed(2)} of $${availableBalance.toFixed(2)} available)`);
         }
     } else if (availableBalance !== null && bufferedCost > availableBalance) {
         // Can't afford buffer - use original quantity (already meets minimums, buffer is optional)
@@ -564,11 +564,10 @@ export function calculatePositionSize(options) {
     const balanceInTrades = options.balanceInTrades || 0; // Amount currently invested in trades
     
     // LPM/EBR Integration: Use adjustedBalanceRiskFactor if provided
-    const adjustedBalanceRiskFactor = options.adjustedBalanceRiskFactor || null;
+    const adjustedBalanceRiskFactor = options.adjustedBalanceRiskFactor || null; // EBR (0-100)
     const currentLpmScore = options?.lpmScore || 50; // Default to neutral if not provided
-    const effectiveRiskPerTrade = adjustedBalanceRiskFactor !== null 
-        ? (maxBalancePercentRisk * (adjustedBalanceRiskFactor / 100)) // Scale maxBalancePercentRisk by EBR
-        : riskPerTrade; // Fallback to strategy-specific risk
+    // Momentum must NOT change risk%; keep strategy risk as-is
+    const effectiveRiskPerTrade = riskPerTrade;
     
     // console.log('[POSITION_SIZING] 🎯 LPM/EBR Integration:', {
     //     adjustedBalanceRiskFactor: adjustedBalanceRiskFactor,
@@ -583,9 +582,8 @@ export function calculatePositionSize(options) {
     // Apply global constraints (specification: Additional Overarching Constraints)
     // Applying global constraints
     
-    // Constraint 1: maxBalancePercentRisk (Soft Cap)
-    const effectiveMaxBalance = totalWalletBalance * (maxBalancePercentRisk / 100);
-    const effectiveAvailableCash = Math.min(availableCash, effectiveMaxBalance);
+    // Constraint 1 removed: Ignore maxBalancePercentRisk soft cap; rely on absolute cap only
+    const effectiveAvailableCash = availableCash;
     
     // console.log('[POSITION_SIZING] 💰 Soft cap (maxBalancePercentRisk):', {
     //     totalWalletBalance,
@@ -748,6 +746,30 @@ export function calculatePositionSize(options) {
         
         // console.log('[POSITION_SIZING] 📊 Fixed sizing result:', result);
         calculationMethod = 'fixed';
+    }
+
+    // Apply EBR scaling to base position size (user requirement):
+    // finalSize = basePositionSize * (EBR/100). Respect min trade value and available cash caps.
+    if (adjustedBalanceRiskFactor !== null && Number.isFinite(defaultPositionSize)) {
+        // Enforce EBR sizing as the source of truth for position size
+        const ebrMultiplier = Math.max(0, Math.min(100, adjustedBalanceRiskFactor)) / 100;
+        const targetSizeUSDT = Math.min(
+            Math.max(defaultPositionSize * ebrMultiplier, minimumTradeValue),
+            adjustedAvailableCash
+        );
+        // Convert to quantity and run through exchange filters for validity
+        const desiredQty = targetSizeUSDT / currentPrice;
+        const filtered = applyExchangeFilters(desiredQty, currentPrice, options.exchangeInfo, options.symbol || 'UNKNOWN', adjustedAvailableCash);
+        if (filtered.quantityCrypto === 0) {
+            return {
+                isValid: false,
+                reason: 'below_minimum_after_filters',
+                message: `Position rejected by exchange filters: ${filtered.appliedFilters?.join(', ') || 'unknown'}`
+            };
+        }
+        result.positionSize = filtered.positionValueUSDT;
+        result.positionValueUSDT = filtered.positionValueUSDT;
+        result.quantityCrypto = filtered.quantityCrypto;
     }
 
     if (result.error) {

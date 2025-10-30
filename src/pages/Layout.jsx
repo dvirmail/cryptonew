@@ -139,31 +139,31 @@ function AppLayout({ children, currentPageName }) {
     if (typeof window !== 'undefined') {
       const scannerService = getAutoScannerService();
       
-      console.log('[Layout] 🔍 Scanner service state check:');
-      console.log('[Layout] 🔍 isInitialized:', scannerService.getState().isInitialized);
-      console.log('[Layout] 🔍 isRunning:', scannerService.getState().isRunning);
-      console.log('[Layout] 🔍 _isAutoStartBlocked:', scannerService._isAutoStartBlocked);
+      //console.log('[Layout] 🔍 Scanner service state check:');
+      //console.log('[Layout] 🔍 isInitialized:', scannerService.getState().isInitialized);
+      //console.log('[Layout] 🔍 isRunning:', scannerService.getState().isRunning);
+      //console.log('[Layout] 🔍 _isAutoStartBlocked:', scannerService._isAutoStartBlocked);
       
       // Ensure the service is initialized if it hasn't been yet
       if (!scannerService.getState().isInitialized) {
-          console.log('[Layout] 🚀 Initializing scanner service...');
+          //console.log('[Layout] 🚀 Initializing scanner service...');
           scannerService.initialize().then(() => {
-              console.log('[Layout] ✅ Scanner service initialization completed');
-              console.log('[Layout] 🔍 Post-init state check:');
-              console.log('[Layout] 🔍 isInitialized:', scannerService.getState().isInitialized);
-              console.log('[Layout] 🔍 isRunning:', scannerService.getState().isRunning);
-              console.log('[Layout] 🔍 _isAutoStartBlocked:', scannerService._isAutoStartBlocked);
+              //console.log('[Layout] ✅ Scanner service initialization completed');
+              //console.log('[Layout] 🔍 Post-init state check:');
+              //console.log('[Layout] 🔍 isInitialized:', scannerService.getState().isInitialized);
+              //console.log('[Layout] 🔍 isRunning:', scannerService.getState().isRunning);
+              //console.log('[Layout] 🔍 _isAutoStartBlocked:', scannerService._isAutoStartBlocked);
               
               // Force unblock auto-start after initialization
               if (scannerService._isAutoStartBlocked) {
-                  console.log('[Layout] 🔓 Force unblocking auto-start after initialization...');
+                  //console.log('[Layout] 🔓 Force unblocking auto-start after initialization...');
                   scannerService._isAutoStartBlocked = false;
-                  console.log('[Layout] ✅ Auto-start unblocked successfully');
+                  //console.log('[Layout] ✅ Auto-start unblocked successfully');
               }
               
               // Try to start the scanner if it's not running
               if (!scannerService.getState().isRunning) {
-                  console.log('[Layout] 🚀 Attempting to start scanner after initialization...');
+                  //console.log('[Layout] 🚀 Attempting to start scanner after initialization...');
                   // Use LifecycleService as the single orchestrator for scanner starts
                   const lifecycleService = scannerService.lifecycleService;
                   if (lifecycleService && lifecycleService.start) {
@@ -174,13 +174,13 @@ function AppLayout({ children, currentPageName }) {
                       console.error('[Layout] ❌ LifecycleService not available for scanner start');
                   }
               } else {
-                  console.log('[Layout] ℹ️ Scanner is already running, no need to start');
+                  //console.log('[Layout] ℹ️ Scanner is already running, no need to start');
                   
                   // Check if the scanner is actually performing its main cycle
-                  console.log('[Layout] 🔍 Checking if scanner main cycle is active...');
+                  //console.log('[Layout] 🔍 Checking if scanner main cycle is active...');
                   const lifecycleService = scannerService.lifecycleService;
                   if (lifecycleService && lifecycleService.countdownInterval) {
-                      console.log('[Layout] ✅ Scanner main cycle is active (countdownInterval exists)');
+                      //console.log('[Layout] ✅ Scanner main cycle is active (countdownInterval exists)');
                   } else {
                       console.log('[Layout] ⚠️ Scanner main cycle is NOT active (no countdownInterval)');
                       console.log('[Layout] ℹ️ Scanner reports as running but no countdownInterval - this is expected during startup');

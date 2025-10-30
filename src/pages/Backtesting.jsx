@@ -1592,7 +1592,7 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
                   <Slider
                     id="min-strength-slider"
                     min={50}
-                    max={400}
+                    max={800}
                     step={50}
                     value={[minCombinedStrength]}
                     onValueChange={(value) => setMinCombinedStrength(value[0])}

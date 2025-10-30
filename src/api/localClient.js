@@ -700,7 +700,7 @@ export const functions = {
           body = {
             symbol: otherParams.symbol,
             side: otherParams.side,
-            type: 'MARKET',
+            type: otherParams.type || 'MARKET',
             quantity: otherParams.quantity,
             tradingMode: tradingMode || 'testnet',
             ...otherParams
@@ -761,7 +761,19 @@ export const functions = {
       const data = await response.json();
       
       if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}: ${response.statusText}`);
+        // CRITICAL: Preserve error code when throwing error
+        const errorMsg = data.error || data.message || `HTTP ${response.status}: ${response.statusText}`;
+        const errorCode = data.code || data.data?.code;
+        const error = new Error(errorMsg);
+        if (errorCode !== undefined) {
+          error.code = errorCode;
+          console.log(`[localClient] 🔍 [ERROR_CODE_PRESERVED] Error code ${errorCode} preserved for ${action}`);
+        } else {
+          console.log(`[localClient] ⚠️ [ERROR_CODE_MISSING] No error code found in response:`, data);
+        }
+        error.response = response;
+        error.data = data;
+        throw error;
       }
       
       // The BinanceLocal server already wraps responses in { success: true, data: ... }
@@ -770,6 +782,12 @@ export const functions = {
       
     } catch (error) {
       console.error(`[liveTradingAPI] Error calling ${action}:`, error.message);
+      console.log(`[localClient] 🔍 [CAUGHT_ERROR] Error code: ${error?.code}, message: ${error?.message}`);
+      // Ensure error code is preserved even if it wasn't set above
+      if (error?.code === undefined && error?.data?.code !== undefined) {
+        error.code = error.data.code;
+        console.log(`[localClient] ✅ [ERROR_CODE_RESTORED] Restored error code ${error.code} from error.data`);
+      }
       throw error;
     }
   },

@@ -340,7 +340,7 @@ export default function TradingModal({ isOpen, onClose, asset, availableAmount, 
                 symbol: assetInfo.symbol.replace('/', ''),
                 side: side.toUpperCase(),
                 quantity: formattedQuantity,
-                orderType: 'MARKET',
+                type: 'MARKET',
             };
 
             const response = await liveTradingAPI(requestPayload);

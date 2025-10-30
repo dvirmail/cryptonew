@@ -167,8 +167,11 @@ class TradeManager {
      * @returns {{stopLossPrice: number, takeProfitPrice: number}} An object containing the calculated stop loss and take profit prices.
      */
     calculateExitPrices(strategy, currentPrice, atrValue, convictionScore) {
-        const stopLossMultiplier = strategy.stopLossAtrMultiplier;
-        const takeProfitMultiplier = strategy.takeProfitAtrMultiplier;
+        // Provide sensible defaults if strategy does not specify ATR multipliers
+        const DEFAULT_SL_ATR = this.state?.scannerSettings?.defaultStopLossAtrMultiplier ?? 2.5;
+        const DEFAULT_TP_ATR = this.state?.scannerSettings?.defaultTakeProfitAtrMultiplier ?? 5.0;
+        const stopLossMultiplier = (strategy.stopLossAtrMultiplier ?? DEFAULT_SL_ATR);
+        const takeProfitMultiplier = (strategy.takeProfitAtrMultiplier ?? DEFAULT_TP_ATR);
 
         const stopLossPrice = strategy.strategyDirection === 'long'
             ? currentPrice - (atrValue * stopLossMultiplier)
@@ -517,6 +520,22 @@ export class SignalDetectionEngine {
         );
 
         const { isMatch, combinedStrength: strength, matchedSignals, failedConditions: rawFailedConditions, log: signalLog } = signalConditionsResult;
+
+        // Sample log: print one combined-strength evaluation per session
+        try {
+            if (typeof window !== 'undefined' && !window.__combinedStrengthLoggedOnce) {
+                window.__combinedStrengthLoggedOnce = true;
+                const signalBrief = Array.isArray(matchedSignals)
+                    ? matchedSignals.map(s => ({ type: s.type || s.name, strength: s.strength }))
+                    : [];
+                console.log('[COMBINED_STRENGTH_SAMPLE] Strategy:', strategy?.combinationName, {
+                    combinedStrength: strength,
+                    matchedSignals: signalBrief,
+                    regime: marketRegime?.regime,
+                    regimeConfidence: marketRegime?.confidence
+                });
+            }
+        } catch (_e) {}
         const failedConditions = rawFailedConditions || [];
 
         if (!isMatch || !matchedSignals || matchedSignals.length === 0) {
@@ -540,6 +559,27 @@ export class SignalDetectionEngine {
             marketRegime,
             priceAtMatch
         );
+
+        // Sample log: print one conviction evaluation per session to verify parameters and math
+        try {
+            if (typeof window !== 'undefined' && !window.__convictionLoggedOnce) {
+                window.__convictionLoggedOnce = true;
+                const breakdownSummary = {
+                    marketRegime: convictionResult?.breakdown?.marketRegime?.score,
+                    signalStrength: convictionResult?.breakdown?.signalStrength?.score,
+                    volatility: convictionResult?.breakdown?.volatility?.score,
+                    demoPerformance: convictionResult?.breakdown?.demoPerformance?.score
+                };
+                console.log('[CONVICTION_SAMPLE] Strategy:', strategy?.combinationName, {
+                    score: convictionResult?.score,
+                    multiplier: convictionResult?.multiplier,
+                    breakdown: breakdownSummary,
+                    matchedSignalsCount: matchedSignals?.length || 0,
+                    regime: marketRegime?.regime,
+                    priceAtMatch
+                });
+            }
+        } catch (_e) {}
 
         return {
             isMatch: true,
@@ -589,6 +629,25 @@ export class SignalDetectionEngine {
                 ? priceAtMatch + (atrValue * takeProfitMultiplier)
                 : priceAtMatch - (atrValue * takeProfitMultiplier))
             : null;
+
+        // Diagnostics: one-time per session sample of SL/TP derivation
+        try {
+            if (typeof window !== 'undefined' && !window.__slTpLoggedOnce) {
+                window.__slTpLoggedOnce = true;
+                const atrPct = atrValue ? ((atrValue / priceAtMatch) * 100).toFixed(3) : 'n/a';
+                console.log('[SLTP_SAMPLE]', {
+                    strategy: strategy?.combinationName,
+                    direction: strategy?.strategyDirection,
+                    priceAtMatch,
+                    atrValue,
+                    atrPct: `${atrPct}%`,
+                    stopLossAtrMultiplier: stopLossMultiplier,
+                    takeProfitAtrMultiplier: takeProfitMultiplier,
+                    computedStopLoss: stopLossPrice,
+                    computedTakeProfit: takeProfitPrice
+                });
+            }
+        } catch (_) {}
 
         return {
             strategy_name: strategy.combinationName,

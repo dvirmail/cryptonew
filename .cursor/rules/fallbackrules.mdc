@@ -1,0 +1,132 @@
+name: "crypto-sentinel-Trading Environment Rules"
+description: >
+  This rule set ensures that all AI-generated or assisted code is suitable for
+  a **live trading environment**, where accuracy, traceability, and safety are
+  top priorities. It forbids mock data, fake fallbacks, and careless logging.
+alwaysApply: true
+
+rules:
+
+  - id: no-mock-data
+    description: Never use mock data or placeholder datasets in any code.
+    details: >
+      All data must originate from real API calls (e.g., Binance, Finnhub, Supabase, or Postgres).
+      Mock data, temporary objects, or fake constants (like {price: 0}) are strictly forbidden.
+    severity: error
+    action: >
+      Reject any generated code using hardcoded or simulated data.
+
+  - id: no-fallback-values
+    description: Never use fallback or fake values to fix missing parameters or undefined variables.
+    details: >
+      If a function lacks required data, log an error instead of substituting fake or default numbers.
+      For example, do not use value || 0 — instead, log a descriptive console.error.
+    severity: error
+    action: >
+      Replace fallback handling with explicit error logs describing the missing parameter.
+
+  - id: precision-critical
+    description: Ensure all trading calculations use real, verified data.
+    details: >
+      The app operates in a live trading environment.
+      All values (prices, signals, volume, timeframes) must be precise.
+      Never round, truncate, or estimate values unless explicitly stated.
+    severity: critical
+
+  - id: debug-logging
+    description: Use controlled, topic-tagged debug logs.
+    details: >
+      When debugging, use console.log statements to inspect variables or flow.
+      Prefix all logs with [debug_X], where X describes the topic (e.g., dataFetch, signalCheck).
+      Avoid flooding the console — place logs strategically.
+      Example:
+        console.log('[debug_signalCheck] signal values:', { macd, rsi });
+    severity: warning
+
+  - id: missing-parameter-handling
+    description: If a function lacks necessary parameters, log an error clearly.
+    details: >
+      Use console.error('Missing parameter: symbol in fetchPriceData()') with context.
+      Never silently skip or generate a placeholder value.
+    severity: error
+
+  - id: error-handling
+    description: Handle errors explicitly and log the cause.
+    details: >
+      Use try/catch around all API calls or trading actions.
+      Each catch block should log a meaningful error message and the source function.
+      Avoid generic messages like "Error occurred".
+    severity: warning
+
+  - id: environment-ports
+    description: Define backend and frontend environment structure.
+    details: >
+      - Backend (Proxy Server): Runs on port 3003
+      - Frontend (Vite): Runs on port 5174
+      Use these ports consistently across .env files and configs.
+    severity: info
+
+  - id: investigation-guideline
+    description: Define the first action when debugging unknown bugs.
+    details: >
+      When unsure why a bug exists:
+      1. Add console.log lines to inspect relevant variable values.
+      2. Tag them with a [debug_X] prefix.
+      3. Review logs in sequence to trace the root cause.
+      Never add silent assumptions or fake values.
+    severity: guideline
+
+  - id: prevent-system-sleep
+    description: Always run servers with caffeinate to prevent Mac from sleeping or throttling.
+    details: >
+      When running backend or frontend servers during live development or production testing,
+      use macOS caffeinate command to prevent system sleep:
+        Example:
+          caffeinate -dimsu npm run api-server
+          caffeinate -dimsu npm run frontend
+      This ensures long-running trading processes (websocket listeners, scanners, etc.) stay active.
+    severity: critical
+    action: >
+      Automatically wrap "npm run" commands for servers with caffeinate -dimsu.
+
+  - id: binance-symbol-format
+    description: Always use Binance symbol format without slashes.
+    details: >
+      Binance uses symbols like BTCUSDT, ETHUSDT, SOLUSDT.
+      Do NOT use slash-based formats like BTC/USDT or ETH/USDT.
+      When parsing, logging, or constructing symbol strings, ensure they follow Binance's strict format:
+        Correct: BTCUSDT
+        Incorrect: BTC/USDT
+      This rule applies to all API calls, websocket subscriptions, and logs.
+    severity: critical
+    action: >
+      Replace or reject any instance of slash-formatted symbols and enforce concatenated form.
+
+  - id: minimal-console-logging
+    description: When creating new console.logs, always ensure they are minimal and not flooding the console.
+    details: >
+      Console logs should be strategic and informative, not repetitive or excessive.
+      Use change detection to only log when values actually change.
+      Avoid logging the same data repeatedly in loops or re-renders.
+      Use [debug_X] prefixes for debugging logs and remove them when debugging is complete.
+      Example of good logging:
+        console.log('[debug_balanceCheck] Balance changed:', { old: prevBalance, new: currentBalance });
+      Example of bad logging:
+        console.log('Balance:', balance); // This logs on every render
+    severity: warning
+    action: >
+      Implement change detection for all console.log statements to prevent console flooding.
+
+  - id: proxy-server-confirmation
+    description: Always ask for user confirmation before making changes to the proxy server file.
+    details: >
+      The proxy server (proxy-server.cjs) handles live trading API calls and is critical for trading operations.
+      Any changes to this file could affect live trading functionality, API authentication, or order execution.
+      Before making ANY changes to proxy-server.cjs, always ask the user for explicit confirmation.
+      This includes adding new endpoints, modifying existing API calls, changing authentication, or updating trading logic.
+      Example confirmation request:
+        "I need to modify proxy-server.cjs to add [specific change]. This will affect [specific functionality]. 
+        Do you want me to proceed with this change?"
+    severity: critical
+    action: >
+      ALWAYS ask for user confirmation before making any changes to proxy-server.cjs file.

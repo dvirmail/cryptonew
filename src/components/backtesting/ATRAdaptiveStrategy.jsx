@@ -242,6 +242,25 @@ export default function ATRAdaptiveStrategy({ combination, currentCoin, timefram
         stopLossAtrMultiplier,
         takeProfitAtrMultiplier,
       });
+
+      // One-time backtest SL/TP sample log
+      try {
+        if (typeof window !== 'undefined' && !window.__slTpBacktestLoggedOnce) {
+          window.__slTpBacktestLoggedOnce = true;
+          const atrPct = atrValue ? ((atrValue / price) * 100).toFixed(3) : 'n/a';
+          console.log('[SLTP_SAMPLE_BACKTEST]', {
+            coin: currentCoin,
+            timeframe,
+            price,
+            atrValue,
+            atrPct: `${atrPct}%`,
+            stopLossAtrMultiplier,
+            takeProfitAtrMultiplier,
+            computedStopLoss: stopLossPrice,
+            computedTakeProfit: takeProfitPrice
+          });
+        }
+      } catch (_) {}
     };
 
     if (currentPrice && atrData && walletState && !isLoading) {

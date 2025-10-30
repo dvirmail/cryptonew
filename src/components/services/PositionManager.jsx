@@ -1751,12 +1751,12 @@ export default class PositionManager {
      * This is the main function responsible for storing closed trades according to the schema
      */
     async processClosedTrade(livePosition, exitDetails) {
-        console.log('[debug_closedTrade] ⚡⚡ PROCESS CLOSED TRADE - VERSION 3.1 - TIMESTAMP:', new Date().toISOString());
+        //console.log('[debug_closedTrade] ⚡⚡ PROCESS CLOSED TRADE - VERSION 3.1 - TIMESTAMP:', new Date().toISOString());
         
         // CRITICAL FIX: Check if this trade has already been processed to prevent duplicates
         const tradeId = livePosition?.position_id;
         if (this.processedTradeIds && this.processedTradeIds.has(tradeId)) {
-            console.log('[debug_closedTrade] ⚠️ DUPLICATE PREVENTION: Trade already processed:', tradeId);
+            //console.log('[debug_closedTrade] ⚠️ DUPLICATE PREVENTION: Trade already processed:', tradeId);
             return {
                 success: false,
                 error: 'Trade already processed',
@@ -1772,27 +1772,28 @@ export default class PositionManager {
         
         // Mark this trade as being processed
         this.processedTradeIds.add(tradeId);
-        console.log('[debug_closedTrade] 🔒 Marked trade as processed:', tradeId);
+        //console.log('[debug_closedTrade] 🔒 Marked trade as processed:', tradeId);
         
         // Cleanup old processed trade IDs to prevent memory leaks (keep last 1000)
         if (this.processedTradeIds.size > 1000) {
             const idsArray = Array.from(this.processedTradeIds);
             this.processedTradeIds = new Set(idsArray.slice(-500)); // Keep last 500
-            console.log('[debug_closedTrade] 🧹 Cleaned up old processed trade IDs, kept last 500');
+            //console.log('[debug_closedTrade] 🧹 Cleaned up old processed trade IDs, kept last 500');
         }
     
         // 🧩 SAFETY: Log minimal summaries to avoid circular structure crash
-        try {
+        /*try {
             console.log('[debug_closedTrade] livePosition summary:', {
                 id: livePosition?.id,
                 position_id: livePosition?.position_id,
                 symbol: livePosition?.symbol,
                 strategy_name: livePosition?.strategy_name,
                 direction: livePosition?.direction,
-            });
+            });*/
         
         // 🔍 DEBUG: Log analytics fields from livePosition
-        console.log('🔍 [PositionManager] Analytics fields from livePosition:', {
+        try {
+            console.log('🔍 [PositionManager] Analytics fields from livePosition:', {
             position_id: livePosition?.position_id,
             fear_greed_score: livePosition?.fear_greed_score,
             fear_greed_classification: livePosition?.fear_greed_classification,
@@ -1808,10 +1809,10 @@ export default class PositionManager {
             trigger_signals: livePosition?.trigger_signals
             });
         } catch (e) {
-            console.error('[debug_closedTrade] ❌ livePosition could not be logged safely:', e.message);
+            //console.error('[debug_closedTrade] ❌ livePosition could not be logged safely:', e.message);
         }
     
-        try {
+        /*try {
             console.log('[debug_closedTrade] exitDetails summary:', {
                 exit_price: exitDetails?.exit_price,
                 pnl_usdt: exitDetails?.pnl_usdt,
@@ -1819,26 +1820,26 @@ export default class PositionManager {
             });
         } catch (e) {
             console.error('[debug_closedTrade] ❌ exitDetails could not be logged safely:', e.message);
-        }
+        }*/
     
         // 🧩 Now start main logic
         try {
-            console.log('[debug_closedTrade] 🔄 STEP 1: Entered main try block — beginning trade record construction');
-            console.log('[debug_closedTrade] 🔄 STEP 1: UNIQUE TRACE ID:', Date.now());
+            //console.log('[debug_closedTrade] 🔄 STEP 1: Entered main try block — beginning trade record construction');
+            //console.log('[debug_closedTrade] 🔄 STEP 1: UNIQUE TRACE ID:', Date.now());
     
             // Defensive checks
-            console.log('[debug_closedTrade] 🔍 STEP 1.5: Checking key properties...');
+            //console.log('[debug_closedTrade] 🔍 STEP 1.5: Checking key properties...');
             if (!livePosition?.position_id) console.error('[debug_closedTrade] ❌ Missing livePosition.position_id');
             if (!livePosition?.strategy_name) console.error('[debug_closedTrade] ❌ Missing livePosition.strategy_name');
             if (!livePosition?.symbol) console.error('[debug_closedTrade] ❌ Missing livePosition.symbol');
             if (!exitDetails?.exit_price) console.error('[debug_closedTrade] ❌ Missing exitDetails.exit_price');
             if (!exitDetails?.exit_value_usdt) console.error('[debug_closedTrade] ❌ Missing exitDetails.exit_value_usdt');
     
-            console.log('[debug_closedTrade] 🔄 STEP 2: Constructing Trade payload...');
+            //console.log('[debug_closedTrade] 🔄 STEP 2: Constructing Trade payload...');
     
             let newTradeRecord;
             try {
-                console.log('[debug_closedTrade] 🔄 STEP 2.1: Building trade object');
+                //console.log('[debug_closedTrade] 🔄 STEP 2.1: Building trade object');
                 newTradeRecord = {
                     // Copy data from livePosition
                     trade_id: livePosition.position_id,
@@ -1877,7 +1878,7 @@ export default class PositionManager {
                     total_fees_usdt: (livePosition.entry_value_usdt + exitDetails.exit_value_usdt) * 0.001,
                     commission_migrated: true
                 };
-                console.log('[debug_closedTrade] ✅ STEP 2.2: Trade object created');
+                //console.log('[debug_closedTrade] ✅ STEP 2.2: Trade object created');
                 
                 // 🔍 DEBUG: Log analytics fields in newTradeRecord before Trade.create
                 console.log('🔍 [PositionManager] Analytics fields in newTradeRecord before Trade.create:', {
@@ -1896,23 +1897,23 @@ export default class PositionManager {
                     trigger_signals: newTradeRecord.trigger_signals
                 });
             } catch (constructionError) {
-                console.error('[debug_closedTrade] ❌ STEP 2.3: Error during trade object construction:', constructionError);
+                //console.error('[debug_closedTrade] ❌ STEP 2.3: Error during trade object construction:', constructionError);
                 throw constructionError;
             }
     
-            console.log('[debug_closedTrade] 🔄 STEP 3: Trade record constructed successfully');
-            console.log('[debug_closedTrade] 🧩 Trade preview:', {
+            console.log(' 🔄 STEP 3: Trade record constructed successfully');
+            /*console.log('[debug_closedTrade] 🧩 Trade preview:', {
                 id: newTradeRecord.trade_id,
                 symbol: newTradeRecord.symbol,
                 pnl_usdt: newTradeRecord.pnl_usdt
-            });
+            });*/
     
             // Store in database
-            console.log('[debug_closedTrade] 🔄 STEP 4: Storing trade record in DB...');
+            //console.log('[debug_closedTrade] 🔄 STEP 4: Storing trade record in DB...');
             let createdTrade;
             try {
-                console.log('[debug_closedTrade] 🔄 STEP 5: Calling queueEntityCall → Trade.create');
-                console.log('[debug_closedTrade] 🔄 STEP 5: Trade record payload:', JSON.stringify(newTradeRecord, null, 2));
+                //console.log('[debug_closedTrade] 🔄 STEP 5: Calling queueEntityCall → Trade.create');
+                //console.log('[debug_closedTrade] 🔄 STEP 5: Trade record payload:', JSON.stringify(newTradeRecord, null, 2));
                 
                 // 🔍 DEBUG: Log analytics fields specifically before Trade.create
                 console.log('🔍 [PositionManager] Analytics fields in newTradeRecord before Trade.create:', {
@@ -1932,33 +1933,33 @@ export default class PositionManager {
                 });
                 
                 createdTrade = await queueEntityCall('Trade', 'create', newTradeRecord);
-                console.log('[debug_closedTrade] ✅ STEP 6: Trade record created in DB');
-                console.log('[debug_closedTrade] ✅ STEP 6: Created trade result:', JSON.stringify(createdTrade, null, 2));
+                //console.log('[debug_closedTrade] ✅ STEP 6: Trade record created in DB');
+                //console.log('[debug_closedTrade] ✅ STEP 6: Created trade result:', JSON.stringify(createdTrade, null, 2));
             } catch (dbError) {
-                console.error('[debug_closedTrade] ❌ STEP 6: Database error during Trade.create:', dbError.message);
-                console.error('[debug_closedTrade] ❌ STEP 6: Database error stack:', dbError.stack);
+                //console.error('[debug_closedTrade] ❌ STEP 6: Database error during Trade.create:', dbError.message);
+                //console.error('[debug_closedTrade] ❌ STEP 6: Database error stack:', dbError.stack);
                 throw dbError;
             }
     
             // Delete LivePosition
-            console.log('[debug_closedTrade] 🔄 STEP 7: Deleting LivePosition ID:', livePosition.id);
+            //console.log('[debug_closedTrade] 🔄 STEP 7: Deleting LivePosition ID:', livePosition.id);
             try {
                 await queueEntityCall('LivePosition', 'delete', livePosition.id);
                 console.log('[debug_closedTrade] ✅ STEP 8: LivePosition deleted');
             } catch (deleteError) {
-                console.error('[debug_closedTrade] ❌ STEP 8: Error deleting LivePosition:', deleteError.message);
+                //console.error('[debug_closedTrade] ❌ STEP 8: Error deleting LivePosition:', deleteError.message);
                 throw deleteError;
             }
     
             // Update CentralWalletState (for logging only)
-            console.log('[debug_closedTrade] 🔄 STEP 9: Wallet aggregates should update for wallet_id:', livePosition.wallet_id);
+            //console.log('[debug_closedTrade] 🔄 STEP 9: Wallet aggregates should update for wallet_id:', livePosition.wallet_id);
             
             // CRITICAL: Update live_position_ids in wallet state immediately
             if (this._getCurrentWalletState() && this._getCurrentWalletState().id === livePosition.wallet_id) {
                 const currentIds = this._getCurrentWalletState().live_position_ids || [];
                 const updatedIds = currentIds.filter(id => id !== livePosition.id);
                 this._getCurrentWalletState().live_position_ids = updatedIds;
-                console.log('[debug_closedTrade] 🔄 STEP 9.1: Updated live_position_ids, removed:', livePosition.id, 'remaining:', updatedIds.length);
+                //console.log('[debug_closedTrade] 🔄 STEP 9.1: Updated live_position_ids, removed:', livePosition.id, 'remaining:', updatedIds.length);
             }
     
             const result = {
@@ -1967,13 +1968,13 @@ export default class PositionManager {
                 deletedPosition: livePosition.id
             };
     
-            console.log('[debug_closedTrade] 🔄 STEP 10: Returning result:', result);
+            //console.log('[debug_closedTrade] 🔄 STEP 10: Returning result:', result);
             return result;
     
         } catch (error) {
-            console.error('[debug_closedTrade] ❌ STEP ERROR: Failed in processClosedTrade');
-            console.error('[debug_closedTrade] ❌ Message:', error.message);
-            console.error('[debug_closedTrade] ❌ Stack:', error.stack);
+            //console.error('[debug_closedTrade] ❌ STEP ERROR: Failed in processClosedTrade');
+            //console.error('[debug_closedTrade] ❌ Message:', error.message);
+            //console.error('[debug_closedTrade] ❌ Stack:', error.stack);
             this.addLog(`[PROCESS_CLOSED_TRADE] ❌ ${error.message}`, 'error');
             throw error;
         }
@@ -2591,13 +2592,33 @@ export default class PositionManager {
      * @returns {Promise<{success: boolean, orderResult?: object, error?: string, isWarning?: boolean, skipped?: boolean, reason?: string, attemptedQty?: number}>}
      */
     async _executeBinanceMarketSellOrder(position, { currentPrice, tradingMode, proxyUrl, ...options }) {
-        console.log('[PositionManager] 🚀 _executeBinanceMarketSellOrder CALLED');
-        console.log('[PositionManager] 🚀 Position:', position);
-        console.log('[PositionManager] 🚀 Current price:', currentPrice);
-        console.log('[PositionManager] 🚀 Trading mode:', tradingMode);
-        console.log('[PositionManager] 🚀 Proxy URL:', proxyUrl);
+        // Debug flag for verbose logging
+        const DEBUG_SELL_ORDER = true; // Set to false to reduce log noise
+        
+        // Standardized logging function
+        const log = (message, level = 'info', data = null) => {
+            if (this.addLog) {
+                this.addLog(`[BINANCE_SELL] ${message}`, level, data);
+            }
+            if (DEBUG_SELL_ORDER) {
+                console.log(`[PositionManager] ${message}`, data || '');
+            }
+        };
+        
+        log('🚀 _executeBinanceMarketSellOrder CALLED', 'info', { 
+            symbol: position?.symbol, 
+            currentPrice, 
+            tradingMode, 
+            proxyUrl 
+        });
+        console.log('🔍 [EXECUTION_TRACE] step_8: _executeBinanceMarketSellOrder entry point reached');
         
         const logPrefix = '[BINANCE_SELL]';
+        
+        // CRITICAL: Define these variables early so they're available in all catch blocks
+        const isClosingContext = options?.exitReason !== undefined || position?.exit_reason !== undefined;
+        const positionQty = Number(position?.quantity_crypto || 0);
+        
         try {
             // STRICT: validate presence and positive quantity before formatting or sending orders
             const rawQty = position?.quantity_crypto;
@@ -2622,8 +2643,9 @@ export default class PositionManager {
                 return { success: false, error: errorMsg };
             }
 
-            const symbolKey = (position?.symbol || "").replace("/", ""); // e.g., CHZUSDT
-            const baseAsset = (position?.symbol || "").split("/")[0];     // e.g., CHZ
+            const symbolWithSlash = position?.symbol || "";                 // e.g., CHZ/USDT
+            const symbolKey = symbolWithSlash.replace("/", "");            // e.g., CHZUSDT
+            const baseAsset = symbolWithSlash.split("/")[0];                 // e.g., CHZ
             if (!symbolKey || !baseAsset) {
                 this.addLog(`${logPrefix} ❌ Missing symbol/baseAsset for position ${position?.position_id}`, "error");
                 throw new Error("Invalid symbol for sell");
@@ -2656,7 +2678,7 @@ export default class PositionManager {
             }
             const { minNotional, minQty, stepSize } = getSymbolFiltersFromInfo(symbolInfo);
 
-            const positionQty = Number(position?.quantity_crypto || 0);
+            // NOTE: positionQty is already defined at function level for error handling access
             if (!Number.isFinite(positionQty) || positionQty <= 0) {
                 this.addLog(`${logPrefix} ⚠️ Position qty invalid for ${symbolKey}: ${positionQty}`, "error");
                 throw new Error("Invalid position quantity");
@@ -2705,7 +2727,7 @@ export default class PositionManager {
             // CRITICAL FIX: When closing a position, ALWAYS attempt to close with the actual position quantity.
             // Don't let freeBalance=0 prevent us from attempting a real Binance close.
             // If the position doesn't exist on Binance, Binance will return "insufficient balance" and we'll handle it.
-            const isClosingContext = options?.exitReason !== undefined || position?.exit_reason !== undefined;
+            // NOTE: isClosingContext is already defined at function level for error handling access
             console.log(`[PositionManager] 🔍 [CONTEXT_CHECK] isClosingContext=${isClosingContext}, exitReason=${options?.exitReason || position?.exit_reason || 'NONE'}`);
             let requestedQty;
             if (isClosingContext && positionQty > 0 && positionQty >= minQty) {
@@ -2866,22 +2888,24 @@ export default class PositionManager {
                         proxyUrl,
                         symbol: symbolKey,
                         side: "SELL",
-                        orderType: "MARKET",
+                        type: "MARKET",
                         quantity: quantityStr
                 };
                 
                 console.log(`[PositionManager] 📤 [BINANCE_SELL_REQUEST] About to call queueFunctionCall with params:`, requestParams);
                 console.log(`[PositionManager] 📤 [BINANCE_SELL_REQUEST] isClosingContext=${isClosingContext}`);
+                console.log(`[PositionManager] 🔍 [BINANCE_SELL_REQUEST] About to enter try-catch block for Binance API call...`);
                 
                 try {
+                    console.log(`[PositionManager] 🔍 [BINANCE_SELL_REQUEST] Calling queueFunctionCall now...`);
                     const response = await queueFunctionCall(
-                        "createOrder",
+                        "liveTradingAPI",
                         liveTradingAPI,
                         requestParams,
-                        "critical",
-                        null,
-                        45000
-                    );
+                    "critical",
+                    null,
+                    45000
+                );
                     
                     // ✅ LOG: Confirmation of SELL request sent
                     console.log(`[PositionManager] ✅ [BINANCE_SELL_REQUEST] SELL request sent successfully`);
@@ -2890,8 +2914,14 @@ export default class PositionManager {
                     // Check if response indicates an error
                     if (response?.data?.success === false || response?.error) {
                         const errorMsg = response?.data?.data?.message || response?.data?.error || response?.error?.message || "Unknown error";
+                        const errorCode = response?.data?.data?.code || response?.data?.code || response?.error?.code;
                         console.log(`[PositionManager] ❌ [BINANCE_SELL_REQUEST] SELL request failed in response: ${errorMsg}`);
-                        throw new Error(errorMsg);
+                        console.log(`[PositionManager] ❌ [BINANCE_SELL_REQUEST] Error code: ${errorCode}`);
+                        // Preserve original error properties for proper error handling
+                        const error = new Error(errorMsg);
+                        error.code = errorCode;
+                        error.response = response;
+                        throw error;
                     }
                     
                     // ✅ LOG: Confirmation of SELL execution (success path)
@@ -2908,7 +2938,7 @@ export default class PositionManager {
                         );
                     }
                     
-                    return response;
+                return response;
                 } catch (queueError) {
                     // ✅ CRITICAL: Catch error from queueFunctionCall immediately
                     console.log(`[PositionManager] ❌ [QUEUE_ERROR_CAUGHT_IN_ATTEMPTSELL] Error caught from queueFunctionCall:`);
@@ -2918,6 +2948,7 @@ export default class PositionManager {
                     console.log(`[PositionManager] ❌ [QUEUE_ERROR_CAUGHT_IN_ATTEMPTSELL] Error response:`, queueError?.response);
                     console.log(`[PositionManager] ❌ [QUEUE_ERROR_CAUGHT_IN_ATTEMPTSELL] Full error object:`, queueError);
                     console.log(`[PositionManager] ❌ [QUEUE_ERROR_CAUGHT_IN_ATTEMPTSELL] isClosingContext=${isClosingContext}`);
+                    console.log(`[PositionManager] 🔍 [QUEUE_ERROR_CAUGHT_IN_ATTEMPTSELL] About to re-throw error to outer catch block...`);
                     
                     // Re-throw so the outer try-catch can handle it with order history check
                     throw queueError;
@@ -2927,10 +2958,26 @@ export default class PositionManager {
             // Helper to extract error code/message if available
             const parseErr = (err) => {
                 try {
+                    console.log(`[PositionManager] 🔍 [PARSE_ERR] Starting error parsing...`);
+                    console.log(`[PositionManager] 🔍 [PARSE_ERR] Error object:`, err);
+                    console.log(`[PositionManager] 🔍 [PARSE_ERR] err.code (direct):`, err?.code);
+                    console.log(`[PositionManager] 🔍 [PARSE_ERR] err.message:`, err?.message);
+                    console.log(`[PositionManager] 🔍 [PARSE_ERR] err.response:`, err?.response);
+                    
+                    // CRITICAL FIX: Check err.code directly first (from apiQueue re-thrown errors)
+                    if (err?.code !== undefined) {
+                        console.log(`[PositionManager] ✅ [PARSE_ERR] Found error code directly: ${err.code}`);
+                        return { 
+                            code: err.code, 
+                            message: err.message || err?.msg || "Unknown error" 
+                        };
+                    }
+                    
                     const d = err?.response?.data;
                     // Check for nested proxy response first
                     if (d?.data?.success === false && d?.data?.data) { // Example: {success:true, data:{success:false, data:{code,msg}}}
                         const innerError = d.data.data;
+                        console.log(`[PositionManager] ✅ [PARSE_ERR] Found nested error code: ${innerError.code}`);
                         return { code: innerError.code, message: innerError.message || innerError.msg || "Unknown proxy error" };
                     }
                     // Then for top-level proxy error
@@ -2940,12 +2987,17 @@ export default class PositionManager {
                             const m = proxyTxt.match(/\{.*\}/);
                             if (m) {
                                 const inner = JSON.parse(m[0]);
+                                console.log(`[PositionManager] ✅ [PARSE_ERR] Found parsed error code: ${inner.code}`);
                                 return { code: inner.code, message: inner.message || inner.msg || proxyTxt };
                             }
                         } catch(e) { /* ignore JSON parse error, treat as plain text */ }
                     }
-                    return { code: d?.code, message: d?.message || err?.message };
-                } catch {
+                    const code = d?.code;
+                    const message = d?.message || err?.message;
+                    console.log(`[PositionManager] ⚠️ [PARSE_ERR] Using fallback - code: ${code}, message: ${message}`);
+                    return { code, message };
+                } catch (parseError) {
+                    console.log(`[PositionManager] ❌ [PARSE_ERR] Error parsing failed:`, parseError);
                     return { code: undefined, message: err?.message };
                 }
             };
@@ -2953,6 +3005,11 @@ export default class PositionManager {
 
             try {
                 const resp = await attemptSell(requestedQty);
+                console.log(`[PositionManager] 🔍 [ATTEMPT_SELL_RESULT] attemptSell returned:`, resp);
+                console.log(`[PositionManager] 🔍 [ATTEMPT_SELL_RESULT] Response type:`, typeof resp);
+                console.log(`[PositionManager] 🔍 [ATTEMPT_SELL_RESULT] Response success:`, resp?.success);
+                console.log(`[PositionManager] 🔍 [ATTEMPT_SELL_RESULT] Response isVirtualClose:`, resp?.isVirtualClose);
+                
                 // Use the local getBinanceResponse helper to extract actual data
                 const getBinanceResponseLocal = (apiResponse) => {
                     if (apiResponse?.data) {
@@ -2967,12 +3024,50 @@ export default class PositionManager {
                     return apiResponse;
                 };
                 const binanceProcessedResponse = getBinanceResponseLocal(resp);
+                console.log(`[PositionManager] 🔍 [BINANCE_PROCESSED_RESPONSE] Processed response:`, binanceProcessedResponse);
 
                 // Check for Binance API error codes/messages from the processed response
                 if (!binanceProcessedResponse || binanceProcessedResponse.code) { // binanceProcessedResponse.code implies error
                     const errorMessage = binanceProcessedResponse?.msg || binanceProcessedResponse?.message || resp?.data?.data?.message || resp?.data?.message || 'Unknown error from Binance API';
                     const errorCode = binanceProcessedResponse?.code || resp?.data?.data?.code;
                     throw Object.assign(new Error(`Binance API Error ${errorCode}: ${errorMessage}`), { code: errorCode, message: errorMessage });
+                }
+
+                // CRITICAL: Check if this is a virtual close result
+                if (binanceProcessedResponse?.isVirtualClose) {
+                    console.log(`[PositionManager] 🔍 [VIRTUAL_CLOSE_DETECTED] Virtual close result detected for ${symbolKey}`);
+                    console.log(`[PositionManager] 🔍 [VIRTUAL_CLOSE_DETECTED] Virtual close reason:`, binanceProcessedResponse?.reason);
+                    console.log(`[PositionManager] 🔍 [VIRTUAL_CLOSE_DETECTED] Virtual close order ID:`, binanceProcessedResponse?.orderResult?.orderId);
+                    console.log(`[PositionManager] 🔍 [VIRTUAL_CLOSE_DETECTED] Virtual close executed qty:`, binanceProcessedResponse?.orderResult?.executedQty);
+                    
+                    // For virtual close, we need to actually close the position in the database
+                    console.log(`[PositionManager] [debug_next] 🔄 [VIRTUAL_CLOSE_PROCESSING] Processing virtual close for position in database...`);
+                    try {
+                        // Update position status to closed with timeout
+                        // LivePosition already imported at top of file
+                        
+                        const updatePromise = LivePosition.update(position.id, {
+                            status: 'closed',
+                            exit_reason: binanceProcessedResponse?.reason || 'virtual_close',
+                            exit_timestamp: new Date().toISOString(),
+                            exit_price: currentPrice,
+                            pnl_usdt: 0, // Virtual close with no PnL
+                            pnl_percentage: 0
+                        });
+                        
+                        const timeoutPromise = new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Database update timeout after 5 seconds')), 5000)
+                        );
+                        
+                        const updateResult = await Promise.race([updatePromise, timeoutPromise]);
+                        console.log(`[PositionManager] [debug_next] ✅ [VIRTUAL_CLOSE_PROCESSING] Position ${position.id} updated to closed status`);
+                        console.log(`[PositionManager] [debug_next] 🔍 [VIRTUAL_CLOSE_PROCESSING] Update result:`, updateResult);
+                    } catch (updateError) {
+                        console.log(`[PositionManager] [debug_next] ❌ [VIRTUAL_CLOSE_PROCESSING] Failed to update position status:`, updateError);
+                        // Don't fail the entire operation for database update errors
+                    }
+                    
+                    return { success: true, orderResult: binanceProcessedResponse.orderResult, isVirtualClose: true };
                 }
 
                 if (binanceProcessedResponse?.orderId) {
@@ -3010,16 +3105,63 @@ export default class PositionManager {
                 } else {
                     throw new Error('Binance order did not return an orderId, despite no explicit error.');
                 }
+                log('🟢 _executeBinanceMarketSellOrder called', 'success', { symbol: symbolKey, positionQty });
                 return { success: true, orderResult: binanceProcessedResponse }; // Return the raw processed response
 
             } catch (err) {
                 // ✅ CRITICAL: Log error immediately to see what we're dealing with
-                console.log(`[PositionManager] ❌ [ERROR_CAUGHT] Error caught in _executeBinanceMarketSellOrder:`);
-                console.log(`[PositionManager] ❌ [ERROR_CAUGHT] Error type:`, typeof err);
-                console.log(`[PositionManager] ❌ [ERROR_CAUGHT] Error message:`, err?.message);
-                console.log(`[PositionManager] ❌ [ERROR_CAUGHT] Error code:`, err?.code);
-                console.log(`[PositionManager] ❌ [ERROR_CAUGHT] Error response status:`, err?.response?.status);
-                console.log(`[PositionManager] ❌ [ERROR_CAUGHT] Full error object:`, err);
+                log('❌ [ERROR_CAUGHT] Error caught in _executeBinanceMarketSellOrder', 'error', {
+                    errorType: typeof err,
+                    errorMessage: err?.message,
+                    errorCode: err?.code,
+                    responseStatus: err?.response?.status,
+                    fullError: err
+                });
+                // NEW: Post-timeout/order-unknown confirmation. If the SELL failed due to timeout/network,
+                // check recent orders immediately to see if Binance filled it anyway.
+                try {
+                    const msgLc = String(err?.message || '').toLowerCase();
+                    const looksLikeTimeout = msgLc.includes('timeout') || msgLc.includes('network') || msgLc.includes('fetch') || err?.response?.status === 0;
+                    if (looksLikeTimeout) {
+                        console.log('[PositionManager] ⏳ [POST_TIMEOUT_CHECK] Timeout/network during SELL. Polling recent orders for confirmation...');
+                        const { functions } = await import('@/api/localClient');
+                        const startedAt = Date.now();
+                        let confirmed = null;
+                        // Poll up to ~10s (5 attempts, 2s apart)
+                        for (let attempt = 1; attempt <= 5; attempt++) {
+                            try {
+                                const resp = await functions.liveTradingAPI({
+                                    action: 'getAllOrders',
+                                    tradingMode: tradingMode,
+                                    proxyUrl: proxyUrl,
+                                    symbol: symbolKey,
+                                    limit: 20
+                                });
+                                const orders = Array.isArray(resp?.data?.data) ? resp.data.data : (resp?.data?.data ? [resp.data.data] : []);
+                                const cutoff = Date.now() - 60_000; // last 60s
+                                const filledSell = orders.find(o => o.symbol === symbolKey && o.side === 'SELL' && o.status === 'FILLED' && (new Date(o.updateTime || o.time || o.transactTime).getTime() >= cutoff));
+                                if (filledSell) {
+                                    confirmed = filledSell;
+                                    console.log('[PositionManager] ✅ [POST_TIMEOUT_CHECK] Found FILLED SELL after timeout:', { orderId: filledSell.orderId, qty: filledSell.executedQty });
+                                    break;
+                                }
+                            } catch (pollErr) {
+                                console.warn('[PositionManager] ⚠️ [POST_TIMEOUT_CHECK] Poll error:', pollErr?.message || pollErr);
+                            }
+                            await new Promise(r => setTimeout(r, 2000));
+                        }
+                        if (confirmed) {
+                            const execQty = Number(confirmed.executedQty || positionQty) || positionQty;
+                            this.addLog(`${logPrefix} ✅ SELL confirmed on Binance after timeout: Order ${confirmed.orderId}, qty=${execQty} ${symbolKey}`, 'success');
+                            // Return as success so batch close proceeds with normal post-processing
+                            return { success: true, orderResult: confirmed, wasPostTimeoutConfirm: true };
+                        } else {
+                            console.log('[PositionManager] ⏳ [POST_TIMEOUT_CHECK] No FILLED SELL found within window. Proceeding to error handling. Elapsed ms:', Date.now() - startedAt);
+                        }
+                    }
+                } catch (postTimeoutErr) {
+                    console.warn('[PositionManager] ⚠️ [POST_TIMEOUT_CHECK] Failed:', postTimeoutErr?.message || postTimeoutErr);
+                }
                 
                 const { code, message } = parseErr(err);
                 const msg = (message || "").toLowerCase();
@@ -3035,13 +3177,56 @@ export default class PositionManager {
 
                 console.log(`[PositionManager] 🔍 [ERROR_ANALYSIS] Parsed error details:`);
                 console.log(`[PositionManager] 🔍 [ERROR_ANALYSIS] code=${code}, message=${message}`);
+                console.log(`[PositionManager] 🔍 [ERROR_ANALYSIS] msg=${msg}`);
                 console.log(`[PositionManager] 🔍 [ERROR_ANALYSIS] isInsufficient=${isInsufficient}, isFilterViolation=${isFilterViolation}, is400=${is400}`);
                 console.log(`[PositionManager] 🔍 [ERROR_ANALYSIS] isClosingContext=${isClosingContext}, symbol=${symbolKey}`);
                 console.log(`[PositionManager] 🔍 [ERROR_ANALYSIS] Will enter error handling: ${isInsufficient || isFilterViolation || is400}`);
+                console.log(`[PositionManager] 🔍 [ERROR_ANALYSIS] About to check error conditions...`);
 
                 // Handle insufficient balance, filter violations, or 400 errors
                 if (isInsufficient || isFilterViolation || is400) {
                     console.log(`[PositionManager] ✅ [ERROR_HANDLING] Entered error handling block for ${symbolKey}`);
+                    console.log(`[PositionManager] 🔍 [ERROR_HANDLING] Error types: isInsufficient=${isInsufficient}, isFilterViolation=${isFilterViolation}, is400=${is400}`);
+                    
+                    // Ensure a virtual-close attempt happens immediately for -2010 insufficient balance
+                    // regardless of any subsequent retry/dust logic.
+                    let _vc_attempted_early = false;
+                    if (isInsufficient) {
+                        try {
+                            console.log('[PositionManager] 🔄 [VIRTUAL_CLOSE_EARLY] Calling walletReconciliation("virtualCloseDustPositions") due to -2010/insufficient balance...');
+                            const _vc_attempt_start_early = Date.now();
+                            await queueFunctionCall(
+                                'walletReconciliation',
+                                walletReconciliation,
+                                { action: 'virtualCloseDustPositions', symbol: symbolWithSlash, mode: tradingMode },
+                                'critical',
+                                null,
+                                0,
+                                15000
+                            );
+                            console.log('[PositionManager] ⏱️ [VIRTUAL_CLOSE_TIMING] early_walletReconciliation_ms:', Date.now() - _vc_attempt_start_early);
+                            _vc_attempted_early = true;
+                            // Refresh client-side positions cache so UI reflects deletions immediately
+                            try {
+                                const initialPositionCount = this.positions?.length || 0;
+                                const refreshed = await LivePosition.filter({ trading_mode: tradingMode, status: 'open' }, '-created_date', 500);
+                                this.positions = Array.isArray(refreshed) ? refreshed : [];
+                                console.log(`🔥🔥🔥 POSITIONS IN MEMORY: ${initialPositionCount} → ${this.positions.length} (removed ${initialPositionCount - this.positions.length}) 🔥🔥🔥`);
+                            } catch (refreshErr) {
+                                console.warn('[PositionManager] ⚠️ [POST_VC_REFRESH] Failed to reload positions after early VC:', refreshErr?.message);
+                            }
+                        } catch (earlyVcErr) {
+                            console.warn('[PositionManager] ⚠️ [VIRTUAL_CLOSE_EARLY] walletReconciliation failed, falling back to performDirectVirtualClose:', earlyVcErr?.message);
+                            try {
+                                const _dvc_attempt_start_early = Date.now();
+                                await this.performDirectVirtualClose(symbolKey, tradingMode, positionQty);
+                                console.log('[PositionManager] ⏱️ [VIRTUAL_CLOSE_TIMING] early_performDirectVirtualClose_ms:', Date.now() - _dvc_attempt_start_early);
+                                _vc_attempted_early = true;
+                            } catch (dvcEarlyErr) {
+                                console.error('[PositionManager] ❌ [VIRTUAL_CLOSE_EARLY] performDirectVirtualClose failed:', dvcEarlyErr?.message);
+                            }
+                        }
+                    }
                     
                     // Enhanced logging for filter violations
                     if (isFilterViolation) {
@@ -3068,13 +3253,17 @@ export default class PositionManager {
                         
                         let orderHistoryCheckRan = false;
                         let orderHistoryCheckResult = null;
+                        let orderAlreadyExecuted = false;
+                        let existingOrder = null;
                         
                         try {
                             orderHistoryCheckRan = true;
                             console.log(`[PositionManager] 🔍 [ORDER_HISTORY_CHECK] Fetching recent orders from Binance...`);
                             
                             // Check recent SELL orders to see if this position was already closed
-                        const recentOrdersResponse = await liveTradingAPI({
+                            const { functions } = await import('@/api/localClient');
+                            console.log('[PositionManager] 🔍 [ORDER_HISTORY_CHECK] Functions imported successfully:', !!functions?.liveTradingAPI);
+                        const recentOrdersResponse = await functions.liveTradingAPI({
                             action: 'getAllOrders',
                             tradingMode: tradingMode,
                             proxyUrl: proxyUrl,
@@ -3125,14 +3314,20 @@ export default class PositionManager {
                                     const matchTime = new Date(matchingOrder.time || matchingOrder.updateTime || matchingOrder.transactTime).toISOString();
                                     console.log('[PositionManager] ✅ [ORDER_HISTORY_CHECK] MATCH FOUND! Position was already closed on Binance');
                                     console.log(`[PositionManager] ✅ [ORDER_HISTORY_CHECK] Matching order: orderId=${matchingOrder.orderId}, qty=${matchQty}, time=${matchTime}`);
+                                    console.log('[PositionManager] 🔍 [ORDER_HISTORY_CHECK] Returning success result to skip position closing...');
                                 this.addLog(
                                         `${logPrefix} ✅ Position ${symbolKey} was already closed on Binance (found matching SELL order ${matchingOrder.orderId}, qty=${matchQty}, time=${matchTime})`,
                                     "success"
                                 );
                                     orderHistoryCheckResult = { found: true, order: matchingOrder };
-                                    return { success: true, orderResult: matchingOrder, skipped: true, reason: "already_executed" };
+                                    console.log('[PositionManager] 🔍 [ORDER_HISTORY_CHECK] About to return success result...');
+                                    // Set flag to return after try-catch
+                                    orderAlreadyExecuted = true;
+                                    existingOrder = matchingOrder;
                                 } else {
                                     console.log(`[PositionManager] ❌ [ORDER_HISTORY_CHECK] NO MATCH FOUND - No recent SELL orders match position quantity ${positionQty}`);
+                                    console.log(`[PositionManager] 🔍 [ORDER_HISTORY_CHECK] Recent sell orders count: ${recentSellOrders.length}`);
+                                    console.log(`[PositionManager] 🔍 [ORDER_HISTORY_CHECK] Will proceed with virtual close...`);
                                     orderHistoryCheckResult = { found: false, recentSellOrdersCount: recentSellOrders.length };
                                 }
                             } else {
@@ -3150,6 +3345,12 @@ export default class PositionManager {
                         }
                         
                         console.log(`[PositionManager] 🔍 [ORDER_HISTORY_CHECK] COMPLETE: ran=${orderHistoryCheckRan}, result=`, orderHistoryCheckResult);
+                        
+                        // Check if order was already executed
+                        if (orderAlreadyExecuted && existingOrder) {
+                            console.log('[PositionManager] ✅ [ORDER_HISTORY_CHECK] Order already executed, returning success result');
+                            return { success: true, orderResult: existingOrder, skipped: true, reason: "already_executed" };
+                        }
                     }
                     
                     // If order history check didn't find a match, proceed with retry logic
@@ -3161,11 +3362,20 @@ export default class PositionManager {
                     
                     // DUST CONVERSION - Original App Implementation
                     // Trigger for both insufficient balance (-2010) and filter violations (-1013)
-                    if ((isInsufficient && code === -2010) || (isFilterViolation && code === -1013)) {
+                    if (!_vc_attempted_early && ((isInsufficient && code === -2010) || (isFilterViolation && code === -1013))) {
                         const dustReason = isInsufficient ? 'insufficient balance' : 'filter violation';
                         console.log(`[PositionManager] 🔄 Attempting dust conversion for ${dustReason}...`);
                         try {
-                            const dustConvertResult = await attemptDustConvert(tradingMode, proxyUrl);
+                            console.log('[PositionManager] 🔍 [DUST_CONVERSION] About to call attemptDustConvert with 10 second timeout...');
+                            
+                            const dustConvertPromise = attemptDustConvert(tradingMode, proxyUrl);
+                            const dustConvertTimeout = new Promise((_, reject) => {
+                                setTimeout(() => reject(new Error('attemptDustConvert timeout after 10 seconds')), 10000);
+                            });
+                            
+                            const dustConvertResult = await Promise.race([dustConvertPromise, dustConvertTimeout]);
+                            console.log('[PositionManager] 🔍 [DUST_CONVERSION] attemptDustConvert completed successfully');
+                            
                             if (dustConvertResult.ok) {
                                 console.log('[PositionManager] ✅ Dust conversion successful:', dustConvertResult.data);
                                 this.addLog(`${logPrefix} ✅ Dust conversion successful for ${symbolKey}`, 'success');
@@ -3179,28 +3389,119 @@ export default class PositionManager {
                         }
 
                         // VIRTUAL POSITION CLOSING - After dust conversion attempt
-                        console.log('[PositionManager] 🔄 Attempting virtual position closing for dust...');
+                        console.log('[PositionManager] 🔄 [VIRTUAL_CLOSE_START] Attempting virtual position closing for dust...');
+                        const _vc_overall_start = Date.now();
+                        console.log('[PositionManager] ⏱️ [VIRTUAL_CLOSE_TIMING] overall_start_ms:', _vc_overall_start);
+                        console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_DEBUG] Symbol:', symbolKey, 'Mode:', tradingMode);
+                        console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_DEBUG] Position details:', { positionQty, symbolKey, isClosingContext });
+                        console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_DEBUG] About to enter virtual close try-catch block...');
+                        console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_DEBUG] IsInsufficient:', isInsufficient, 'Code:', code);
+                        console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_DEBUG] Will attempt virtual close:', isInsufficient && code === -2010);
+                        console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_DEBUG] About to enter try block for virtual close...');
+                        
                         try {
-                            const virtualCloseResult = await queueFunctionCall(
+                            // Try the original walletReconciliation function first
+                            let virtualCloseResult = null;
+                            let _vc_attempt_start = null;
+                            try {
+                                console.log('[PositionManager] 🔄 [VIRTUAL_CLOSE_ATTEMPT] Trying walletReconciliation function...');
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_ATTEMPT] About to call queueFunctionCall with 15 second timeout...');
+                                _vc_attempt_start = Date.now();
+                                
+                                // Add timeout to prevent hanging
+                                // Use queueFunctionCall with built-in timeout instead of Promise.race
+                                virtualCloseResult = await queueFunctionCall(
                                 'walletReconciliation',
                                 walletReconciliation,
                                 {
                                     action: 'virtualCloseDustPositions',
-                                    symbol: symbolKey,
+                                    symbol: symbolWithSlash,
                                     mode: tradingMode
                                 },
                                 'critical',
                                 null,
                                 0,
-                                30000
-                            );
+                                    15000  // Built-in timeout of 15 seconds
+                                );
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_ATTEMPT] walletReconciliation completed successfully');
+                                console.log('[PositionManager] ⏱️ [VIRTUAL_CLOSE_TIMING] walletReconciliation_ms:', Date.now() - _vc_attempt_start);
+                                if (virtualCloseResult && Array.isArray(virtualCloseResult.logs)) {
+                                    for (const entry of virtualCloseResult.logs) {
+                                        console.log('[PROXY→CLIENT] [VC_LOG]', entry.msg, entry.data || {}, `ts=${entry.ts}`);
+                                    }
+                                }
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_ATTEMPT] walletReconciliation result:', virtualCloseResult);
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_ATTEMPT] Result type:', typeof virtualCloseResult);
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_ATTEMPT] Success property:', virtualCloseResult?.success);
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_ATTEMPT] VirtualClosed property:', virtualCloseResult?.virtualClosed);
+                            } catch (walletReconError) {
+                                console.log('[PositionManager] ⚠️ [VIRTUAL_CLOSE_ATTEMPT] walletReconciliation failed:', walletReconError.message);
+                                console.log('[PositionManager] 🔄 [VIRTUAL_CLOSE_FALLBACK] Trying direct virtual close...');
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_FALLBACK] About to call performDirectVirtualClose with:', {
+                                    symbol: symbolKey,
+                                    mode: tradingMode,
+                                    qty: positionQty
+                                });
+                                
+                                // Fallback: Direct virtual close implementation with timeout
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_FALLBACK] About to call performDirectVirtualClose with 10 second timeout...');
+                                const _dvc_start = Date.now();
+                                
+                                const directVirtualClosePromise = this.performDirectVirtualClose(symbolKey, tradingMode, positionQty);
+                                const directVirtualCloseTimeout = new Promise((_, reject) => {
+                                    setTimeout(() => reject(new Error('performDirectVirtualClose timeout after 10 seconds')), 10000);
+                                });
+                                
+                                virtualCloseResult = await Promise.race([directVirtualClosePromise, directVirtualCloseTimeout]);
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_FALLBACK] performDirectVirtualClose completed successfully');
+                                console.log('[PositionManager] ⏱️ [VIRTUAL_CLOSE_TIMING] performDirectVirtualClose_ms:', Date.now() - _dvc_start);
+                                console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_FALLBACK] performDirectVirtualClose returned:', virtualCloseResult);
+                            }
 
-                            if (virtualCloseResult.success) {
-                                console.log(`[PositionManager] ✅ Virtual closure successful: ${virtualCloseResult.virtualClosed} positions closed`);
+                            console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_RESULT] Raw result:', virtualCloseResult);
+                            console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_RESULT] Type:', typeof virtualCloseResult);
+                            console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_RESULT] Success property:', virtualCloseResult?.success);
+                            console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_RESULT] VirtualClosed property:', virtualCloseResult?.virtualClosed);
+                            console.log('[PositionManager] 🔍 [VIRTUAL_CLOSE_RESULT] About to check if virtual close was successful...');
+
+                            if (virtualCloseResult && virtualCloseResult.success) {
+                                console.log(`[PositionManager] ✅ [VIRTUAL_CLOSE_SUCCESS] Virtual closure successful: ${virtualCloseResult.virtualClosed} positions closed`);
+                                console.log('[PositionManager] ⏱️ [VIRTUAL_CLOSE_TIMING] overall_virtual_close_ms:', Date.now() - _vc_overall_start);
+                                console.log(`[PositionManager] 🔍 [VIRTUAL_CLOSE_SUCCESS] Full result details:`, virtualCloseResult);
                                 this.addLog(`${logPrefix} ✅ Virtual closure successful: ${virtualCloseResult.virtualClosed} positions closed`, 'success');
+                                // Refresh client-side positions cache so UI reflects deletions immediately
+                                try {
+                                    const initialPositionCount = this.positions?.length || 0;
+                                    const refreshed = await LivePosition.filter({ trading_mode: tradingMode, status: 'open' }, '-created_date', 500);
+                                    this.positions = Array.isArray(refreshed) ? refreshed : [];
+                                    console.log(`🔥🔥🔥 POSITIONS IN MEMORY: ${initialPositionCount} → ${this.positions.length} (removed ${initialPositionCount - this.positions.length}) 🔥🔥🔥`);
+                                } catch (refreshErr) {
+                                    console.warn('[PositionManager] ⚠️ [POST_VC_REFRESH] Failed to reload positions after VC:', refreshErr?.message);
+                                }
+                                
+                                // CRITICAL: Verify positions were actually closed in database
+                                console.log(`[PositionManager] 🔍 [POSITION_VERIFICATION] Checking if positions were actually closed in database...`);
+                                try {
+                                    // LivePosition already imported at top of file
+                                    const remainingPositions = await LivePosition.filter(
+                                        { symbol: symbolKey, trading_mode: tradingMode, status: 'open' },
+                                        '-created_date',
+                                        10
+                                    );
+                                    console.log(`[PositionManager] 🔍 [POSITION_VERIFICATION] Remaining open positions for ${symbolKey}:`, remainingPositions?.length || 0);
+                                    if (remainingPositions && remainingPositions.length > 0) {
+                                        console.log(`[PositionManager] ❌ [POSITION_VERIFICATION] WARNING: ${remainingPositions.length} positions still open after virtual close!`);
+                                        console.log(`[PositionManager] 🔍 [POSITION_VERIFICATION] Remaining position IDs:`, remainingPositions.map(p => p.id));
+                                    } else {
+                                        console.log(`[PositionManager] ✅ [POSITION_VERIFICATION] All positions successfully closed in database`);
+                                    }
+                                } catch (verifyError) {
+                                    console.log(`[PositionManager] ❌ [POSITION_VERIFICATION] Error verifying position closure:`, verifyError);
+                                }
                                 
                                 // Trigger wallet state reconciliation after virtual closing
                                 try {
+                                    console.log('[PositionManager] 🔄 [WALLET_RECONCILE] Triggering wallet state reconciliation...');
                                     await queueFunctionCall(
                                         'reconcileWalletState',
                                         reconcileWalletState,
@@ -3210,34 +3511,70 @@ export default class PositionManager {
                                         0,
                                         30000
                                     );
-                                    console.log('[PositionManager] ✅ Wallet state reconciled after virtual closure');
+                                    console.log('[PositionManager] ✅ [WALLET_RECONCILE] Wallet state reconciled after virtual closure');
                                 } catch (reconcileError) {
-                                    console.warn('[PositionManager] ⚠️ Wallet reconciliation failed after virtual closure:', reconcileError.message);
+                                    console.warn('[PositionManager] ⚠️ [WALLET_RECONCILE] Wallet reconciliation failed after virtual closure:', reconcileError.message);
                                 }
                             } else {
-                                console.log('[PositionManager] ⚠️ Virtual closure failed:', virtualCloseResult.error);
-                                this.addLog(`${logPrefix} ⚠️ Virtual closure failed: ${virtualCloseResult.error}`, 'warning');
+                                const errorMsg = virtualCloseResult?.error || 'Unknown error';
+                                console.log('[PositionManager] ⚠️ [VIRTUAL_CLOSE_FAILED] Virtual closure failed:', errorMsg);
+                                console.log('[PositionManager] ⚠️ [VIRTUAL_CLOSE_FAILED] Full result object:', virtualCloseResult);
+                                console.log('[PositionManager] ⚠️ [VIRTUAL_CLOSE_FAILED] Result type:', typeof virtualCloseResult);
+                                console.log('[PositionManager] ⚠️ [VIRTUAL_CLOSE_FAILED] Result success:', virtualCloseResult?.success);
+                                console.log('[PositionManager] ⚠️ [VIRTUAL_CLOSE_FAILED] Result error:', virtualCloseResult?.error);
+                                console.log('[PositionManager] ⚠️ [VIRTUAL_CLOSE_FAILED] About to check position status...');
+                                this.addLog(`${logPrefix} ⚠️ Virtual closure failed: ${errorMsg}`, 'warning');
+                                
+                                // CRITICAL: Check if positions are still open after failed virtual close
+                                console.log(`[PositionManager] 🔍 [FAILED_VIRTUAL_CLOSE_VERIFICATION] Checking position status after failed virtual close...`);
+                                try {
+                                    // LivePosition already imported at top of file
+                                    const remainingPositions = await LivePosition.filter(
+                                        { symbol: symbolKey, trading_mode: tradingMode, status: 'open' },
+                                        '-created_date',
+                                        10
+                                    );
+                                    console.log(`[PositionManager] 🔍 [FAILED_VIRTUAL_CLOSE_VERIFICATION] Positions still open for ${symbolKey}:`, remainingPositions?.length || 0);
+                                    if (remainingPositions && remainingPositions.length > 0) {
+                                        console.log(`[PositionManager] ❌ [FAILED_VIRTUAL_CLOSE_VERIFICATION] ${remainingPositions.length} positions remain open after failed virtual close`);
+                                        console.log(`[PositionManager] 🔍 [FAILED_VIRTUAL_CLOSE_VERIFICATION] Open position IDs:`, remainingPositions.map(p => p.id));
+                                    }
+                                } catch (verifyError) {
+                                    console.log(`[PositionManager] ❌ [FAILED_VIRTUAL_CLOSE_VERIFICATION] Error checking position status:`, verifyError);
+                                }
                             }
                         } catch (virtualError) {
-                            console.log('[PositionManager] ❌ Virtual closure error:', virtualError);
-                            this.addLog(`${logPrefix} ❌ Virtual closure error: ${virtualError.message}`, 'error');
+                            console.log('[PositionManager] ❌ [VIRTUAL_CLOSE_ERROR] Virtual closure error:', virtualError);
+                            console.log('[PositionManager] ❌ [VIRTUAL_CLOSE_ERROR] Error type:', typeof virtualError);
+                            console.log('[PositionManager] ❌ [VIRTUAL_CLOSE_ERROR] Error message:', virtualError?.message);
+                            console.log('[PositionManager] ❌ [VIRTUAL_CLOSE_ERROR] Error stack:', virtualError?.stack);
+                            console.log('[PositionManager] ❌ [VIRTUAL_CLOSE_ERROR] Error details:', JSON.stringify(virtualError, null, 2));
+                            console.log('[PositionManager] ❌ [VIRTUAL_CLOSE_ERROR] About to add error log...');
+                            this.addLog(`${logPrefix} ❌ Virtual closure error: ${virtualError?.message || 'Unknown error'}`, 'error');
                         }
                     }
                     
                     // Refresh balance and recompute sell qty for retry
                     console.log(`[PositionManager] 🔄 [RETRY_LOGIC] Refreshing balance before retry for ${symbolKey}...`);
+                    console.log(`[PositionManager] 🔍 [RETRY_LOGIC] About to refresh balance for retry...`);
                     const fresh = await fetchFreshFreeBalance({ baseAsset, tradingMode, proxyUrl });
-                    let retryQty = Math.min(positionQty, fresh);
+                    console.log(`[PositionManager] 🔍 [RETRY_LOGIC] Fresh balance fetched:`, fresh);
+                    // In closing context, use positionQty directly (not limited by free balance)
+                    // The position was already opened, so we should try to close it regardless of current balance
+                    let retryQty = positionQty;
                     retryQty = roundDownToStepSize(retryQty, stepSize); // This is a numeric value
+                    console.log(`[PositionManager] 🔍 [RETRY_LOGIC] Retry quantity calculated:`, retryQty);
                     const retryNotional = retryQty * Number(currentPrice || 0);
 
                     const retryBelowLot = minQty && retryQty < minQty - 1e-12;
                     const retryBelowNotional = minNotional && retryNotional < (minNotional - 1e-8);
+                    console.log(`[PositionManager] 🔍 [RETRY_LOGIC] Retry checks - Below lot:`, retryBelowLot, 'Below notional:', retryBelowNotional);
 
                     console.log(`[PositionManager] 🔄 [RETRY_LOGIC] Retry calculation: fresh=${fresh.toFixed(8)}, retryQty=${retryQty.toFixed(8)}, retryNotional=${retryNotional.toFixed(6)}, belowLot=${retryBelowLot}, belowNotional=${retryBelowNotional}`);
 
                     if (!Number.isFinite(retryQty) || retryQty <= 0 || retryBelowLot || retryBelowNotional) {
                         console.log(`[PositionManager] 🧹 [RETRY_LOGIC] SKIPPING RETRY: Quantity too small (fresh=${fresh.toFixed(8)}, retryQty=${retryQty.toFixed(8)})`);
+                        console.log(`[PositionManager] 🔍 [RETRY_LOGIC] About to skip retry and return...`);
                         this.addLog(
                             `${logPrefix} 🧹 Retry skip for ${symbolKey}: fresh=${fresh.toFixed(8)}, qty=${retryQty.toFixed(8)}, notional=${retryNotional.toFixed(6)} ` +
                             `(minQty=${minQty}, minNotional=${minNotional})`,
@@ -3247,12 +3584,15 @@ export default class PositionManager {
                             console.log(`[PositionManager] 🔄 [RETRY_LOGIC] Triggering reconciliation after retry skip...`);
                             this.reconcileWithBinance().catch(() => { });
                         }
+                        console.log(`[PositionManager] 🔍 [RETRY_LOGIC] About to return skipped result...`);
                         return { skipped: true, reason: "retry_below_threshold", attemptedQty: retryQty };
                     }
                     
                     console.log(`[PositionManager] 🔄 [RETRY_LOGIC] Proceeding with retry: retryQty=${retryQty.toFixed(8)}`);
+                    console.log(`[PositionManager] 🔍 [RETRY_LOGIC] About to call attemptSell with retry quantity...`);
                     
                     const resp2 = await attemptSell(retryQty);
+                    console.log(`[PositionManager] 🔍 [RETRY_LOGIC] attemptSell retry completed, processing response...`);
                     // Process retry response
                     const getBinanceResponseLocal = (apiResponse) => {
                         if (apiResponse?.data) {
@@ -3305,15 +3645,21 @@ export default class PositionManager {
                 }
 
                 // Unknown/other error: In closing context with insufficient balance, allow virtual closure
-                if (isClosingContext && isInsufficient && freeBalance === 0) {
-                    console.log('[PositionManager] ✅ CLOSING CONTEXT: Insufficient balance with freeBalance=0, treating as already closed');
+                // CRITICAL: In closing context, "insufficient balance" almost always means position was already sold
+                if (isClosingContext && isInsufficient) {
+                    console.log('[PositionManager] ✅ CLOSING CONTEXT: Insufficient balance detected, treating as already closed');
+                    console.log('[PositionManager] 🔍 [CLOSING_CONTEXT_VIRTUAL] Creating virtual close result for position:', symbolKey);
+                    console.log('[PositionManager] 🔍 [CLOSING_CONTEXT_VIRTUAL] Position quantity:', positionQty);
+                    console.log('[PositionManager] 🔍 [CLOSING_CONTEXT_VIRTUAL] Current price:', currentPrice);
+                    
                     this.addLog(
-                        `${logPrefix} ⚠️ Position ${symbolKey} appears already closed on Binance (insufficient balance with freeBalance=0). ` +
+                        `${logPrefix} ⚠️ Position ${symbolKey} appears already closed on Binance (insufficient balance error). ` +
                         `Will proceed with virtual closure.`,
                         'warning'
                     );
+                    
                     // Return a result that indicates the position should be closed virtually
-                    return { 
+                    const virtualCloseResult = { 
                         success: true, 
                         orderResult: { 
                             orderId: `virtual_close_${Date.now()}`,
@@ -3323,6 +3669,9 @@ export default class PositionManager {
                         isVirtualClose: true,
                         reason: 'insufficient_balance_position_already_closed'
                     };
+                    
+                    console.log('[PositionManager] 🔍 [CLOSING_CONTEXT_VIRTUAL] Returning virtual close result:', virtualCloseResult);
+                    return virtualCloseResult;
                 }
 
                 // Unknown/other error: rethrow so upstream handles it
@@ -3333,6 +3682,36 @@ export default class PositionManager {
             // Keep existing error path and logging unchanged, but ensure a clear prefix
             const errorMessage = e?.message || 'Unknown error';
             const isInsufficientBalance = e.isInsufficient || errorMessage.toLowerCase().includes('insufficient balance');
+
+            console.log(`[PositionManager] 🔍 [OUTER_CATCH] Error caught in outer catch block:`);
+            console.log(`[PositionManager] 🔍 [OUTER_CATCH] Error message: ${errorMessage}`);
+            console.log(`[PositionManager] 🔍 [OUTER_CATCH] isInsufficientBalance: ${isInsufficientBalance}`);
+            console.log(`[PositionManager] 🔍 [OUTER_CATCH] isClosingContext: ${isClosingContext}`);
+            console.log(`[PositionManager] 🔍 [OUTER_CATCH] Symbol: ${position?.symbol || "UNKNOWN"}`);
+            console.log(`[PositionManager] 🔍 [OUTER_CATCH] About to check if virtual close should be attempted...`);
+
+            // CRITICAL: Handle insufficient balance in closing context in outer catch block too
+            if (isClosingContext && isInsufficientBalance) {
+                console.log('[PositionManager] ✅ [OUTER_CATCH] CLOSING CONTEXT: Insufficient balance detected in outer catch, treating as already closed');
+                this.addLog(
+                    `${logPrefix} ⚠️ Position ${position?.symbol || "UNKNOWN"} appears already closed on Binance (insufficient balance error). ` +
+                    `Will proceed with virtual closure.`,
+                    'warning'
+                );
+                // Return a result that indicates the position should be closed virtually
+                // Use fallback price if currentPrice is undefined
+                const fallbackPrice = currentPrice || position?.entry_price || 0;
+                return { 
+                    success: true, 
+                    orderResult: { 
+                        orderId: `virtual_close_${Date.now()}`,
+                        executedQty: positionQty.toString(),
+                        fills: [{ price: fallbackPrice.toString(), qty: positionQty.toString() }]
+                    },
+                    isVirtualClose: true,
+                    reason: 'insufficient_balance_position_already_closed'
+                };
+            }
 
             this.scannerService.addLog(`${logPrefix} ❌ Critical error executing Binance market sell for ${position?.symbol || "UNKNOWN"}: ${errorMessage}`, 'error', e);
 
@@ -3422,7 +3801,8 @@ export default class PositionManager {
                 : 5; // Default 5% if no take profit set
 
             // Activate trailing if we're at or above 50% of the way to take profit
-            const shouldActivateTrailing = !updatedPosition.is_trailing && updatedPosition.enableTrailingTakeProfit && profitPercent >= (takeProfitPercent * 0.5);
+            const activationThreshold = (takeProfitPercent * 0.5);
+            const shouldActivateTrailing = !updatedPosition.is_trailing && updatedPosition.enableTrailingTakeProfit && profitPercent >= activationThreshold;
 
             if (shouldActivateTrailing) {
                 // Initialize trailing stop at current price minus a buffer (e.g., 2% below current)
@@ -3432,7 +3812,11 @@ export default class PositionManager {
                 updatedPosition.trailing_peak_price = currentPrice;
                 updatedPosition.status = 'trailing';
                 
-                this.scannerService.addLog(`[TRAILING] ✅ Activated trailing stop for ${position.symbol} at ${this._formatCurrency(updatedPosition.trailing_stop_price)}`, 'success');
+                this.scannerService.addLog(`[TRAILING] ✅ Activated trailing stop for ${position.symbol} at ${this._formatCurrency(updatedPosition.trailing_stop_price)} (profit=${profitPercent.toFixed(2)}%, threshold=${activationThreshold.toFixed(2)}%)`, 'success');
+            } else if (!updatedPosition.is_trailing && updatedPosition.enableTrailingTakeProfit) {
+                this.scannerService.addLog(`[TRAILING] ⏳ Not activated for ${position.symbol}: profit=${profitPercent.toFixed(2)}% < threshold=${activationThreshold.toFixed(2)}% (TP%=${takeProfitPercent.toFixed(2)}%)`, 'info');
+            } else if (!updatedPosition.enableTrailingTakeProfit) {
+                this.scannerService.addLog(`[TRAILING] 🚫 Disabled for ${position.symbol}`, 'info');
             }
 
             // If already trailing, update the trailing stop as price climbs
@@ -3470,18 +3854,30 @@ export default class PositionManager {
      * @returns {Object} An object containing arrays of trades to create and position IDs to close.
      */
     async monitorAndClosePositions(currentPrices = null) {
+        console.log('[position_manager_debug] 🔍 ===== MONITOR_AND_CLOSE_POSITIONS ENTRY =====');
+        console.log('[position_manager_debug] 🔍 Function called at:', new Date().toISOString());
+        console.log('[position_manager_debug] 🔍 Current prices provided:', !!currentPrices);
+        console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_3: monitorAndClosePositions entry point reached');
+        console.log('[position_manager_debug] 🔍 Current prices keys:', currentPrices ? Object.keys(currentPrices).length : 0);
+        console.log('[position_manager_debug] 🔍 isMonitoring flag:', this.isMonitoring);
+        console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL TEST LOG - IF YOU SEE THIS, THE FUNCTION IS BEING CALLED');
+        console.log('[position_manager_debug] 🔍 PositionManager instance:', !!this);
+        console.log('[position_manager_debug] 🔍 Scanner service exists:', !!this.scannerService);
+        console.log('[position_manager_debug] 🔍 Positions array length:', this.positions?.length || 0);
+        
         // Prevent concurrent monitoring to avoid duplicate position processing
         if (this.isMonitoring) {
-            console.log('[PositionManager] 🔍 Monitoring already in progress, skipping...');
+            console.log('[position_manager_debug] 🔍 Monitoring already in progress, skipping...');
             return { tradesToCreate: [], positionIdsToClose: [] };
         }
         
         this.isMonitoring = true;
-        console.log('[PositionManager] 🔍 MONITORING POSITIONS - START');
-        console.log('[PositionManager] 🔍 Scanner running:', this.scannerService.state.isRunning);
-        console.log('[PositionManager] 🔍 Positions count:', this.positions.length);
-        console.log('[PositionManager] 🔍 Current prices available:', currentPrices ? Object.keys(currentPrices).length : 0);
-        console.log('[PositionManager] 🔍 Sample positions being monitored:', this.positions.slice(0, 3).map(p => ({
+        console.log('[position_manager_debug] 🔍 ===== MONITOR_AND_CLOSE_POSITIONS ENTRY =====');
+        console.log('[position_manager_debug] 🔍 MONITORING POSITIONS - START');
+        console.log('[position_manager_debug] 🔍 Scanner running:', this.scannerService.state.isRunning);
+        console.log('[position_manager_debug] 🔍 Positions count:', this.positions.length);
+        console.log('[position_manager_debug] 🔍 Current prices available:', currentPrices ? Object.keys(currentPrices).length : 0);
+        console.log('[position_manager_debug] 🔍 Sample positions being monitored:', this.positions.slice(0, 3).map(p => ({
             id: p.id,
             db_record_id: p.db_record_id,
             position_id: p.position_id,
@@ -3489,8 +3885,9 @@ export default class PositionManager {
             status: p.status,
             entry_timestamp: p.entry_timestamp
         })));
-        console.log('[PositionManager] 🔍 MONITORING FUNCTION CALLED - TIMESTAMP:', new Date().toISOString());
-        console.log('[PositionManager] 🔍 MONITORING FUNCTION CALLED - THIS IS A TEST LOG TO VERIFY FUNCTION IS BEING CALLED');
+        console.log('[position_manager_debug] 🔍 MONITORING FUNCTION CALLED - TIMESTAMP:', new Date().toISOString());
+        console.log('[position_manager_debug] 🔍 MONITORING FUNCTION CALLED - THIS IS A TEST LOG TO VERIFY FUNCTION IS BEING CALLED');
+        console.log('[position_manager_debug] 🔍 About to start position monitoring loop...');
         
         // Initialize local arrays for this cycle - MOVED OUTSIDE TRY BLOCK TO FIX SCOPE ISSUE
         const tradesToCreate = [];
@@ -3501,17 +3898,31 @@ export default class PositionManager {
         
         try {
             // CRITICAL FIX: Clean up ghost positions BEFORE attempting to close them
-            console.log('[PositionManager] 🔍 Checking for ghost positions before monitoring...');
-            const reconcileResult = await this.reconcileWithBinance();
+            console.log('[position_manager_debug] 🔍 Checking for ghost positions before monitoring...');
+            console.log('[position_manager_debug] 🔍 About to call reconcileWithBinance...');
+            
+            // Add timeout to reconcileWithBinance to prevent hanging
+            const reconcilePromise = this.reconcileWithBinance();
+            const reconcileTimeout = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('reconcileWithBinance timeout after 15 seconds')), 15000);
+            });
+            
+            console.log('[position_manager_debug] 🔍 Starting reconcileWithBinance with timeout...');
+            const reconcileResult = await Promise.race([reconcilePromise, reconcileTimeout]);
+            console.log('[position_manager_debug] 🔍 reconcileWithBinance completed successfully');
+            
             if (reconcileResult.success && reconcileResult.summary.ghostPositionsCleaned > 0) {
-                console.log(`[PositionManager] 🧹 Cleaned ${reconcileResult.summary.ghostPositionsCleaned} ghost positions`);
+                console.log(`[position_manager_debug] 🧹 Cleaned ${reconcileResult.summary.ghostPositionsCleaned} ghost positions`);
                 this.addLog(`[MONITOR] 🧹 Cleaned ${reconcileResult.summary.ghostPositionsCleaned} ghost positions before monitoring`, 'info');
             }
             
             // DEBUG: Log current positions after reconciliation
-            console.log('[PositionManager] 🔍 Positions after reconciliation:', this.positions.length);
+            console.log('[position_manager_debug] 🔍 Positions after reconciliation:', this.positions.length);
+            console.log('[position_manager_debug] 🔍 About to start position monitoring loop...');
+            console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - IF YOU SEE THIS, RECONCILIATION COMPLETED');
+            
             if (this.positions.length > 0) {
-                console.log('[PositionManager] 🔍 Sample positions after reconciliation:', this.positions.slice(0, 3).map(p => ({
+                console.log('[position_manager_debug] 🔍 Sample positions after reconciliation:', this.positions.slice(0, 3).map(p => ({
                     symbol: p.symbol,
                     position_id: p.position_id,
                     quantity_crypto: p.quantity_crypto,
@@ -3599,8 +4010,21 @@ export default class PositionManager {
             // eslint-disable-next-line no-unused-vars
             let loopIterations = 0;
 
+            console.log('[position_manager_debug] 🔍 Starting main position monitoring loop...');
+            console.log('[position_manager_debug] 🔍 About to iterate over', this.positions.length, 'positions');
+            console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING POSITION LOOP');
+
+            // Add timeout to position loop to prevent hanging
+            const positionLoopTimeout = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Position loop timeout after 20 seconds')), 20000);
+            });
+
+            const positionLoopPromise = (async () => {
             for (const position of this.positions) { // Looping directly over this.positions
                 loopIterations++;
+                
+                // DEBUG: Track position loop progress
+                console.log(`[position_manager_debug] 🔍 Processing position ${loopIterations}/${this.positions.length}: ${position.symbol} (${position.status})`);
                 
                 // DEBUG: Log only DOGE positions to reduce console flooding
                 if (position.symbol.includes('DOGE') || position.symbol.replace('/', '') === 'DOGEUSDT') {
@@ -4039,6 +4463,21 @@ export default class PositionManager {
                 this.addLog(`[POSITIONS_MONITOR] Error monitoring position ${position?.position_id || 'unknown'}: ${error.message}`, 'error');
             }
         }
+            })(); // Close the positionLoopPromise
+
+            // Race the position loop against the timeout
+            try {
+                await Promise.race([positionLoopPromise, positionLoopTimeout]);
+                console.log('[position_manager_debug] 🔍 Position loop completed successfully');
+            } catch (timeoutError) {
+                console.error('[position_manager_debug] ❌ Position loop timeout:', timeoutError.message);
+                this.addLog(`[MONITOR] ❌ Position loop timeout: ${timeoutError.message}`, 'error');
+                // Continue with the function even if the loop times out
+            }
+
+            console.log('[position_manager_debug] 🔍 About to process post-loop logic...');
+            console.log('[position_manager_debug] 🔍 Current tradesToCreate count:', tradesToCreate.length);
+            console.log('[position_manager_debug] 🔍 Current positionIdsToClose count:', positionIdsToClose.length);
 
         // Persist updates for positions that are still open
         if (positionsUpdatedButStillOpen.length > 0) {
@@ -4106,12 +4545,32 @@ export default class PositionManager {
                 this.addLog(`[PRE-CLOSE_VALIDATION] 🔄 Closing ${validClosures.length} valid positions on exchange...`, 'info');
                 
                 // CRITICAL DEBUG: Show exact IDs being passed vs what's in memory
-                console.log('🔥🔥🔥 CRITICAL DEBUG - ARRAYS BEING PASSED 🔥🔥🔥');
-                console.log('🔥🔥🔥 ARRAY LENGTHS:', { tradesToCreate: validTradesToCreate.length, positionIdsToClose: validPositionIdsToClose.length });
-                console.log('🔥🔥🔥 POSITION IDS TO CLOSE:', validPositionIdsToClose);
-                console.log('🔥🔥🔥 POSITIONS IN MEMORY COUNT:', this.positions.length);
+                //console.log('🔥🔥🔥 CRITICAL DEBUG - ARRAYS BEING PASSED 🔥🔥🔥');
+                //console.log('🔥🔥🔥 ARRAY LENGTHS:', { tradesToCreate: validTradesToCreate.length, positionIdsToClose: validPositionIdsToClose.length });
+                //console.log('🔥🔥🔥 POSITION IDS TO CLOSE:', validPositionIdsToClose);
+                //console.log('🔥🔥🔥 POSITIONS IN MEMORY COUNT:', this.positions.length);
                 
-                const closeResult = await this.executeBatchClose(validTradesToCreate, validPositionIdsToClose);
+                //console.log('[position_manager_debug] 🔍 About to call executeBatchClose...');
+                //console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - CALLING EXECUTE_BATCH_CLOSE');
+                //console.log('[PositionManager] 🔍 [EXECUTION_TRACE] STEP 4: About to call executeBatchClose');
+                
+                // Add timeout to executeBatchClose to prevent hanging - increased to 60 seconds to allow for all positions
+                const executeBatchCloseTimeout = new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('executeBatchClose timeout after 60 seconds')), 60000);
+                });
+                
+                const executeBatchClosePromise = this.executeBatchClose(validTradesToCreate, validPositionIdsToClose);
+                
+                let closeResult;
+                try {
+                    closeResult = await Promise.race([executeBatchClosePromise, executeBatchCloseTimeout]);
+                    console.log('[position_manager_debug] 🔍 executeBatchClose completed successfully');
+                    console.log('[position_manager_debug] 🔍 Close result:', closeResult);
+                } catch (timeoutError) {
+                    console.error('[position_manager_debug] ❌ executeBatchClose timeout:', timeoutError.message);
+                    this.addLog(`[MONITOR] ❌ executeBatchClose timeout: ${timeoutError.message}`, 'error');
+                    closeResult = { success: false, error: timeoutError.message, closed: 0 };
+                }
             
             console.log(`[PositionManager] 🔄 Batch close result:`, closeResult);
             
@@ -4232,6 +4691,12 @@ export default class PositionManager {
             }, 30000); // 30 seconds delay as per schema
         }
 
+        console.log('[position_manager_debug] 🔍 About to return final result...');
+        console.log('[position_manager_debug] 🔍 Final tradesToCreate count:', tradesToCreate.length);
+        console.log('[position_manager_debug] 🔍 Final positionIdsToClose count:', uniquePositionIdsToClose.length);
+        console.log('[position_manager_debug] 🔍 Final reconciliationNeeded count:', reconciliationNeeded.length);
+        console.log('[position_manager_debug] 🔍 THIS IS THE FINAL RETURN STATEMENT - FUNCTION COMPLETING');
+
         return {
             tradesToCreate: tradesToCreate.length,
             positionIdsToClose: uniquePositionIdsToClose.length,
@@ -4323,7 +4788,15 @@ export default class PositionManager {
             }
         }
         
-        return { tradesToCreate, positionIdsToClose };
+        console.log('[position_manager_debug] 🔍 About to return from monitorAndClosePositions...');
+        console.log('[position_manager_debug] 🔍 Final result:', { 
+            tradesToCreate: tradesToCreate.length, 
+            positionIdsToClose: positionIdsToClose.length 
+        });
+        console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - FUNCTION COMPLETING SUCCESSFULLY');
+        
+        // This return statement is unreachable due to the earlier return statement
+        // return { tradesToCreate, positionIdsToClose };
     }
 
 
@@ -4502,14 +4975,21 @@ export default class PositionManager {
             let cumulativePositionValue = 0;
             let currentAllocated = 0;
             
-            // Get initial allocated balance once at the start
+            // Get initial allocated balance from the most reliable source at runtime
             try {
-                const walletSummary = this.scannerService?.walletManagerService?.walletSummary;
-                if (walletSummary && walletSummary.balanceInTrades) {
-                    currentAllocated = parseFloat(walletSummary.balanceInTrades);
+                // Prefer in-memory managed positions (freshest during scan)
+                const managedAllocated = this.getBalanceInTrades ? Number(this.getBalanceInTrades()) : 0;
+                if (Number.isFinite(managedAllocated) && managedAllocated > 0) {
+                    currentAllocated = managedAllocated;
+                } else {
+                    // Fallback to wallet summary if available
+                    const walletSummary = this.scannerService?.walletManagerService?.walletSummary;
+                    if (walletSummary && walletSummary.balanceInTrades) {
+                        currentAllocated = parseFloat(walletSummary.balanceInTrades);
+                    }
                 }
             } catch (error) {
-                console.error('[PositionManager] Error getting initial allocated balance:', error);
+                console.error('[PositionManager] Error determining current allocated balance:', error);
             }
 
             console.log(`[PositionManager] 💰 Initial batch state:`, {
@@ -5011,6 +5491,7 @@ export default class PositionManager {
                            wallet_id: walletId,
                            stop_loss_price: stopLossPrice,
                            take_profit_price: takeProfitPrice,
+                           enableTrailingTakeProfit: (combination?.enableTrailingTakeProfit !== false),
                            is_trailing: false,
                            trailing_stop_price: null,
                            trailing_peak_price: null,
@@ -5048,6 +5529,22 @@ export default class PositionManager {
                         quantity_crypto: positionData.quantity_crypto,
                         entry_value_usdt: positionData.entry_value_usdt
                     });
+
+                        // Emit SL/TP sample log on every new position open (no one-time guard)
+                        try {
+                            const atrPct = positionData.atr_value && positionData.entry_price
+                                ? ((Number(positionData.atr_value) / Number(positionData.entry_price)) * 100).toFixed(3)
+                                : 'n/a';
+                            console.log('[SLTP_SAMPLE_OPEN]', {
+                                symbol: positionData.symbol,
+                                entry: positionData.entry_price,
+                                atrValue: positionData.atr_value,
+                                atrPct: atrPct === 'n/a' ? 'n/a' : `${atrPct}%`,
+                                stopLoss: positionData.stop_loss_price,
+                                takeProfit: positionData.take_profit_price,
+                                enableTrailingTakeProfit: positionData.enableTrailingTakeProfit
+                            });
+                        } catch (_) {}
                     
                     // Create position in database using proper LivePosition entity
                     console.log('[PositionManager] 🔍 Using LivePosition entity to create position...');
@@ -5089,6 +5586,7 @@ export default class PositionManager {
                             status: createdPosition.status,
                             stop_loss_price: parseFloat(createdPosition.stop_loss_price) || 0,
                             take_profit_price: parseFloat(createdPosition.take_profit_price) || 0,
+                            enableTrailingTakeProfit: createdPosition.enableTrailingTakeProfit ?? true,
                             is_trailing: createdPosition.is_trailing || false,
                             trailing_stop_price: createdPosition.trailing_stop_price,
                             trailing_peak_price: createdPosition.trailing_peak_price,
@@ -5400,8 +5898,8 @@ export default class PositionManager {
                        // This simulates the BacktestCombination data that would normally come from the strategy
                        const mockCombination = {
                            strategyDirection: position.direction || 'long',
-                           stopLossAtrMultiplier: 1.0, // Realistic ATR multiplier for stop loss (reduced from 2.0)
-                           takeProfitAtrMultiplier: 1.5, // Realistic ATR multiplier for take profit (reduced from 3.0)
+                           stopLossAtrMultiplier: 2.5,
+                           takeProfitAtrMultiplier: 5.0,
                            estimatedExitTimeMinutes: 1440, // Default 24 hours in minutes
                            enableTrailingTakeProfit: false,
                            trailingStopPercentage: 0.02 // 2% trailing stop
@@ -5824,17 +6322,212 @@ export default class PositionManager {
     }
 
     /**
+     * Perform direct virtual close for dust positions (fallback implementation)
+     * @param {string} symbol - The trading pair symbol (e.g., "SOLUSDT")
+     * @param {string} mode - "live" or "testnet"
+     * @param {number} positionQty - The position quantity
+     * @returns {Object} Result with success status and details
+     */
+    async performDirectVirtualClose(symbol, mode, positionQty) {
+        const _dvc_overall_start = Date.now();
+        console.log('[PositionManager] 🔄 [DIRECT_VIRTUAL_CLOSE] Starting direct virtual close...');
+        console.log('[PositionManager] ⏱️ [DIRECT_VIRTUAL_CLOSE_TIMING] overall_start_ms:', _dvc_overall_start);
+        console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Symbol:', symbol, 'Mode:', mode, 'Qty:', positionQty);
+        console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Current positions count:', this.positions.length);
+        console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Current positions:', this.positions.map(p => ({ id: p.id, symbol: p.symbol, status: p.status, trading_mode: p.trading_mode })));
+        
+        try {
+            // Find positions for this symbol and mode
+            const symbolWithSlash = symbol.replace('USDT', '/USDT');
+            const _dvc_find_start = Date.now();
+            const positionsToClose = this.positions.filter(pos => 
+                (pos.symbol === symbolWithSlash || pos.symbol === symbol) && 
+                pos.trading_mode === mode &&
+                pos.status === 'open'
+            );
+            console.log('[PositionManager] ⏱️ [DIRECT_VIRTUAL_CLOSE_TIMING] find_positions_ms:', Date.now() - _dvc_find_start);
+            
+            console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Found positions:', positionsToClose.length);
+            console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Position details:', positionsToClose.map(p => ({
+                id: p.id,
+                symbol: p.symbol,
+                quantity: p.quantity_crypto,
+                status: p.status
+            })));
+            
+            if (positionsToClose.length === 0) {
+                console.log('[PositionManager] ⚠️ [DIRECT_VIRTUAL_CLOSE] No positions found to close');
+                return { success: true, virtualClosed: 0, message: 'No positions found' };
+            }
+            
+            // Create dust trades for each position
+            const dustTrades = [];
+            const _dvc_build_start = Date.now();
+            for (const position of positionsToClose) {
+                try {
+                    console.log('[PositionManager] 🔄 [DIRECT_VIRTUAL_CLOSE] Creating dust trade for position:', position.id);
+                    
+                    const dustTrade = {
+                        id: generateTradeId(),
+                        trade_id: position.position_id || position.id,
+                        strategy_name: position.strategy_name || 'Dust Cleanup',
+                        symbol: position.symbol,
+                        direction: position.direction || 'long',
+                        entry_price: position.entry_price || 0,
+                        quantity_crypto: position.quantity_crypto || 0,
+                        entry_value_usdt: (position.entry_price || 0) * (position.quantity_crypto || 0),
+                        entry_timestamp: position.entry_timestamp || new Date().toISOString(),
+                        trading_mode: mode,
+                        trigger_signals: position.trigger_signals || [],
+                        combined_strength: position.combined_strength || 0,
+                        conviction_score: position.conviction_score || 0,
+                        conviction_breakdown: position.conviction_breakdown || {},
+                        conviction_multiplier: position.conviction_multiplier || 1,
+                        market_regime: position.market_regime || 'unknown',
+                        regime_confidence: position.regime_confidence || 0,
+                        atr_value: position.atr_value || 0,
+                        is_event_driven_strategy: position.is_event_driven_strategy || false,
+                        fear_greed_score: position.fear_greed_score || '50',
+                        fear_greed_classification: position.fear_greed_classification || 'Neutral',
+                        lpm_score: position.lpm_score || 50,
+                        exit_price: position.entry_price || 0, // Use entry price as exit for dust
+                        exit_value_usdt: (position.entry_price || 0) * (position.quantity_crypto || 0),
+                        pnl_usdt: 0, // No P&L for dust cleanup
+                        pnl_percentage: 0,
+                        exit_timestamp: new Date().toISOString(),
+                        duration_seconds: 0,
+                        exit_reason: 'dust_cleanup',
+                        total_fees_usdt: 0,
+                        commission_migrated: true,
+                        created_date: new Date().toISOString(),
+                        updated_date: new Date().toISOString(),
+                        isDustCleanup: true
+                    };
+                    
+                    dustTrades.push(dustTrade);
+                    console.log('[PositionManager] ✅ [DIRECT_VIRTUAL_CLOSE] Created dust trade:', dustTrade.id);
+                } catch (tradeError) {
+                    console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Error creating dust trade:', tradeError.message);
+                }
+            }
+            console.log('[PositionManager] ⏱️ [DIRECT_VIRTUAL_CLOSE_TIMING] build_dust_trades_ms:', Date.now() - _dvc_build_start);
+            
+            console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Created dust trades:', dustTrades.length);
+            
+            // Save dust trades to database
+            let savedTrades = 0;
+            const _dvc_save_start = Date.now();
+            for (const dustTrade of dustTrades) {
+                try {
+                    console.log('[PositionManager] 🔄 [DIRECT_VIRTUAL_CLOSE] Saving dust trade to database:', dustTrade.id);
+                    const saveResult = await queueFunctionCall(
+                        'saveTradeToDB',
+                        async (trade) => {
+                            const { queueEntityCall } = await import('@/components/utils/apiQueue');
+                            return await queueEntityCall('Trade', 'create', trade);
+                        },
+                        dustTrade,
+                        'critical',
+                        null,
+                        0,
+                        30000
+                    );
+                    
+                    console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Save result for trade:', dustTrade.id, saveResult);
+                    if (saveResult && saveResult.success) {
+                        savedTrades++;
+                        console.log('[PositionManager] ✅ [DIRECT_VIRTUAL_CLOSE] Dust trade saved:', dustTrade.id);
+                    } else {
+                        console.log('[PositionManager] ⚠️ [DIRECT_VIRTUAL_CLOSE] Failed to save dust trade:', dustTrade.id, saveResult?.error);
+                    }
+                } catch (saveError) {
+                    console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Error saving dust trade:', saveError.message);
+                }
+            }
+            console.log('[PositionManager] ⏱️ [DIRECT_VIRTUAL_CLOSE_TIMING] save_trades_ms:', Date.now() - _dvc_save_start);
+            
+            // Remove positions from memory
+            const originalCount = this.positions.length;
+            console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Before removal - positions count:', originalCount);
+            console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Looking for positions to remove - symbol:', symbol, 'symbolWithSlash:', symbolWithSlash, 'mode:', mode);
+            
+            const _dvc_remove_start = Date.now();
+            this.positions = this.positions.filter(pos => {
+                const shouldRemove = (pos.symbol === symbolWithSlash || pos.symbol === symbol) && 
+                                   pos.trading_mode === mode &&
+                                   pos.status === 'open';
+                if (shouldRemove) {
+                    console.log('[PositionManager] 🗑️ [DIRECT_VIRTUAL_CLOSE] Removing position:', pos.id, pos.symbol, pos.status);
+                }
+                return !shouldRemove;
+            });
+            const removedCount = originalCount - this.positions.length;
+            console.log('[PositionManager] ⏱️ [DIRECT_VIRTUAL_CLOSE_TIMING] remove_positions_ms:', Date.now() - _dvc_remove_start);
+            
+            console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Removed positions from memory:', removedCount);
+            console.log('[PositionManager] 🔍 [DIRECT_VIRTUAL_CLOSE] Positions remaining:', this.positions.length);
+            
+            // Update wallet state
+            try {
+                const _dvc_wallet_start = Date.now();
+                console.log('[PositionManager] 🔄 [DIRECT_VIRTUAL_CLOSE] Updating wallet state...');
+                await queueFunctionCall(
+                    'reconcileWalletState',
+                    reconcileWalletState,
+                    { mode: mode },
+                    'normal',
+                    null,
+                    0,
+                    30000
+                );
+                console.log('[PositionManager] ✅ [DIRECT_VIRTUAL_CLOSE] Wallet state updated');
+                console.log('[PositionManager] ⏱️ [DIRECT_VIRTUAL_CLOSE_TIMING] wallet_update_ms:', Date.now() - _dvc_wallet_start);
+            } catch (walletError) {
+                console.log('[PositionManager] ⚠️ [DIRECT_VIRTUAL_CLOSE] Wallet state update failed:', walletError.message);
+            }
+            
+            const result = {
+                success: true,
+                virtualClosed: removedCount,
+                tradesCreated: savedTrades,
+                message: `Direct virtual close completed: ${removedCount} positions closed, ${savedTrades} trades created`
+            };
+            
+            console.log('[PositionManager] ⏱️ [DIRECT_VIRTUAL_CLOSE_TIMING] overall_ms:', Date.now() - _dvc_overall_start);
+            console.log('[PositionManager] ✅ [DIRECT_VIRTUAL_CLOSE] Success:', result);
+            return result;
+            
+        } catch (error) {
+            console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Error:', error);
+            console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Error type:', typeof error);
+            console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Error message:', error?.message);
+            console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Error string:', String(error));
+            console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Error stack:', error?.stack);
+            console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Full error object:', JSON.stringify(error, null, 2));
+            const errorMessage = error?.message || error?.toString() || 'Unknown error in direct virtual close';
+            console.log('[PositionManager] ❌ [DIRECT_VIRTUAL_CLOSE] Final error message:', errorMessage);
+            return { success: false, error: errorMessage, virtualClosed: 0 };
+        }
+    }
+
+    /**
      * Execute batch close of positions
      * @param {Array} tradesToCreate - Array of Trade objects to create
      * @param {Array} positionIdsToClose - Array of position IDs to close
      * @returns {Object} Result with success status and details
      */
     async executeBatchClose(tradesToCreate, positionIdsToClose) {
-        console.log('🔥🔥🔥 EXECUTING BATCH CLOSE - DEBUGGING VERSION 🔥🔥🔥');
-        console.log('🔥🔥🔥 RECEIVED ARRAYS:', { tradesToCreate: tradesToCreate.length, positionIdsToClose: positionIdsToClose.length });
-        console.log('🔥🔥🔥 RECEIVED POSITION IDS:', positionIdsToClose);
-        console.log('🔥🔥🔥 RECEIVED TRADES:', tradesToCreate);
+        console.log('[position_manager_debug] 🔍 ===== EXECUTE_BATCH_CLOSE ENTRY =====');
+        console.log('[position_manager_debug] 🔍 Function called at:', new Date().toISOString());
+        console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL TEST LOG - EXECUTE_BATCH_CLOSE IS BEING CALLED');
+        console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_5: executeBatchClose entry point reached');
+        
+        //console.log('🔥🔥🔥 EXECUTING BATCH CLOSE - DEBUGGING VERSION 🔥🔥🔥');
+        //console.log('🔥🔥🔥 RECEIVED ARRAYS:', { tradesToCreate: tradesToCreate.length, positionIdsToClose: positionIdsToClose.length });
+        //console.log('🔥🔥🔥 RECEIVED POSITION IDS:', positionIdsToClose);
+        //console.log('🔥🔥🔥 RECEIVED TRADES:', tradesToCreate);
         console.log('[PositionManager] 🚀 EXECUTING BATCH CLOSE');
+        console.log('[PositionManager] 🔍 [EXECUTE_BATCH_CLOSE] Function entry - about to start processing...');
         console.log('[PositionManager] 🚀 Trades to create:', tradesToCreate.length);
         console.log('[PositionManager] 🚀 Positions to close:', positionIdsToClose.length);
         console.log('[PositionManager] 🚀 Current time:', new Date().toISOString());
@@ -5853,7 +6546,7 @@ export default class PositionManager {
                 console.log(`[PositionManager] 🚀 ❌ NOT FOUND position ${positionId}`);
             }
         }
-        console.log(`🔥🔥🔥 CRITICAL TEST RESULT: Found ${foundCount}/${positionIdsToClose.length} positions in memory 🔥🔥🔥`);
+        //console.log(`🔥🔥🔥 CRITICAL TEST RESULT: Found ${foundCount}/${positionIdsToClose.length} positions in memory 🔥🔥🔥`);
         
         // DEBUG: Log each position that will be closed
         console.log('[PositionManager] 🚀 DETAILED POSITION ANALYSIS:');
@@ -5888,16 +6581,25 @@ export default class PositionManager {
             });
         }
         
+        console.log('[position_manager_debug] 🔍 About to start main processing loop...');
+        console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING MAIN LOOP');
+        
         for (let i = 0; i < positionIdsToClose.length; i++) {
+            console.log(`[position_manager_debug] 🔍 Processing position ${i + 1}/${positionIdsToClose.length}: ${positionIdsToClose[i]}`);
             const positionId = positionIdsToClose[i];
+            
+            console.log(`[position_manager_debug] 🔍 Looking for position with ID: ${positionId}`);
             
             // Try multiple ways to find the position
             let position = this.positions.find(p => p.id === positionId);
+            console.log(`[position_manager_debug] 🔍 Found by id: ${!!position}`);
             if (!position) {
                 position = this.positions.find(p => p.db_record_id === positionId);
+                console.log(`[position_manager_debug] 🔍 Found by db_record_id: ${!!position}`);
             }
             if (!position) {
                 position = this.positions.find(p => p.position_id === positionId);
+                console.log(`[position_manager_debug] 🔍 Found by position_id: ${!!position}`);
             }
                 // CRITICAL FIX: Also try matching by the database UUID if positionId is a UUID
                 if (!position && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(positionId)) {
@@ -5922,15 +6624,21 @@ export default class PositionManager {
         }
         console.log('[PositionManager] 🚀 Trades details:', tradesToCreate.map(t => ({ symbol: t.symbol, exit_reason: t.exit_reason, pnl: t.pnl_usdt })));
         
-        if (tradesToCreate.length === 0 || positionIdsToClose.length === 0) {
+        console.log('[position_manager_debug] 🔍 About to check early exit conditions...');
+        console.log('[position_manager_debug] 🔍 tradesToCreate.length:', tradesToCreate.length);
+        console.log('[position_manager_debug] 🔍 positionIdsToClose.length:', positionIdsToClose.length);
+        
+        /*if (tradesToCreate.length === 0 || positionIdsToClose.length === 0) {
+            console.log('[position_manager_debug] 🔍 EARLY EXIT - NO POSITIONS TO CLOSE');
             console.log('🔥🔥🔥 EARLY EXIT - NO POSITIONS TO CLOSE 🔥🔥🔥');
             console.log('[PositionManager] 🚀 No positions to close, returning success');
             console.log('[PositionManager] 🚀 tradesToCreate.length:', tradesToCreate.length);
             console.log('[PositionManager] 🚀 positionIdsToClose.length:', positionIdsToClose.length);
             return { success: true, closed: 0 };
-        }
+        }*/
         
-        console.log('🔥🔥🔥 PASSED EARLY EXIT CHECK - PROCEEDING WITH POSITION CLOSING 🔥🔥🔥');
+        //console.log('[position_manager_debug] 🔍 PASSED EARLY EXIT CHECK - PROCEEDING WITH POSITION CLOSING');
+        //console.log('🔥🔥🔥 PASSED EARLY EXIT CHECK - PROCEEDING WITH POSITION CLOSING 🔥🔥🔥');
 
         const processedTrades = [];
         const errors = [];
@@ -5942,17 +6650,26 @@ export default class PositionManager {
         }
 
         try {
-            console.log('🔥🔥🔥 STARTING POSITION CLOSING LOOP 🔥🔥🔥');
-            console.log(`🔥🔥🔥 Will process ${tradesToCreate.length} trades and close ${positionIdsToClose.length} positions 🔥🔥🔥`);
+            //console.log('🔥🔥🔥 STARTING POSITION CLOSING LOOP 🔥🔥🔥');
+            //console.log(`🔥🔥🔥 Will process ${tradesToCreate.length} trades and close ${positionIdsToClose.length} positions 🔥🔥🔥`);
+            //console.log('[PositionManager] 🔍 [BATCH_CLOSE_LOOP] About to enter position processing loop...');
             
             // CRITICAL FIX: Fetch current prices from API before attempting to close positions
-            console.log('🔥🔥🔥 FETCHING CURRENT PRICES FROM API 🔥🔥🔥');
+            //console.log('🔥🔥🔥 FETCHING CURRENT PRICES FROM API 🔥🔥🔥');
             const symbols = [...new Set(tradesToCreate.map(t => t.symbol))];
-            console.log(`🔥🔥🔥 Need prices for ${symbols.length} symbols:`, symbols);
+            //console.log(`🔥🔥🔥 Need prices for ${symbols.length} symbols:`, symbols);
             
-            // Get prices using RobustReconcile service or fetch from API
-            const allPositionsData = await Promise.all(
+            console.log('[position_manager_debug] 🔍 About to fetch prices for all positions...');
+            console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - FETCHING PRICES');
+            
+            // Add timeout to price fetching to prevent hanging
+            const priceFetchTimeout = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Price fetch timeout after 20 seconds')), 20000);
+            });
+            
+            const priceFetchPromise = Promise.all(
                 this.positions.map(async (p) => {
+                    console.log(`[position_manager_debug] 🔍 Processing position for price fetch: ${p.symbol}`);
                     const symbolNoSlash = p.symbol.replace('/', '');
                     try {
                         // Find the corresponding trade data for this position
@@ -5985,7 +6702,22 @@ export default class PositionManager {
                 })
             );
             
-            console.log('🔥🔥🔥 PRICES FETCHED:', allPositionsData.filter(p => p.price).map(p => `${p.symbol}: ${p.price}`));
+            let allPositionsData;
+            try {
+                allPositionsData = await Promise.race([priceFetchPromise, priceFetchTimeout]);
+                console.log('[position_manager_debug] 🔍 Price fetch completed successfully');
+            } catch (timeoutError) {
+                console.error('[position_manager_debug] ❌ Price fetch timeout:', timeoutError.message);
+                this.addLog(`[MONITOR] ❌ Price fetch timeout: ${timeoutError.message}`, 'error');
+                // Use fallback prices from trade data
+                allPositionsData = tradesToCreate.map(t => ({
+                    symbol: t.symbol,
+                    symbolNoSlash: t.symbol.replace('/', ''),
+                    price: t.exit_price
+                }));
+            }
+            
+            //console.log('🔥🔥🔥 PRICES FETCHED:', allPositionsData.filter(p => p.price).map(p => `${p.symbol}: ${p.price}`));
             
             // Build a price map for quick lookup
             const priceMap = {};
@@ -5995,41 +6727,54 @@ export default class PositionManager {
                 }
             }
             
-            console.log('🔥🔥🔥 PRICE MAP:', Object.keys(priceMap));
+            //console.log('🔥🔥🔥 PRICE MAP:', Object.keys(priceMap));
+            
+            console.log('[position_manager_debug] 🔍 About to start main position processing loop...');
+            console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING POSITION PROCESSING LOOP');
             
             // Process each position according to the schema
             for (let i = 0; i < positionIdsToClose.length; i++) {
+                console.log(`[position_manager_debug] 🔍 Processing position ${i + 1}/${positionIdsToClose.length} in main loop`);
+                const positionMarker = `[POSITION_${i + 1}]`; // Declare at the top of the loop
                 try {
                 const positionId = positionIdsToClose[i];
                 const tradeData = tradesToCreate[i];
-                const positionMarker = `[POS-${i + 1}]`;
                 
-                    console.log(`${positionMarker} 🔥🔥🔥 ======================================== 🔥🔥🔥`);
-                    console.log(`${positionMarker} 🔥🔥🔥 STARTING PROCESSING TRADE ${i + 1}/${tradesToCreate.length} 🔥🔥🔥`);
+                    //console.log(`[POS-${i + 1}] 🔥🔥🔥 ======================================== 🔥🔥🔥`);
+                    //console.log(`[POS-${i + 1}] 🔥🔥🔥 STARTING PROCESSING TRADE ${i + 1}/${tradesToCreate.length} 🔥🔥🔥`);
+                    //console.log(`[POS-${i + 1}] [PositionManager] 🔍 [POSITION_LOOP] About to process individual position...`);
                     
                     if (!tradeData) {
-                        console.log(`${positionMarker} 🔥🔥🔥 ❌ TRADEDATA MISSING FOR INDEX ${i} 🔥🔥🔥`);
+                        console.log(`[POS-${i + 1}] 🔥🔥🔥 ❌ TRADEDATA MISSING FOR INDEX ${i} 🔥🔥🔥`);
                         errors.push(`Trade data missing for index ${i}`);
                         continue;
                     }
                     
-                    console.log(`${positionMarker} 🔥🔥🔥 PROCESSING TRADE ${i + 1}/${tradesToCreate.length}: ${tradeData.symbol || 'UNKNOWN'} - Position ID: ${positionId} 🔥🔥🔥`);
-                    console.log(`${positionMarker} [PositionManager] 🚀 Processing position ${positionId} with trade data:`, tradeData);
+                    //console.log(`[POS-${i + 1}] 🔥🔥🔥 PROCESSING TRADE ${i + 1}/${tradesToCreate.length}: ${tradeData.symbol || 'UNKNOWN'} - Position ID: ${positionId} 🔥🔥🔥`);
+                    //console.log(`[POS-${i + 1}] [PositionManager] 🚀 Processing position ${positionId} with trade data:`, tradeData);
+                    //console.log(`[POS-${i + 1}] [PositionManager] 🔍 [POSITION_LOOP] Trade data validated, proceeding with position processing...`);
+                
+                //console.log(`[position_manager_debug] 🔍 Looking for position with ID: ${positionId}`);
                 
                 // Try multiple ways to find the position
                 let position = this.positions.find(p => p.id === positionId);
+                //console.log(`[position_manager_debug] 🔍 Found by id: ${!!position}`);
                 if (!position) {
                     // Try finding by db_record_id
                     position = this.positions.find(p => p.db_record_id === positionId);
+                    //console.log(`[position_manager_debug] 🔍 Found by db_record_id: ${!!position}`);
                 }
                 if (!position) {
                     // Try finding by position_id
                     position = this.positions.find(p => p.position_id === positionId);
+                    c//onsole.log(`[position_manager_debug] 🔍 Found by position_id: ${!!position}`);
                 }
                 
                 if (position) {
-                    console.log(`🔥🔥🔥 ✅ FOUND POSITION: ${position.symbol} (${positionId}) 🔥🔥🔥`);
+                    //console.log(`[position_manager_debug] 🔍 ✅ FOUND POSITION: ${position.symbol} (${positionId})`);
+                    //console.log(`🔥🔥🔥 ✅ FOUND POSITION: ${position.symbol} (${positionId}) 🔥🔥🔥`);
                 } else {
+                    console.log(`[position_manager_debug] 🔍 ❌ POSITION NOT FOUND: ${positionId}`);
                     console.log(`🔥🔥🔥 ❌ POSITION NOT FOUND: ${positionId} 🔥🔥🔥`);
                 }
                 // CRITICAL FIX: Also try matching by the database UUID if positionId is a UUID
@@ -6051,18 +6796,21 @@ export default class PositionManager {
                 
                 if (!position) {
                     console.log(`[PositionManager] ⚠️ Position ${positionId} not found in memory, skipping`);
-                    console.log(`[PositionManager] 🔍 Available positions:`, this.positions.map(p => ({ id: p.id, db_record_id: p.db_record_id, position_id: p.position_id, symbol: p.symbol })));
+                    //console.log(`[PositionManager] 🔍 Available positions:`, this.positions.map(p => ({ id: p.id, db_record_id: p.db_record_id, position_id: p.position_id, symbol: p.symbol })));
                     continue;
                 }
                 
                 // CRITICAL FIX: Skip positions that are already being processed or have been processed
                 const positionTradeId = position.position_id || position.id || position.db_record_id;
-                console.log(`🔥🔥🔥 CHECKING DUPLICATE PREVENTION: positionTradeId=${positionTradeId}, processedTradeIds size=${this.processedTradeIds?.size || 0} 🔥🔥🔥`);
+                //console.log(`🔥🔥🔥 CHECKING DUPLICATE PREVENTION: positionTradeId=${positionTradeId}, processedTradeIds size=${this.processedTradeIds?.size || 0} 🔥🔥🔥`);
                 if (this.processedTradeIds && this.processedTradeIds.has(positionTradeId)) {
                     console.log(`🔥🔥🔥 ❌ DUPLICATE BLOCKED: Position ${position.symbol} (${positionTradeId}) already processed, skipping 🔥🔥🔥`);
                     continue;
                 }
-                console.log(`🔥🔥🔥 ✅ PASSED DUPLICATE CHECK - PROCEEDING: ${position.symbol} (${positionTradeId}) 🔥🔥🔥`);
+                //console.log(`🔥🔥🔥 ✅ PASSED DUPLICATE CHECK - PROCEEDING: ${position.symbol} (${positionTradeId}) 🔥🔥🔥`);
+
+                //console.log(`${positionMarker} [PositionManager] [debug_next] 🚀 ===== STARTING POSITION ${i + 1}/${positionIdsToClose.length} =====`);
+                //console.log(`${positionMarker} [PositionManager] [debug_next] 🚀 Processing position: ${position.symbol} (ID: ${positionTradeId})`);
 
                 // Execute Binance sell order first
                 const symbolNoSlash = position.symbol.replace('/', '');
@@ -6070,10 +6818,10 @@ export default class PositionManager {
                 // CRITICAL FIX: Use priceMap instead of this.scannerService.currentPrices
                 const currentPrice = priceMap[symbolNoSlash] || tradeData.exit_price;
                 
-                console.log(`🔥🔥🔥 PRICE CHECK: ${position.symbol} -> ${symbolNoSlash} -> ${currentPrice} 🔥🔥🔥`);
-                console.log(`🔥🔥🔥 PRICE MAP HAS:`, Object.keys(priceMap).slice(0, 10));
-                console.log(`🔥🔥🔥 PRICE MAP VALUES:`, Object.entries(priceMap).slice(0, 5).map(([k, v]) => `${k}=${v}`));
-                console.log(`🔥🔥🔥 Looking for symbolNoSlash="${symbolNoSlash}", found price="${priceMap[symbolNoSlash]}", tradeData.exit_price="${tradeData.exit_price}" 🔥🔥🔥`);
+                //console.log(`🔥🔥🔥 PRICE CHECK: ${position.symbol} -> ${symbolNoSlash} -> ${currentPrice} 🔥🔥🔥`);
+                //console.log(`🔥🔥🔥 PRICE MAP HAS:`, Object.keys(priceMap).slice(0, 10));
+                //console.log(`🔥🔥🔥 PRICE MAP VALUES:`, Object.entries(priceMap).slice(0, 5).map(([k, v]) => `${k}=${v}`));
+                //console.log(`🔥🔥🔥 Looking for symbolNoSlash="${symbolNoSlash}", found price="${priceMap[symbolNoSlash]}", tradeData.exit_price="${tradeData.exit_price}" 🔥🔥🔥`);
                 
                 if (!currentPrice || isNaN(currentPrice) || currentPrice <= 0) {
                     console.log(`🔥🔥🔥 ❌ NO VALID PRICE - SKIPPING POSITION: ${position.symbol} 🔥🔥🔥`);
@@ -6082,7 +6830,7 @@ export default class PositionManager {
                     continue;
                 }
                     
-                console.log(`${positionMarker} 🔥🔥🔥 ✅ PRICE FOUND - PROCEEDING WITH CLOSE: ${position.symbol} at ${currentPrice} 🔥🔥🔥`);
+                //console.log(`${positionMarker} 🔥🔥🔥 ✅ PRICE FOUND - PROCEEDING WITH CLOSE: ${position.symbol} at ${currentPrice} 🔥🔥🔥`);
                     
                 console.log(`${positionMarker} [PositionManager] 🚀 STEP 1: Executing Binance sell for ${position.symbol} at ${currentPrice}`);
                 console.log(`${positionMarker} [PositionManager] 🚀 Position details:`, {
@@ -6116,6 +6864,7 @@ export default class PositionManager {
                         // Non-critical - continue with sell attempt using cached balance
                     }
                     
+                    console.log(`[position_manager_debug] 🔍 About to call _executeBinanceMarketSellOrder for position ${i + 1}/${positionIdsToClose.length}`);
                     console.log(`${positionMarker} [PositionManager] 🚀 STEP 4: About to call _executeBinanceMarketSellOrder with:`, {
                         symbol: position.symbol,
                         quantity: position.quantity_crypto,
@@ -6123,9 +6872,14 @@ export default class PositionManager {
                         tradingMode: tradingMode,
                         proxyUrl: proxyUrl
                     });
+                    console.log(`${positionMarker} [PositionManager] 🔍 [BINANCE_SELL_CALL] About to call _executeBinanceMarketSellOrder...`);
+                    console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_6: About to call _executeBinanceMarketSellOrder');
                     
                     // CRITICAL: Add timeout to prevent hanging
                     console.log(`${positionMarker} [PositionManager] 🚀 STEP 5: Creating Binance sell promise for ${position.symbol}...`);
+                    console.log(`${positionMarker} [PositionManager] 🔍 [BINANCE_SELL_CALL] Calling _executeBinanceMarketSellOrder now...`);
+                    console.log(`[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - CALLING _EXECUTE_BINANCE_MARKET_SELL_ORDER`);
+                    
                     const binanceSellPromise = this._executeBinanceMarketSellOrder(position, { 
                         currentPrice,
                         tradingMode, 
@@ -6140,12 +6894,23 @@ export default class PositionManager {
                     
                     let binanceResult;
                     try {
-                        console.log(`${positionMarker} [PositionManager] 🚀 STEP 6: Awaiting Binance sell or timeout for ${position.symbol}...`);
-                        binanceResult = await Promise.race([binanceSellPromise, timeoutPromise]);
-                        console.log(`${positionMarker} [PositionManager] ✅ STEP 6 COMPLETE: Binance sell completed for ${position.symbol} (not timeout)`);
+                    console.log(`[position_manager_debug] [debug_next] 🔍 About to await Promise.race for position ${i + 1}/${positionIdsToClose.length}`);
+                    console.log(`${positionMarker} [PositionManager] [debug_next] 🚀 STEP 6: Awaiting Binance sell or timeout for ${position.symbol}...`);
+                    console.log(`${positionMarker} [PositionManager] [debug_next] 🔍 [PROMISE_RACE] Starting Promise.race with 30s timeout for ${position.symbol}`);
+                    
+                    const raceStartTime = Date.now();
+                    binanceResult = await Promise.race([binanceSellPromise, timeoutPromise]);
+                    const raceEndTime = Date.now();
+                    const raceDuration = raceEndTime - raceStartTime;
+                    
+                    console.log(`[position_manager_debug] [debug_next] 🔍 Promise.race completed successfully for position ${i + 1}/${positionIdsToClose.length} in ${raceDuration}ms`);
+                    console.log(`${positionMarker} [PositionManager] [debug_next] ✅ STEP 6 COMPLETE: Binance sell completed for ${position.symbol} (not timeout) in ${raceDuration}ms`);
+                    console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_7: _executeBinanceMarketSellOrder completed');
+                    console.log(`${positionMarker} [PositionManager] [debug_next] 🔍 [PROMISE_RACE] Result type: ${typeof binanceResult}, success: ${binanceResult?.success}`);
                     } catch (timeoutError) {
-                        console.log(`${positionMarker} [PositionManager] ⚠️ STEP 6 ERROR: Binance sell timeout/failed for ${position.symbol}:`, timeoutError.message);
-                        console.log(`${positionMarker} [PositionManager] ⚠️ Timeout error stack:`, timeoutError.stack);
+                        console.log(`[position_manager_debug] [debug_next] 🔍 Promise.race failed for position ${i + 1}/${positionIdsToClose.length}: ${timeoutError.message}`);
+                        console.log(`${positionMarker} [PositionManager] [debug_next] ⚠️ STEP 6 ERROR: Binance sell timeout/failed for ${position.symbol}:`, timeoutError.message);
+                        console.log(`${positionMarker} [PositionManager] [debug_next] ⚠️ Timeout error stack:`, timeoutError.stack);
                         errors.push(`Binance sell timeout/failed for ${position.symbol}: ${timeoutError.message}`);
                         continue;
                     }

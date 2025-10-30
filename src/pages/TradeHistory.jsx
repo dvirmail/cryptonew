@@ -540,10 +540,13 @@ export default function TradeHistory() {
                 <TableRow>
                   <TableHead>Symbol</TableHead>
                   <TableHead>Strategy</TableHead>
+                  <TableHead>Regime</TableHead>
                   <TableHead>Mode</TableHead>
                   <TableHead>Direction</TableHead>
                   <TableHead>Entry Price</TableHead>
                   <TableHead>Exit Price</TableHead>
+                  <TableHead>Combined Strength</TableHead>
+                  <TableHead>Conviction</TableHead>
                   <TableHead>P&L</TableHead>
                   <TableHead>Entry Time</TableHead>
                   <TableHead>Exit Time</TableHead>
@@ -564,6 +567,13 @@ export default function TradeHistory() {
                         <TableCell className="text-xs max-w-[150px] truncate" title={trade.strategy_name}>
                           {trade.strategy_name}
                         </TableCell>
+                        <TableCell className="text-xs">
+                          {trade.market_regime ? (
+                            <Badge variant="secondary">{String(trade.market_regime)}</Badge>
+                          ) : (
+                            <span className="text-muted-foreground">N/A</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <Badge variant={trade.trading_mode === 'live' ? 'live' : 'default'}>
                             {trade.trading_mode?.toUpperCase() || 'UNKNOWN'}
@@ -580,6 +590,16 @@ export default function TradeHistory() {
                         </TableCell>
                         <TableCell>${Number(trade.entry_price || 0).toFixed(4)}</TableCell>
                         <TableCell>${Number(trade.exit_price || 0).toFixed(4)}</TableCell>
+                        <TableCell className="text-xs">
+                          {trade.combined_strength !== undefined && trade.combined_strength !== null
+                            ? Number(trade.combined_strength).toFixed(2)
+                            : 'N/A'}
+                        </TableCell>
+                        <TableCell className="text-xs">
+                          {trade.conviction_score !== undefined && trade.conviction_score !== null
+                            ? Number(trade.conviction_score).toFixed(2)
+                            : 'N/A'}
+                        </TableCell>
                         <TableCell className={`font-medium ${pnlColor}`}>
                           {pnlPrefix}{formatPrice(trade.pnl_usdt)} ({pnlPrefix}{formatPercentage(trade.pnl_percentage)})
                         </TableCell>

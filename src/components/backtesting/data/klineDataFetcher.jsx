@@ -279,8 +279,20 @@ export const fetchDataForCoins = async ({
         // Sort chronologically
         formattedData.sort((a, b) => a.time - b.time);
         finalResults[coin] = formattedData;
+        // Sufficiency check against requested period/timeframe
+        try {
+          const needed = requiredCandles;
+          const have = formattedData.length;
+          const ok = have >= needed;
+          const pct = ((have / needed) * 100).toFixed(1);
+          const msg = ok
+            ? `[${coin}] ✅ Kline sufficiency confirmed: ${have.toLocaleString()} / ${needed.toLocaleString()} candles (${pct}%)`
+            : `[${coin}] ⚠️ INSUFFICIENT_KLINES: ${have.toLocaleString()} / ${needed.toLocaleString()} candles (${pct}%). Backtest may under-cover the requested period.`;
+          if (onLog) onLog(msg, ok ? 'success' : 'warning');
+        } catch (_) {}
       } else {
         finalResults[coin] = [];
+        if (onLog) onLog(`[${coin}] ❌ No kline data returned for requested period/timeframe`, 'error');
       }
     }
     
@@ -422,6 +434,17 @@ export const fetchDataForCoin = async ({
 
   // Sort chronologically
   formattedData.sort((a, b) => a.time - b.time);
+
+  // Final sufficiency confirmation
+  try {
+    const have = formattedData.length;
+    const pct = ((have / requiredCandles) * 100).toFixed(1);
+    const ok = have >= requiredCandles;
+    const msg = ok
+      ? `[${coinToFetch}] ✅ Kline sufficiency confirmed: ${have.toLocaleString()} / ${requiredCandles.toLocaleString()} candles (${pct}%)`
+      : `[${coinToFetch}] ⚠️ INSUFFICIENT_KLINES: ${have.toLocaleString()} / ${requiredCandles.toLocaleString()} candles (${pct}%). Backtest may under-cover the requested period.`;
+    if (onLog) onLog(msg, ok ? 'success' : 'warning');
+  } catch (_) {}
 
   if (dataLoadingProgressSetter) dataLoadingProgressSetter(100);
 

@@ -297,6 +297,16 @@ const PositionRow = React.memo(({ position, currentPrice, onClosePosition, isClo
             <TableCell className={valueColor}>
                 {formatPrice(position.entry_value_usdt)}
             </TableCell>
+            <TableCell className="text-xs">
+                {position.combined_strength !== undefined && position.combined_strength !== null
+                    ? Number(position.combined_strength).toFixed(2)
+                    : 'N/A'}
+            </TableCell>
+            <TableCell className="text-xs">
+                {position.conviction_score !== undefined && position.conviction_score !== null
+                    ? Number(position.conviction_score).toFixed(2)
+                    : 'N/A'}
+            </TableCell>
             <TableCell className={pnlColor}>
                 <div className="flex items-center text-xs">
                     {pnl >= 0 ? '↗️' : '↘️'}
@@ -1091,6 +1101,8 @@ const WalletPage = () => {
                                         <TableHead>Current Price</TableHead>
                                         <TableHead>Quantity</TableHead>
                                         <TableHead>Value (USDT)</TableHead>
+                                        <TableHead>Combined Strength</TableHead>
+                                        <TableHead>Conviction</TableHead>
                                         <TableHead>Unrealized P&L</TableHead>
                                         <TableHead>Status</TableHead>
                                         <TableHead>Entry Time</TableHead>
@@ -1113,7 +1125,7 @@ const WalletPage = () => {
                                         ))
                                     ) : (
                                         <TableRow>
-                                            <TableCell colSpan="11" className="text-center h-24">
+                                            <TableCell colSpan="13" className="text-center h-24">
                                                 No open positions
                                             </TableCell>
                                         </TableRow>

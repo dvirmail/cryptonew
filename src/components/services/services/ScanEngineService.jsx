@@ -36,25 +36,41 @@ export class ScanEngineService {
      * This is the core method that runs the scanning workflow.
      */
     async scanCycle() {
+        //console.log('🚀🚀🚀 SCAN CYCLE STARTING NOW 🚀🚀🚀');
+        //console.log('[ScanEngineService] 🔍 ===== SCAN_CYCLE ENTRY =====');
+        //console.log('[ScanEngineService] 🔍 scanCycle called at:', new Date().toISOString());
+        //console.log('[ScanEngineService] 🔍 [EXECUTION_TRACE] STEP 0: scanCycle entry point reached');
+        //console.log('[ScanEngineService] 🔍 Scanner state:', {
+            //isRunning: this.scannerService.state.isRunning,
+            //isScanning: this.scannerService.state.isScanning,
+            //isInitialized: this.scannerService.state.isInitialized
+        //});
         
         this.addLog('🚀 Scan cycle started', 'cycle');
 
+        //console.log('[ScanEngineService] 🔍 [EXECUTION_TRACE] STEP 0.1: Checking scanner state conditions...');
+        //console.log('[ScanEngineService] 🔍 [EXECUTION_TRACE] isRunning:', this.scannerService.state.isRunning);
+        //console.log('[ScanEngineService] 🔍 [EXECUTION_TRACE] isHardResetting:', this.scannerService.isHardResetting);
+        //console.log('[ScanEngineService] 🔍 [EXECUTION_TRACE] isScanning:', this.scannerService.state.isScanning);
+
         if (!this.scannerService.state.isRunning) {
-            console.warn('[AutoScannerService] Scan cycle aborted: Scanner is not running.');
+            console.warn('[ScanEngineService] 🔍 [EXECUTION_TRACE] EARLY RETURN: Scanner is not running.');
             this.scannerService.state.isScanning = false;
             return;
         }
 
         if (this.scannerService.isHardResetting) {
-            console.warn('[AutoScannerService] Scan cycle aborted due to hard reset.');
+            console.warn('[ScanEngineService] 🔍 [EXECUTION_TRACE] EARLY RETURN: Hard reset in progress.');
             this.scannerService.state.isScanning = false;
             return;
         }
 
         if (this.scannerService.state.isScanning) {
-            console.warn('[AutoScannerService] ⚠️ Scan already in progress, skipping this cycle.');
+            console.warn('[ScanEngineService] 🔍 [EXECUTION_TRACE] EARLY RETURN: Scan already in progress.');
             return;
         }
+
+        //console.log('[ScanEngineService] 🔍 [EXECUTION_TRACE] STEP 0.2: All state checks passed, continuing...');
 
 
         this.scannerService.state.isScanning = true;
@@ -133,31 +149,59 @@ export class ScanEngineService {
 
             
             if (confidence < this.scannerService.state.settings.minimumRegimeConfidence) {
-                console.warn(`[AutoScannerService] ⚠️ Regime confidence ${confidence.toFixed(1)}% below threshold (${this.scannerService.state.settings.minimumRegimeConfidence}%). Skipping strategy evaluation.`);
+                console.warn(`[ScanEngineService] ⚠️ Regime confidence ${confidence.toFixed(1)}% below threshold (${this.scannerService.state.settings.minimumRegimeConfidence}%). Skipping strategy evaluation.`);
+                console.log('[ScanEngineService] 🔍 EARLY RETURN: Regime confidence too low, skipping entire scan cycle');
                 this.scannerService.state.isScanning = false;
                 this.scannerService.notifySubscribers();
                 return;
             }
+            
+            console.log('[ScanEngineService] 🔍 Regime confidence check passed, continuing with scan cycle...');
 
             // PHASE 2: Price Fetching
             const priceStartTime = Date.now();
+            console.log('[ScanEngineService] 🔍 ===== PRICE_FETCHING_PHASE =====');
             console.log('[AutoScannerService] 💰 Fetching current prices for strategies and positions...');
+            console.log('[ScanEngineService] 🔍 About to call _consolidatePrices...');
             await this.scannerService.priceManagerService._consolidatePrices();
+            console.log('[ScanEngineService] 🔍 _consolidatePrices completed');
             phaseTimings.priceFetching = Date.now() - priceStartTime;
+            console.log('[ScanEngineService] 🔍 Price fetching phase completed, moving to position monitoring...');
 
             // PHASE 3: Position Monitoring and Reconciliation
             const monitoringStartTime = Date.now();
+            console.log('[ScanEngineService] 🔍 ===== POSITION_MONITORING_PHASE =====');
+            console.log('[ScanEngineService] 🔍 About to call _monitorPositions...');
+            console.log('[ScanEngineService] 🔍 Current prices object:', this.scannerService.priceManagerService.currentPrices);
+            console.log('[ScanEngineService] 🔍 Price keys count:', Object.keys(this.scannerService.priceManagerService.currentPrices || {}).length);
+            console.log('[ScanEngineService] 🔍 PositionManager exists:', !!this.scannerService.positionManager);
+            console.log('[ScanEngineService] 🔍 Positions array exists:', !!this.scannerService.positionManager?.positions);
+            console.log('[ScanEngineService] 🔍 Positions count:', this.scannerService.positionManager?.positions?.length || 0);
             console.log('[AutoScannerService] 👀 Monitoring open positions and reconciling...');
-            await this._monitorPositions(cycleStats);
+            
+            try {
+                console.log('[ScanEngineService] 🔍 CALLING _monitorPositions NOW...');
+                await this._monitorPositions(cycleStats);
+                console.log('[ScanEngineService] 🔍 _monitorPositions completed successfully');
+            } catch (monitorError) {
+                console.error('[ScanEngineService] ❌ ERROR in _monitorPositions:', monitorError);
+                console.error('[ScanEngineService] ❌ Error stack:', monitorError.stack);
+                throw monitorError;
+            }
+            
             phaseTimings.positionMonitoring = Date.now() - monitoringStartTime;
 
+            console.log('[ScanEngineService] 🔍 Position monitoring phase completed, checking for hard reset...');
+            
             if (this.scannerService.isHardResetting) {
-                console.warn('[AutoScannerService] Cycle aborted after position monitoring.');
+                console.warn('[ScanEngineService] 🔍 Cycle aborted after position monitoring due to hard reset.');
                 this.scannerService.state.isScanning = false;
                 // OPTIMIZATION: Only notify at critical state changes
                 this.scannerService.notifySubscribers();
                 return;
             }
+            
+            console.log('[ScanEngineService] 🔍 No hard reset detected, continuing with scan cycle...');
 
             // NEW: Single summary check to avoid strategy evaluation when funds below minimum
             const availableUsdt = this.scannerService._getAvailableUsdt();
@@ -189,15 +233,26 @@ export class ScanEngineService {
             // NEW: Check max invest cap but don't block entire scan cycle
             const capUsdt = Number(this.scannerService.state?.settings?.maxBalanceInvestCapUSDT || 0);
             let maxCapReached = false;
+            console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Starting max cap check...');
+            console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Cap USDT:', capUsdt);
+            
             if (capUsdt > 0) {
                 const allocatedNow = this.scannerService._getBalanceAllocatedInTrades();
+                console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Allocated now:', allocatedNow);
+                console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Comparison:', allocatedNow, '>=', capUsdt);
+                
                 if (allocatedNow >= capUsdt) {
+                    console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - MAX CAP REACHED!');
                     this.addLog(
                         `[FUNDS] Max invest cap reached: allocated ${this.scannerService._formatCurrency(allocatedNow)} ≥ cap ${this.scannerService._formatCurrency(capUsdt)}. Will skip opening new positions but continue monitoring existing positions.`,
                         'warning'
                     );
                     maxCapReached = true;
+                } else {
+                    console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Cap not reached, continuing normally');
                 }
+            } else {
+                console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - No cap set, continuing normally');
             }
 
             // PHASE 4: Strategy Loading
@@ -343,10 +398,18 @@ export class ScanEngineService {
                 }
             }
 
+            console.log('[ScanEngineService] 🔍 ===== CHECKING IF SHOULD START COUNTDOWN =====');
+            console.log('[ScanEngineService] 🔍 isRunning:', this.scannerService.state.isRunning);
+            console.log('[ScanEngineService] 🔍 isHardResetting:', this.scannerService.isHardResetting);
+            console.log('[ScanEngineService] 🔍 Should start countdown:', this.scannerService.state.isRunning && !this.scannerService.isHardResetting);
+            
             if (this.scannerService.state.isRunning && !this.scannerService.isHardResetting) {
+                console.log('[ScanEngineService] 🔍 CALLING _startCountdown() NOW...');
                 this.scannerService._startCountdown();
+                console.log('[ScanEngineService] 🔍 _startCountdown() completed');
             } else {
-                console.log('[AutoScannerService] Not starting new countdown as scanner is stopped or resetting.');
+                console.log('[ScanEngineService] ⏸️ Not starting new countdown as scanner is stopped or resetting.');
+                console.log('[ScanEngineService] ⏸️ Reason:', !this.scannerService.state.isRunning ? 'Scanner not running' : 'Scanner is hard resetting');
             }
 
             // Final notification at end of cycle
@@ -397,7 +460,25 @@ export class ScanEngineService {
      * @param {object} cycleStats - Statistics object for the current scan cycle.
      */
     async _monitorPositions(cycleStats) {
-        if (this.scannerService.isHardResetting) return;
+        console.log('[ScanEngineService] [MONITOR] 🔍 ===== _MONITOR_POSITIONS ENTRY =====');
+        console.log('[ScanEngineService] [MONITOR] 🔍 _monitorPositions called with cycleStats:', !!cycleStats);
+        console.log('[ScanEngineService] [MONITOR] 🔍 isHardResetting:', this.scannerService.isHardResetting);
+        console.log('[ScanEngineService] [MONITOR] 🔍 scannerService exists:', !!this.scannerService);
+        console.log('[ScanEngineService] [MONITOR] 🔍 About to check isHardResetting condition...');
+        
+        // TEMPORARY FIX: Force reset isHardResetting if it's stuck
+        if (this.scannerService.isHardResetting) {
+            console.log('[ScanEngineService] [MONITOR] 🔍 isHardResetting is true, but forcing it to false to allow position monitoring...');
+            this.scannerService.isHardResetting = false;
+            console.log('[ScanEngineService] [MONITOR] 🔍 isHardResetting reset to false, continuing with position monitoring...');
+        }
+        
+        console.log('[ScanEngineService] [MONITOR] 🔍 About to call monitorAndClosePositions...');
+        console.log('[ScanEngineService] [MONITOR] 🔍 Current prices available:', Object.keys(this.scannerService.priceManagerService.currentPrices || {}).length);
+        console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager available:', !!this.scannerService.positionManager);
+        console.log('[ScanEngineService] [MONITOR] 🔍 Positions in memory:', this.scannerService.positionManager?.positions?.length || 0);
+        
+        console.log('[ScanEngineService] [MONITOR] 🔍 isHardResetting check passed, continuing with position monitoring...');
 
         console.log('[AutoScannerService] [MONITOR] 🔍 Monitoring open positions...');
         console.log('[AutoScannerService] [MONITOR] 🔍 Scanner state:', {
@@ -406,11 +487,54 @@ export class ScanEngineService {
             positionsCount: this.scannerService.positionManager.positions.length
         });
 
-        console.log('[AutoScannerService] [MONITOR] 🔍 About to call monitorAndClosePositions...');
-        const monitorResult = await this.scannerService.positionManager.monitorAndClosePositions(this.scannerService.priceManagerService.currentPrices);
-        console.log('[AutoScannerService] [MONITOR] 🔍 monitorAndClosePositions result:', monitorResult);
+        console.log('[ScanEngineService] [MONITOR] 🔍 About to call monitorAndClosePositions...');
+        console.log('[ScanEngineService] [MONITOR] 🔍 Current prices available:', Object.keys(this.scannerService.priceManagerService.currentPrices || {}).length);
+        console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager available:', !!this.scannerService.positionManager);
+        console.log('[ScanEngineService] [MONITOR] 🔍 Positions in memory:', this.scannerService.positionManager?.positions?.length || 0);
+        console.log('[ScanEngineService] [MONITOR] 🔍 About to call positionManager.monitorAndClosePositions...');
+        console.log('[ScanEngineService] [MONITOR] 🔍 Function exists:', typeof this.scannerService.positionManager.monitorAndClosePositions);
+        
+        let monitorResult;
+        try {
+            //console.log('[ScanEngineService] [MONITOR] 🔍 CALLING monitorAndClosePositions NOW...');
+            //console.log('[ScanEngineService] [MONITOR] 🔍 Function exists:', typeof this.scannerService.positionManager.monitorAndClosePositions);
+            //console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager object:', !!this.scannerService.positionManager);
+            //console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager constructor:', this.scannerService.positionManager?.constructor?.name);
+            //console.log('[ScanEngineService] [MONITOR] 🔍 About to call the function...');
+            //console.log('[ScanEngineService] 🔍 [EXECUTION_TRACE] step_1: About to call monitorAndClosePositions');
+            
+            // Add a timeout to catch if the function hangs - increased to 90 seconds to allow executeBatchClose (60s) + buffer
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('monitorAndClosePositions timeout after 90 seconds')), 90000);
+            });
+            
+            const monitorPromise = this.scannerService.positionManager.monitorAndClosePositions(this.scannerService.priceManagerService.currentPrices);
+            
+            const _step2_start = Date.now();
+            monitorResult = await Promise.race([monitorPromise, timeoutPromise]);
+            
+            //console.log('[ScanEngineService] [MONITOR] 🔍 [EXECUTION_TRACE] step_2: monitorAndClosePositions completed successfully');
+            //console.log('[ScanEngineService] [MONITOR] 🔍 monitorAndClosePositions result:', monitorResult);
+            //console.log('[ScanEngineService] [MONITOR] 🔍 Result type:', typeof monitorResult);
+            //console.log('[ScanEngineService] [MONITOR] 🔍 Result success:', monitorResult?.success);
+        } catch (monitorError) {
+            console.error('[ScanEngineService] [MONITOR] ❌ Error calling monitorAndClosePositions:', monitorError);
+            console.error('[ScanEngineService] [MONITOR] ❌ Error type:', typeof monitorError);
+            console.error('[ScanEngineService] [MONITOR] ❌ Error message:', monitorError?.message);
+            console.error('[ScanEngineService] [MONITOR] ❌ Error stack:', monitorError.stack);
+            console.error('[ScanEngineService] [MONITOR] ❌ PositionManager state:', {
+                exists: !!this.scannerService.positionManager,
+                positions: this.scannerService.positionManager?.positions?.length || 0,
+                isMonitoring: this.scannerService.positionManager?.isMonitoring
+            });
+            throw monitorError;
+        } finally {
+            try {
+                console.log('[ScanEngineService] [MONITOR] ✅ [EXECUTION_TRACE] step_2_final: monitorAndClosePositions finished');
+            } catch (_) {}
+        }
 
-        if (monitorResult.tradesToCreate.length > 0) {
+        if (monitorResult && monitorResult.tradesToCreate && monitorResult.tradesToCreate.length > 0) {
             console.log(`[AutoScannerService] [MONITOR] 💰 ${monitorResult.tradesToCreate.length} position(s) ready to close`);
         }
 
@@ -698,52 +822,99 @@ export class ScanEngineService {
 
         const signalsFound = cycleStats.combinationsMatched;
         const tradesExecuted = cycleStats.positionsOpened;
-        this.addLog(`✅ Scan cycle complete: ${signalsFound} signals found, ${tradesExecuted || 0} trades executed.`, 'cycle');
+        const positionsClosed = cycleStats.positionsClosed || 0;
+
+        // New blocked breakdown header
+        const blockReasons = cycleStats.blockReasons || {};
+        const skipReasons = cycleStats.skipReasons || {};
+        // Derive robust counts from heterogeneous reason keys/values
+        let combinedStrengthBelow = 0;
+        let convictionBelowDynamic = 0;
+        let balanceBelowLimit = 0;
+        let insufficientRemainingCap = 0;
+        let regimeMismatch = 0;
+        let otherBlocks = 0;
+
+        const sumVal = (v) => {
+            if (typeof v === 'number') return v;
+            if (typeof v === 'string') return Number(v) || 1;
+            if (Array.isArray(v)) return v.length;
+            if (v && typeof v === 'object') {
+                if (typeof v.count === 'number') return v.count;
+                if (Array.isArray(v.items)) return v.items.length;
+                // Generic object: count its enumerable keys if any
+                const keys = Object.keys(v);
+                return keys.length > 0 ? keys.length : 1;
+            }
+            if (v === true) return 1;
+            return 0;
+        };
+
+        const absorbReason = (reason, value) => {
+            const count = sumVal(value);
+            const r = String(reason || '').toLowerCase();
+            if (r.includes('combined') && r.includes('strength')) combinedStrengthBelow += count;
+            else if (r.includes('conviction')) convictionBelowDynamic += count;
+            else if (r.includes('insufficient') || (r.includes('remaining') && r.includes('balance'))) insufficientRemainingCap += count;
+            else if (r.includes('balance') && r.includes('limit')) balanceBelowLimit += count;
+            else if (r.includes('regime') && r.includes('mismatch')) regimeMismatch += count;
+            else otherBlocks += count;
+        };
+
+        for (const [reason, value] of Object.entries(blockReasons)) {
+            absorbReason(reason, value);
+        }
+        // Many pre-evaluation rejections are logged as skipReasons; include them too
+        for (const [reason, value] of Object.entries(skipReasons)) {
+            absorbReason(reason, value);
+        }
+
+        const blockedTotal = combinedStrengthBelow + convictionBelowDynamic + balanceBelowLimit + insufficientRemainingCap + regimeMismatch + otherBlocks;
+
+        // Debug once per session to verify blockReasons shape
+        try {
+            if (typeof window !== 'undefined' && !window.__blockedReasonsSampled) {
+                window.__blockedReasonsSampled = true;
+                console.log('[BLOCK_REASONS_SAMPLE]', { blockReasons, combinedStrengthBelow, convictionBelowDynamic, balanceBelowLimit, insufficientRemainingCap, regimeMismatch, otherBlocks });
+            }
+        } catch(_) {}
+        const baseConv = this.scannerService.state?.settings?.minimumConvictionScore ?? 50;
+        const lpmScore = Math.round(this.scannerService.state?.performanceMomentumScore ?? 0);
+        const lpmAdj = Math.max(0, Math.round(lpmScore / 10)); // e.g., 66 -> +6
+        const dynConv = baseConv + lpmAdj;
+
+        {
+            const mrNow = this.scannerService.state?.marketRegime?.regime || 'unknown';
+            const maxCap = this.scannerService.state?.settings?.maxBalanceInvestCapUSDT ?? 'N/A';
+        
+            const lines = [
+                '═══════════════════════════════════════════════════════',
+                `${blockedTotal} strategies were blocked`,
+                `${combinedStrengthBelow} strategies blocked: combined strength below threshold`,
+                `${convictionBelowDynamic} strategies blocked: conviction score below dynamic threshold (${dynConv}: base ${baseConv} + LPM ${lpmAdj})`,
+                `${balanceBelowLimit} strategies blocked: balance below limit of ${maxCap}`,
+                `${insufficientRemainingCap} strategies blocked: not enough remaining balance to threshold`,
+                `${regimeMismatch} strategies blocked: regime mismatch (market: ${mrNow})`,
+                `${otherBlocks} strategies blocked: other reasons`,
+                '═══════════════════════════════════════════════════════'
+            ];
+        
+            // Log each line separately
+            for (const line of lines) {
+                this.addLog(line, 'cycle');
+            }
+        }
+        
+
+        // Strategy evaluation summary
+        const totalProcessed = cycleStats.totalStrategiesProcessed ?? 0;
+        const evaluated = cycleStats.strategiesEvaluated ?? 0;
+        const skipped = cycleStats.strategiesSkipped ?? Math.max(0, totalProcessed - evaluated);
+        this.addLog(`📊 Strategy evaluation summary: ${totalProcessed} strategies processed (${evaluated} evaluated, ${skipped} skipped).`, 'cycle');
+        this.addLog(`✅ Scan cycle complete: ${signalsFound} signals found, ${tradesExecuted || 0} trades executed, ${positionsClosed} positions detected for closure.`, 'cycle');
         this.addLog('', 'cycle');
 
-        this.addLog('═══════════════════════════════════════════════════════', 'cycle');
-
-        if (this.scannerService.state.momentumBreakdown) {
-            const { signalQuality, fearAndGreed, opportunityRate, volatility, regime, unrealized, realized } = this.scannerService.state.momentumBreakdown;
-
-            this.addLog(`• Unrealized P&L: ${unrealized.score.toFixed(0)} (Wt: ${(unrealized.weight * 100).toFixed(0)}%)`, 'cycle');
-            this.addLog(`• Realized P&L: ${realized.score.toFixed(0)} (Wt: ${(realized.weight * 100).toFixed(0)}%)`, 'cycle');
-
-            const marketRegime = this.scannerService.state.marketRegime?.regime || 'unknown';
-            const regimeConfidence = (this.scannerService.state.marketRegime?.confidence * 100)?.toFixed(0) || 'N/A';
-            this.addLog(`• Market Regime: ${regime.score.toFixed(0)} (Wt: ${(regime.weight * 100).toFixed(0)}%) (${marketRegime} (${regimeConfidence}%))`, 'cycle');
-
-            const adxValue = this.scannerService.state.marketVolatility.adx?.toFixed(1) || 'N/A';
-            const bbwValue = (this.scannerService.state.marketVolatility.bbw * 100)?.toFixed(1) || 'N/A';
-            this.addLog(`• Market Volatility: ${volatility.score.toFixed(0)} (Wt: ${(volatility.weight * 100).toFixed(0)}%) (ADX: ${adxValue}, BBW: ${bbwValue}%)`, 'cycle');
-
-            const recentSignalCount = this.scannerService.state.signalGenerationHistory.slice(-1)[0]?.signalsFound || 0;
-            this.addLog(`• Opportunity Rate: ${opportunityRate.score.toFixed(0)} (Wt: ${(opportunityRate.weight * 100).toFixed(0)}%) (${recentSignalCount} recent signals)`, 'cycle');
-
-            const fearGreedValue = this.scannerService.state.fearAndGreedData?.value || 'N/A';
-            const fearGreedClassification = this.scannerService.state.fearAndGreedData?.value_classification || 'N/A';
-            this.addLog(`• Fear & Greed: ${fearAndGreed.score.toFixed(0)} (Wt: ${(fearAndGreed.weight * 100).toFixed(0)}%) (F&G: ${fearGreedValue} (${fearGreedClassification}))`, 'cycle');
-
-            // Only log Signal Quality if its weight is not 0
-            if (signalQuality.weight > 0) {
-                const avgStrength = this.scannerService.state.stats?.averageSignalStrength || 0;
-                this.addLog(`• Signal Quality: ${signalQuality.score.toFixed(0)} (Wt: ${(signalQuality.weight * 100).toFixed(0)}%) (${avgStrength.toFixed(0)} avg strength)`, 'cycle');
-            }
-
-        } else {
-            this.addLog(`• Performance metrics: Awaiting initial calculation...`, 'cycle');
-        }
-
-        const performanceMomentumScore = this.scannerService.state.performanceMomentumScore;
-        if (typeof performanceMomentumScore === 'number') {
-            this.addLog(`📊 Performance Momentum Score: ${performanceMomentumScore.toFixed(0)}`, 'cycle');
-        } else {
-            this.addLog(`📊 Performance Momentum Score: Awaiting initial calculation...`, 'cycle');
-        }
-        if (typeof this.scannerService.state.adjustedBalanceRiskFactor === 'number') {
-            this.addLog(`📈 Adjusted Balance Risk Factor: ${this.scannerService.state.adjustedBalanceRiskFactor.toFixed(0)}% (Max configured: ${this.scannerService.state.settings?.maxBalancePercentRisk || 100}%)`, 'cycle');
-        }
-
+        // Wallet summary will be printed below, followed by avg strength and momentum lines
         this.addLog('═══════════════════════════════════════════════════════', 'cycle');
 
         try {
@@ -805,8 +976,6 @@ export class ScanEngineService {
                     this.addLog(`🚫 ${otherBlocksCount} strategies blocked for other reasons`, 'warning');
                 }
             }
-        } else {
-            this.addLog(`🚫 Positions Blocked: 0`, 'info');
         }
 
         if (cycleStats.positionsOpened > 0) {
@@ -815,22 +984,53 @@ export class ScanEngineService {
             this.addLog(`✅ Strategies Matches Found: ${cycleStats.combinationsMatched}`, 'info');
         }
 
+        // Extra diagnostics at end of summary
+        const avgStrength = this.scannerService.state?.stats?.lastCycleAverageSignalStrength
+            ?? this.scannerService.state?.stats?.averageSignalStrength
+            ?? cycleStats.averageCombinedStrength
+            ?? null;
+        if (avgStrength !== null) {
         this.addLog('═══════════════════════════════════════════════════════', 'cycle');
-        this.addLog('', 'system');
+            this.addLog(`Scanned strategies avg strength: ${Number(avgStrength).toFixed(2)}`, 'cycle');
+        }
+        this.addLog('═══════════════════════════════════════════════════════', 'cycle');
+
+        // Performance momentum recap
+        const ebr = Math.round(this.scannerService.state?.adjustedBalanceRiskFactor ?? 0);
+        const volLabel = this.scannerService.state?.marketVolatility?.label || 'normal';
+        const momentum = Math.round(this.scannerService.state?.performanceMomentumScore ?? 0);
+        const decay = Math.round(this.scannerService.state?.momentumDecay ?? 100);
+        this.addLog(`[PERFORMANCE_MOMENTUM] 🚀 Enhanced momentum updated: ${momentum} | EBR: ${ebr}% (max: ${(this.scannerService.state?.settings?.maxBalancePercentRisk ?? 100)}%) | Volatility: ${volLabel} | Risk Mitigation: Normal | Decay: ${decay}%`, 'cycle');
+        this.addLog('═══════════════════════════════════════════════════════', 'cycle');
+
+        this.addLog('──────────────────────────────────────────────', 'cycle');
     }
 
     /**
      * Logs wallet summary information.
      */
     _logWalletSummary() {
-        if (!this.scannerService.walletManagerService?.walletSummary) {
+        let summary = this.scannerService.walletManagerService?.walletSummary;
+        if (!summary) {
+            // Fallback to central wallet state so the attachment-style lines still show
+            const ws = this._getCurrentWalletState?.() || {};
+            summary = {
+                totalEquity: ws.total_equity || 0,
+                totalBalance: ws.total_balance || ws.available_balance || 0,
+                availableBalance: ws.available_balance || 0,
+                balanceInTrades: ws.balance_in_trades || 0,
+                totalTrades: ws.total_trades || 0,
+                winRate: ws.win_rate || 0,
+                profitFactor: ws.profit_factor || 0,
+                totalRealizedPnl: ws.total_realized_pnl || 0
+            };
+            // Also inform once that we used fallback
             this.addLog('[WALLET] No wallet summary available', 'info', { level: 1 });
-            return;
         }
 
-        const summary = this.scannerService.walletManagerService.walletSummary;
         const positions = this.scannerService.positionManager?.positions || [];
 
+        // Compute unrealized from current positions
         let unrealizedPnl = 0;
         for (const position of positions) {
             const symbol = position.symbol.replace('/', '');
@@ -840,23 +1040,31 @@ export class ScanEngineService {
                 unrealizedPnl += pnl;
             }
         }
+        // Realized PnL and trade metrics: prefer summary, then central wallet state
+        const ws = this._getCurrentWalletState?.() || {};
+        const realizedPnl = (summary.totalRealizedPnl ?? ws.total_realized_pnl ?? 0);
 
-        const realizedPnl = summary.totalRealizedPnl || 0;
+        const tradesCount = summary.totalTrades ?? ws.total_trades_count ?? ws.total_trades ?? 0;
+        const wins = summary.winningTrades ?? ws.winning_trades_count ?? 0;
+        const losses = summary.losingTrades ?? ws.losing_trades_count ?? 0;
+        const winRateCalc = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
+        const profitFactorCalc = (() => {
+            const gp = summary.totalGrossProfit ?? ws.total_gross_profit ?? 0;
+            const gl = summary.total_gross_loss ?? ws.total_gross_loss ?? 0;
+            return gl > 0 ? (gp / gl) : 0;
+        })();
 
-        const formatCurrencyWithSign = (value) => {
-            const sign = value >= 0 ? '+' : '';
-            return `${sign}$${value.toFixed(2)}`;
-        };
+        const fmt = (n) => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        const mode = this.scannerService.state?.tradingMode?.toUpperCase?.() || 'UNKNOWN';
+        const totalEquity = summary.totalEquity || 0;
+        const utilization = totalEquity > 0 ? ((summary.balanceInTrades || 0) / totalEquity) * 100 : 0;
+        const winRate = (summary.winRate ?? winRateCalc ?? 0).toFixed(1);
+        const profitFactor = (summary.profitFactor ?? profitFactorCalc ?? 0).toFixed(2);
 
-        this.addLog(`💰 Total Balance: ${formatCurrencyWithSign(summary.totalBalance)}`, 'cycle');
-        this.addLog(`💵 Available: ${formatCurrencyWithSign(summary.availableBalance)}`, 'cycle');
-        this.addLog(`🔒 In Trades: ${formatCurrencyWithSign(summary.balanceInTrades)}`, 'cycle');
-        this.addLog(`📈 Realized P&L: ${formatCurrencyWithSign(realizedPnl)}`, 'cycle');
-        this.addLog(`📊 Unrealized P&L: ${formatCurrencyWithSign(unrealizedPnl)}`, 'cycle');
-        this.addLog(`🎯 Total Equity: ${formatCurrencyWithSign(summary.totalEquity)}`, 'cycle');
-        this.addLog(`📋 Open Positions: ${positions.length}`, 'cycle');
-        this.addLog(`🏆 Win Rate: ${(summary.winRate || 0).toFixed(1)}%`, 'cycle');
-        this.addLog(`📊 Total Trades: ${summary.totalTrades || 0}`, 'cycle');
+        this.addLog(`[WALLET] Mode: ${mode} | Total Equity: ${fmt(totalEquity)}`, 'cycle');
+        this.addLog(`[WALLET] Total Trades: ${tradesCount} | Win Rate: ${winRate}% | Profit Factor: ${profitFactor}`, 'cycle');
+        this.addLog(`[WALLET] Open Positions: ${positions.length} | Portfolio Utilization: ${utilization.toFixed(1)}%`, 'cycle');
+        this.addLog(`[WALLET] Unrealized P&L: ${fmt(unrealizedPnl)} | Realized P&L: ${fmt(realizedPnl)}`, 'cycle');
     }
 
     /**
@@ -865,6 +1073,103 @@ export class ScanEngineService {
     resetState() {
         this.scanCycleTimes = [];
         this.addLog('[ScanEngineService] State reset.', 'system');
+    }
+
+    /**
+     * Permanently delete all Trade records from proxy (DB + file) and clear client caches.
+     */
+    async deleteAllTrades() {
+        try {
+            const base = this.scannerService?.state?.settings?.local_proxy_url || 'http://localhost:3003';
+            this.addLog('──────────── 📦 PURGE TRADES ────────────', 'system');
+            this.addLog('[TRADES] Deleting all trades from proxy…', 'warning');
+            const resp = await fetch(`${base}/api/trades`, { method: 'DELETE' });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || data?.success === false) {
+                throw new Error(data?.error || `HTTP ${resp.status}`);
+            }
+            this.addLog(`[TRADES] ✅ ${data?.message || 'All trades deleted.'}`, 'success');
+
+            // Clear any client-side caches that may reflect trades
+            try {
+                const ws = this._getCurrentWalletState?.();
+                if (ws) {
+                    ws.total_trades_count = 0;
+                    ws.winning_trades_count = 0;
+                    ws.losing_trades_count = 0;
+                    ws.total_gross_profit = 0;
+                    ws.total_gross_loss = 0;
+                    ws.total_realized_pnl = 0;
+                    ws.last_updated_timestamp = new Date().toISOString();
+                }
+            } catch (_) {}
+
+            try {
+                // Ask wallet manager to recompute summary post-purge
+                await this.scannerService.walletManagerService.updateWalletSummary(
+                    this._getCurrentWalletState(),
+                    this.scannerService.priceManagerService.currentPrices
+                );
+                await this.scannerService._persistLatestWalletSummary();
+            } catch (e) {
+                this.addLog(`[TRADES] ⚠️ Wallet summary refresh failed after purge: ${e.message}`, 'warning');
+            }
+
+            // Trigger front-end performance history refresh if available
+            try {
+                if (typeof window !== 'undefined' && typeof window.forceWalletRefresh === 'function') {
+                    await window.forceWalletRefresh();
+                    this.addLog('[TRADES] 🔄 Forced wallet/performance refresh in UI', 'system');
+                }
+            } catch (_) {}
+        } catch (err) {
+            this.addLog(`[TRADES] ❌ Failed to delete all trades: ${err.message}`, 'error');
+            throw err;
+        }
+    }
+
+    /**
+     * Deletes all HistoricalPerformance records for the given mode and forces a UI refresh.
+     */
+    async clearPerformanceHistory(mode = 'testnet') {
+        try {
+            const base = this.scannerService?.state?.settings?.local_proxy_url || 'http://localhost:3003';
+            // 1) Fetch all daily/hourly records for mode
+            const resp = await fetch(`${base}/api/entities/HistoricalPerformance/filter`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode })
+            });
+            const list = await resp.json();
+            const records = Array.isArray(list?.data) ? list.data : [];
+            if (records.length === 0) {
+                this.addLog('[PERF] No HistoricalPerformance records to delete', 'system');
+            } else {
+                const ids = records.map(r => r.id);
+                const del = await fetch(`${base}/api/entities/HistoricalPerformance`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids })
+                });
+                const res = await del.json().catch(() => ({}));
+                if (del.ok && res?.success !== false) {
+                    this.addLog(`[PERF] ✅ Deleted ${ids.length} HistoricalPerformance records`, 'success');
+                } else {
+                    throw new Error(res?.error || `HTTP ${del.status}`);
+                }
+            }
+
+            // 2) Force UI refresh so charts clear immediately
+            try {
+                if (typeof window !== 'undefined' && typeof window.forceWalletRefresh === 'function') {
+                    await window.forceWalletRefresh();
+                    this.addLog('[PERF] 🔄 Forced wallet/performance refresh in UI', 'system');
+                }
+            } catch (_) {}
+        } catch (e) {
+            this.addLog(`[PERF] ❌ Failed to clear performance history: ${e.message}`, 'error');
+            throw e;
+        }
     }
 }
 

@@ -20806,5 +20806,3015 @@
     "strategyDirection": "long",
     "medianLowestLowDuringBacktest": 0.872083393867751,
     "created_date": "2025-10-28T12:59:53.054Z"
+  },
+  {
+    "id": "1761656393059",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70,
+        "details": "MACD line (-19.6514) is above Signal line (-23.9047)",
+        "priority": 6,
+        "candle": 671,
+        "isEvent": false
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 49,
+        "details": "Fast EMA below Slow EMA - bearish alignment",
+        "priority": 7,
+        "candle": 671,
+        "isEvent": false
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80,
+        "details": "ADX 43.9 indicates strong trending market",
+        "priority": 7,
+        "candle": 671,
+        "isEvent": false
+      },
+      {
+        "type": "PSAR",
+        "value": "PSAR Flip Bullish",
+        "strength": 85,
+        "details": "PSAR flipped below the price, signaling a new uptrend",
+        "priority": 9,
+        "candle": 671,
+        "isEvent": true
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Above TEMA",
+        "strength": 48,
+        "isEvent": false,
+        "description": "Price is above TEMA"
+      }
+    ],
+    "combination_signature": "TF:15m|ADX:Strong Trend+!EMA:Bearish EMA Alignment+!MACD:MACD Above Signal+!PSAR:PSAR Flip Bullish+!TEMA:Price Above TEMA",
+    "signalCount": 5,
+    "combinedStrength": 332,
+    "successRate": 30.76923076923077,
+    "occurrences": 13,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-18T08:15:00.000Z",
+        "price": 4282.93,
+        "priceMove": -0.06554683359289937,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-28T21:15:00.000Z",
+        "price": 4479.7,
+        "priceMove": -0.9118746791079679,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-09T19:30:00.000Z",
+        "price": 4292.87,
+        "priceMove": 0.27365899736075106,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-15T19:00:00.000Z",
+        "price": 4497.86,
+        "priceMove": 0.23156234298090128,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-19T20:15:00.000Z",
+        "price": 4462.3,
+        "priceMove": -0.23991551442081846,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T10:45:00.000Z",
+        "price": 4182.78,
+        "priceMove": -0.07714845150831567,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T08:00:00.000Z",
+        "price": 4031.37,
+        "priceMove": -0.7523106288929073,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-05T22:00:00.000Z",
+        "price": 4503.31,
+        "priceMove": 0.8409753048313173,
+        "successful": true,
+        "exitTime": 8100000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-07T19:45:00.000Z",
+        "price": 4479.44,
+        "priceMove": -0.9585707141964126,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-09T11:00:00.000Z",
+        "price": 4359.53,
+        "priceMove": 0.9939414340536818,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-10T20:30:00.000Z",
+        "price": 4017.18,
+        "priceMove": 8.781708810658227,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T11:30:00.000Z",
+        "price": 3970.31,
+        "priceMove": 0.9400833939919051,
+        "successful": true,
+        "exitTime": 9900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-15T18:15:00.000Z",
+        "price": 3994.7,
+        "priceMove": -0.9809685333066268,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 0.6211996099116028,
+    "profitFactor": 3.0258192574463596,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 13,
+        "successful": 4,
+        "grossProfit": 11.556708943535131,
+        "grossLoss": 4.4915566953676
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Dark Viper of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 116.25,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.9917224169451084,
+    "created_date": "2025-10-28T12:59:53.059Z"
+  },
+  {
+    "id": "1761835877965",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70,
+        "details": "MACD line (-23.1498) is below Signal line (-19.5096)",
+        "priority": 6,
+        "candle": 372,
+        "isEvent": false
+      },
+      {
+        "type": "EMA",
+        "value": "Price Below EMA",
+        "strength": 52,
+        "details": "Price 3658.96 is below EMA 3723.22",
+        "priority": 6,
+        "candle": 372,
+        "isEvent": false
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75,
+        "details": "Price 3658.96 is below MA200 3799.20",
+        "priority": 6,
+        "candle": 372,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80,
+        "details": "ADX 45.6 indicates strong trending market",
+        "priority": 7,
+        "candle": 372,
+        "isEvent": false
+      }
+    ],
+    "combination_signature": "TF:15m|ADX:Strong Trend+!EMA:Price Below EMA+!Ichimoku:Price Below Kumo+!MA200:Price Below MA200+!MACD:MACD Below Signal",
+    "signalCount": 5,
+    "combinedStrength": 342,
+    "successRate": 93.33333333333333,
+    "occurrences": 15,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-01T00:00:00.000Z",
+        "price": 3658.96,
+        "priceMove": 0.8519524673677812,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T20:00:00.000Z",
+        "price": 3504.73,
+        "priceMove": 0.3055349484839003,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T22:30:00.000Z",
+        "price": 3468.93,
+        "priceMove": -0.014192416681792608,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-19T23:45:00.000Z",
+        "price": 4075.59,
+        "priceMove": 0.4061013252068971,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-20T13:45:00.000Z",
+        "price": 4135.78,
+        "priceMove": 0.31120006383318355,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T06:00:00.000Z",
+        "price": 4154.99,
+        "priceMove": 0.9013866459365762,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T17:00:00.000Z",
+        "price": 3897.52,
+        "priceMove": 0.30188940659702124,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T17:30:00.000Z",
+        "price": 3866.77,
+        "priceMove": 0.35075980728101275,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T18:00:00.000Z",
+        "price": 3860.43,
+        "priceMove": 0.5159768471387945,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-10T21:00:00.000Z",
+        "price": 3731.82,
+        "priceMove": 1.2953585649897268,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-10T21:30:00.000Z",
+        "price": 3813.49,
+        "priceMove": 14.605421149655571,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T06:30:00.000Z",
+        "price": 3993.93,
+        "priceMove": 0.2690376396181209,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T07:00:00.000Z",
+        "price": 4004.69,
+        "priceMove": 0.2766325233663566,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T07:30:00.000Z",
+        "price": 3987.19,
+        "priceMove": 0.34716241262643477,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T04:15:00.000Z",
+        "price": 3856.47,
+        "priceMove": 1.3455005484290088,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 1.471314795589906,
+    "profitFactor": 20,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 15,
+        "successful": 14,
+        "grossProfit": 22.083914350530385,
+        "grossLoss": 0.014192416681792608
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Brutal Bear of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 20.357142857142858,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.4992894062434154,
+    "created_date": "2025-10-30T14:51:17.965Z"
+  },
+  {
+    "id": "1761835877977",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70,
+        "details": "MACD line (-23.1498) is below Signal line (-19.5096)",
+        "priority": 6,
+        "candle": 372,
+        "isEvent": false
+      },
+      {
+        "type": "EMA",
+        "value": "Price Below EMA",
+        "strength": 52,
+        "details": "Price 3658.96 is below EMA 3723.22",
+        "priority": 6,
+        "candle": 372,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80,
+        "details": "ADX 45.6 indicates strong trending market",
+        "priority": 7,
+        "candle": 372,
+        "isEvent": false
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 61,
+        "details": "Price is below PSAR, indicating a downtrend. Distance: 2.24%",
+        "priority": 7,
+        "candle": 372,
+        "isEvent": false
+      }
+    ],
+    "combination_signature": "TF:15m|ADX:Strong Trend+!EMA:Price Below EMA+!Ichimoku:Price Below Kumo+!MACD:MACD Below Signal+!PSAR:Downtrending",
+    "signalCount": 5,
+    "combinedStrength": 328,
+    "successRate": 92.3076923076923,
+    "occurrences": 13,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-01T00:00:00.000Z",
+        "price": 3658.96,
+        "priceMove": 0.8519524673677812,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T20:00:00.000Z",
+        "price": 3504.73,
+        "priceMove": 0.3055349484839003,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T22:30:00.000Z",
+        "price": 3468.93,
+        "priceMove": -0.014192416681792608,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-19T23:45:00.000Z",
+        "price": 4075.59,
+        "priceMove": 0.4061013252068971,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T06:00:00.000Z",
+        "price": 4154.99,
+        "priceMove": 0.9013866459365762,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T17:00:00.000Z",
+        "price": 3897.52,
+        "priceMove": 0.30188940659702124,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T17:30:00.000Z",
+        "price": 3866.77,
+        "priceMove": 0.35075980728101275,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T18:00:00.000Z",
+        "price": 3860.43,
+        "priceMove": 0.5159768471387945,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-10T21:00:00.000Z",
+        "price": 3731.82,
+        "priceMove": 1.2953585649897268,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-10T21:30:00.000Z",
+        "price": 3813.49,
+        "priceMove": 14.605421149655571,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T06:30:00.000Z",
+        "price": 3993.93,
+        "priceMove": 0.2690376396181209,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T07:00:00.000Z",
+        "price": 4004.69,
+        "priceMove": 0.2766325233663566,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T07:30:00.000Z",
+        "price": 3987.19,
+        "priceMove": 0.34716241262643477,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 1.5702324093528,
+    "profitFactor": 20,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 13,
+        "successful": 12,
+        "grossProfit": 20.427213738268193,
+        "grossLoss": 0.014192416681792608
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Frozen Typhoon of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 21.25,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.4992894062434154,
+    "created_date": "2025-10-30T14:51:17.977Z"
+  },
+  {
+    "id": "1761835877983",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70,
+        "details": "MACD line (2.7641) is below Signal line (6.9781)",
+        "priority": 6,
+        "candle": 624,
+        "isEvent": false
+      },
+      {
+        "type": "MA200",
+        "value": "Bearish MA Alignment",
+        "strength": 55,
+        "details": "Fast MA and MA100 both below MA200 - bearish alignment",
+        "priority": 7,
+        "candle": 624,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 75,
+        "details": "ADX 37.7 indicates strong trending market",
+        "priority": 7,
+        "candle": 624,
+        "isEvent": false
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 56,
+        "details": "Price is below PSAR, indicating a downtrend. Distance: 1.11%",
+        "priority": 7,
+        "candle": 624,
+        "isEvent": false
+      }
+    ],
+    "combination_signature": "TF:15m|ADX:Strong Trend+!Ichimoku:Price Below Kumo+!MA200:Bearish MA Alignment+!MACD:MACD Below Signal+!PSAR:Downtrending",
+    "signalCount": 5,
+    "combinedStrength": 321,
+    "successRate": 100,
+    "occurrences": 14,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-03T15:00:00.000Z",
+        "price": 3464.38,
+        "priceMove": 0.11139222602601273,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-03T15:30:00.000Z",
+        "price": 3473.9,
+        "priceMove": 0.21345605803275597,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-06T11:00:00.000Z",
+        "price": 3620.99,
+        "priceMove": 0.014016194466165366,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T12:15:00.000Z",
+        "price": 3842.93,
+        "priceMove": 4.547381164892416,
+        "successful": true,
+        "exitTime": 9000000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T12:45:00.000Z",
+        "price": 3832.1,
+        "priceMove": 0.05244513452154553,
+        "successful": true,
+        "exitTime": 6300000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T13:15:00.000Z",
+        "price": 3815.18,
+        "priceMove": 0.09126830188877016,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T13:45:00.000Z",
+        "price": 3810.13,
+        "priceMove": 0.19119229527601272,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-21T20:45:00.000Z",
+        "price": 3954.2,
+        "priceMove": 0.059544282029240725,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T11:45:00.000Z",
+        "price": 3863.06,
+        "priceMove": 0.11421903879308537,
+        "successful": true,
+        "exitTime": 11700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T12:15:00.000Z",
+        "price": 3857.23,
+        "priceMove": 0.003290573805554309,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T12:45:00.000Z",
+        "price": 3853.21,
+        "priceMove": 0.10788342706470616,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T13:15:00.000Z",
+        "price": 3845.88,
+        "priceMove": 0.29915910012792624,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T14:15:00.000Z",
+        "price": 3827.61,
+        "priceMove": 0.383032100971625,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T14:45:00.000Z",
+        "price": 3847.69,
+        "priceMove": 0.5151344053185172,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 0.47881530737245237,
+    "profitFactor": 13.406828606428666,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 14,
+        "successful": 14,
+        "grossProfit": 6.703414303214333,
+        "grossLoss": 0
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Blazing Eagle of ETHUSDT-MACDMA",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 55.714285714285715,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.30572472322294264,
+    "created_date": "2025-10-30T14:51:17.983Z"
+  },
+  {
+    "id": "1761835877989",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "Bullish Cross",
+        "strength": 80,
+        "details": "MACD line crossed above Signal line",
+        "priority": 9,
+        "candle": 264,
+        "isEvent": true
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 46,
+        "details": "Fast EMA below Slow EMA - bearish alignment",
+        "priority": 7,
+        "candle": 264,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Above TEMA",
+        "strength": 48,
+        "isEvent": false,
+        "description": "Price is above TEMA"
+      },
+      {
+        "type": "DEMA",
+        "value": "Price Above DEMA",
+        "strength": 46,
+        "isEvent": false,
+        "description": "Price is above DEMA"
+      }
+    ],
+    "combination_signature": "TF:15m|DEMA:Price Above DEMA+!EMA:Bearish EMA Alignment+!Ichimoku:Price Below Kumo+!MACD:Bullish Cross+!TEMA:Price Above TEMA",
+    "signalCount": 5,
+    "combinedStrength": 285,
+    "successRate": 90,
+    "occurrences": 10,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-22T13:45:00.000Z",
+        "price": 4290.47,
+        "priceMove": 6.96436113059874,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-27T19:45:00.000Z",
+        "price": 4002.45,
+        "priceMove": 0.0318273807293083,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-28T05:00:00.000Z",
+        "price": 4003.62,
+        "priceMove": 0.1558826761780589,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-17T11:00:00.000Z",
+        "price": 3777.43,
+        "priceMove": 0.8160687292683115,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-20T03:00:00.000Z",
+        "price": 3956.82,
+        "priceMove": 0.055042938521330464,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-23T15:15:00.000Z",
+        "price": 3862.75,
+        "priceMove": 0.2631059478350958,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-24T18:00:00.000Z",
+        "price": 3904.99,
+        "priceMove": -0.04334134018268515,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-26T04:45:00.000Z",
+        "price": 3939.93,
+        "priceMove": 0.030461835616373445,
+        "successful": true,
+        "exitTime": 9900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-27T13:15:00.000Z",
+        "price": 4163.49,
+        "priceMove": 0.33868881635359327,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-28T00:15:00.000Z",
+        "price": 4127.26,
+        "priceMove": 0.06619040234926271,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "uptrend"
+      }
+    ],
+    "avgPriceMove": 0.8678288517267388,
+    "profitFactor": 20,
+    "dominantMarketRegime": "uptrend",
+    "marketRegimeDistribution": {
+      "uptrend": {
+        "occurrences": 10,
+        "successful": 9,
+        "grossProfit": 8.721629857450074,
+        "grossLoss": 0.04334134018268515
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Steel Falcon of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 48.333333333333336,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.040213216653345644,
+    "created_date": "2025-10-30T14:51:17.989Z"
+  },
+  {
+    "id": "1761835877995",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70,
+        "details": "MACD line (3.8479) is below Signal line (4.1948)",
+        "priority": 6,
+        "candle": 660,
+        "isEvent": false
+      },
+      {
+        "type": "EMA",
+        "value": "Bullish EMA Alignment",
+        "strength": 46,
+        "details": "Fast EMA above Slow EMA - bullish alignment",
+        "priority": 7,
+        "candle": 660,
+        "isEvent": false
+      },
+      {
+        "type": "MA200",
+        "value": "Price Above MA200",
+        "strength": 48,
+        "details": "Price 3499.93 is above MA200 3472.02",
+        "priority": 6,
+        "candle": 660,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "PSAR",
+        "value": "Uptrending",
+        "strength": 52,
+        "details": "Price is above PSAR, indicating an uptrend. Distance: 0.41%",
+        "priority": 7,
+        "candle": 660,
+        "isEvent": false
+      }
+    ],
+    "combination_signature": "TF:15m|EMA:Bullish EMA Alignment+!Ichimoku:Price Below Kumo+!MA200:Price Above MA200+!MACD:MACD Below Signal+!PSAR:Uptrending",
+    "signalCount": 5,
+    "combinedStrength": 281,
+    "successRate": 90.9090909090909,
+    "occurrences": 11,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-04T00:00:00.000Z",
+        "price": 3499.93,
+        "priceMove": 0.2722961602089242,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-04T07:30:00.000Z",
+        "price": 3548.29,
+        "priceMove": 0.12229200544487728,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-04T11:30:00.000Z",
+        "price": 3558.21,
+        "priceMove": 0.16565843499961957,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-04T12:00:00.000Z",
+        "price": 3559.22,
+        "priceMove": 0.13716347963880288,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-04T12:30:00.000Z",
+        "price": 3562.19,
+        "priceMove": 0.0534650032704585,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-27T00:00:00.000Z",
+        "price": 4022.95,
+        "priceMove": -0.014103456418791238,
+        "successful": false,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-13T00:15:00.000Z",
+        "price": 4148.96,
+        "priceMove": 0.09008522617715459,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-19T13:15:00.000Z",
+        "price": 3926.1,
+        "priceMove": 0.34830366012073655,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-26T19:15:00.000Z",
+        "price": 4070.64,
+        "priceMove": 0.34843169624432835,
+        "successful": true,
+        "exitTime": 8100000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-26T19:45:00.000Z",
+        "price": 4067.94,
+        "priceMove": 0.41520155164530315,
+        "successful": true,
+        "exitTime": 6300000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-26T21:45:00.000Z",
+        "price": 4080.6,
+        "priceMove": 2.0878914865460985,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      }
+    ],
+    "avgPriceMove": 0.366062295261592,
+    "profitFactor": 20,
+    "dominantMarketRegime": "uptrend",
+    "marketRegimeDistribution": {
+      "uptrend": {
+        "occurrences": 11,
+        "successful": 10,
+        "grossProfit": 4.040788704296303,
+        "grossLoss": 0.014103456418791238
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Phantom Blizzard of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 51,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.08371596003348171,
+    "created_date": "2025-10-30T14:51:17.995Z"
+  },
+  {
+    "id": "1761835878003",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70,
+        "details": "MACD line (4.6173) is above Signal line (3.8712)",
+        "priority": 6,
+        "candle": 640,
+        "isEvent": false
+      },
+      {
+        "type": "EMA",
+        "value": "Bullish EMA Alignment",
+        "strength": 46,
+        "details": "Fast EMA above Slow EMA - bullish alignment",
+        "priority": 7,
+        "candle": 640,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "ADX",
+        "value": "Bullish Directional Movement",
+        "strength": 53,
+        "details": "DI+ (20.2) > DI- (14.0) - bullish direction",
+        "priority": 6,
+        "candle": 640,
+        "isEvent": false
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Above TEMA",
+        "strength": 48,
+        "isEvent": false,
+        "description": "Price is above TEMA"
+      }
+    ],
+    "combination_signature": "TF:15m|ADX:Bullish Directional Movement+!EMA:Bullish EMA Alignment+!Ichimoku:Price Below Kumo+!MACD:MACD Above Signal+!TEMA:Price Above TEMA",
+    "signalCount": 5,
+    "combinedStrength": 282,
+    "successRate": 90.9090909090909,
+    "occurrences": 22,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-03T19:00:00.000Z",
+        "price": 3492.83,
+        "priceMove": 0.28395097957816706,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-03T19:30:00.000Z",
+        "price": 3500.82,
+        "priceMove": -0.024624230894479793,
+        "successful": false,
+        "exitTime": 6300000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-04T13:00:00.000Z",
+        "price": 3568.27,
+        "priceMove": 0.8272727400112676,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-07T06:15:00.000Z",
+        "price": 3688.04,
+        "priceMove": -0.0344383466556811,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-07T06:45:00.000Z",
+        "price": 3695.14,
+        "priceMove": 0.08503466715740432,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-07T07:15:00.000Z",
+        "price": 3703.84,
+        "priceMove": 0.2786405460279041,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-26T14:00:00.000Z",
+        "price": 3946.73,
+        "priceMove": 0.021870637211058697,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-29T10:00:00.000Z",
+        "price": 4134.61,
+        "priceMove": 0.11013070156557275,
+        "successful": true,
+        "exitTime": 12600000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-13T16:45:00.000Z",
+        "price": 4165.01,
+        "priceMove": 0.3159050038295156,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-18T03:45:00.000Z",
+        "price": 3870.57,
+        "priceMove": 1.2267850729995802,
+        "successful": true,
+        "exitTime": 11700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-19T10:30:00.000Z",
+        "price": 3924.91,
+        "priceMove": 0.4172764471032471,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-21T14:30:00.000Z",
+        "price": 3929.79,
+        "priceMove": 2.159289045979552,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-24T01:00:00.000Z",
+        "price": 3873.31,
+        "priceMove": 0.0032717494855806772,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-24T01:30:00.000Z",
+        "price": 3876.41,
+        "priceMove": 0.07426910466127584,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-24T02:00:00.000Z",
+        "price": 3877.13,
+        "priceMove": 0.05563844905896653,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-24T02:30:00.000Z",
+        "price": 3888.33,
+        "priceMove": 0.042927812197006754,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-25T06:30:00.000Z",
+        "price": 3932.03,
+        "priceMove": 0.03407718150674377,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-25T08:30:00.000Z",
+        "price": 3938.27,
+        "priceMove": 0.20019767562914725,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-26T07:45:00.000Z",
+        "price": 3951.57,
+        "priceMove": 0.1617350825115076,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-26T08:15:00.000Z",
+        "price": 3954.88,
+        "priceMove": 0.07769641556760348,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-26T08:45:00.000Z",
+        "price": 3960.05,
+        "priceMove": 0.885086678198503,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-26T09:45:00.000Z",
+        "price": 3987.91,
+        "priceMove": 0.20362106968312088,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "uptrend"
+      }
+    ],
+    "avgPriceMove": 0.33661884010966214,
+    "profitFactor": 20,
+    "dominantMarketRegime": "uptrend",
+    "marketRegimeDistribution": {
+      "uptrend": {
+        "occurrences": 22,
+        "successful": 20,
+        "grossProfit": 7.464677059962726,
+        "grossLoss": 0.059062577550160894
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Battle Tempest of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 54,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.19172130764214884,
+    "created_date": "2025-10-30T14:51:18.003Z"
+  },
+  {
+    "id": "1761835878009",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70,
+        "details": "MACD line (-6.5269) is below Signal line (0.8564)",
+        "priority": 6,
+        "candle": 256,
+        "isEvent": false
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 61,
+        "details": "Price 3716.47 is below MA200 3796.51",
+        "priority": 6,
+        "candle": 256,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Below TEMA",
+        "strength": 48,
+        "isEvent": false,
+        "description": "Price is below TEMA"
+      },
+      {
+        "type": "DEMA",
+        "value": "Price Below DEMA",
+        "strength": 46,
+        "isEvent": false,
+        "description": "Price is below DEMA"
+      }
+    ],
+    "combination_signature": "TF:15m|DEMA:Price Below DEMA+!Ichimoku:Price Below Kumo+!MA200:Price Below MA200+!MACD:MACD Below Signal+!TEMA:Price Below TEMA",
+    "signalCount": 5,
+    "combinedStrength": 290,
+    "successRate": 85.86956521739131,
+    "occurrences": 92,
+    "occurrenceDates": [
+      {
+        "date": "2025-07-30T19:00:00.000Z",
+        "price": 3716.47,
+        "priceMove": 0.015843663476366288,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-07-31T22:30:00.000Z",
+        "price": 3709.43,
+        "priceMove": 0.29428847558789506,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-07-31T23:30:00.000Z",
+        "price": 3695.84,
+        "priceMove": 0.15992034287197593,
+        "successful": true,
+        "exitTime": 9000000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T00:00:00.000Z",
+        "price": 3658.96,
+        "priceMove": 0.8519524673677812,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T06:30:00.000Z",
+        "price": 3647.02,
+        "priceMove": 0.3162157048768608,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T07:00:00.000Z",
+        "price": 3644.8,
+        "priceMove": -0.045324846356452037,
+        "successful": false,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T07:30:00.000Z",
+        "price": 3638.29,
+        "priceMove": 0.13397159104964845,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T08:30:00.000Z",
+        "price": 3618.52,
+        "priceMove": 0.2200816908570415,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T19:30:00.000Z",
+        "price": 3524.25,
+        "priceMove": 0.07375682769383146,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T20:00:00.000Z",
+        "price": 3504.73,
+        "priceMove": 0.3055349484839003,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T22:30:00.000Z",
+        "price": 3468.93,
+        "priceMove": -0.014192416681792608,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-01T23:00:00.000Z",
+        "price": 3477.17,
+        "priceMove": 0.07296378951848825,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-02T06:30:00.000Z",
+        "price": 3470.33,
+        "priceMove": 0.1681158564171194,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-02T07:00:00.000Z",
+        "price": 3480.52,
+        "priceMove": 0.3774924436578484,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-02T09:30:00.000Z",
+        "price": 3482.94,
+        "priceMove": 0.11348602043101097,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-02T10:00:00.000Z",
+        "price": 3482.61,
+        "priceMove": 0.018476803317049817,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-02T10:30:00.000Z",
+        "price": 3482.76,
+        "priceMove": 0.11809886411925336,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-02T18:00:00.000Z",
+        "price": 3408.54,
+        "priceMove": 0.11760607180787669,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-02T18:30:00.000Z",
+        "price": 3389.96,
+        "priceMove": 0.6508955857886217,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-02T19:00:00.000Z",
+        "price": 3387.88,
+        "priceMove": 0.7128440204493632,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-19T23:45:00.000Z",
+        "price": 4075.59,
+        "priceMove": 0.4061013252068971,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-20T00:15:00.000Z",
+        "price": 4091.72,
+        "priceMove": 0.33141808334882195,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-20T13:45:00.000Z",
+        "price": 4135.78,
+        "priceMove": 0.31120006383318355,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-22T12:00:00.000Z",
+        "price": 4243.87,
+        "priceMove": 0.22409557785700063,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-22T12:30:00.000Z",
+        "price": 4241.14,
+        "priceMove": 0.2887702363043769,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T06:00:00.000Z",
+        "price": 4154.99,
+        "priceMove": 0.9013866459365762,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T17:00:00.000Z",
+        "price": 4153.97,
+        "priceMove": 0.2285783238684947,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T19:30:00.000Z",
+        "price": 4142.52,
+        "priceMove": 0.07637138746462363,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-23T02:30:00.000Z",
+        "price": 4159.51,
+        "priceMove": 0.26496450303040675,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-23T03:00:00.000Z",
+        "price": 4137.57,
+        "priceMove": 0.797958101010994,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-23T17:30:00.000Z",
+        "price": 4144.64,
+        "priceMove": 0.09647158739962147,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-23T18:00:00.000Z",
+        "price": 4154.34,
+        "priceMove": -0.006399331783149886,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T03:30:00.000Z",
+        "price": 4048.8,
+        "priceMove": 0.17259434894288855,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T05:00:00.000Z",
+        "price": 4014.48,
+        "priceMove": 0.4068721229150448,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T17:00:00.000Z",
+        "price": 3897.52,
+        "priceMove": 0.30188940659702124,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T17:30:00.000Z",
+        "price": 3866.77,
+        "priceMove": 0.35075980728101275,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T18:00:00.000Z",
+        "price": 3860.43,
+        "priceMove": 0.5159768471387945,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-26T07:30:00.000Z",
+        "price": 3908.91,
+        "priceMove": 0.5328269261763603,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-26T09:30:00.000Z",
+        "price": 3905.86,
+        "priceMove": 0.028299785450576598,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-26T10:00:00.000Z",
+        "price": 3886.97,
+        "priceMove": -0.02926251038725841,
+        "successful": false,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-26T10:30:00.000Z",
+        "price": 3888,
+        "priceMove": 0.4516460905349846,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-26T11:00:00.000Z",
+        "price": 3877.3,
+        "priceMove": 0.16343202744176988,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-30T23:00:00.000Z",
+        "price": 4128.45,
+        "priceMove": 0.05398817958314095,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-30T23:30:00.000Z",
+        "price": 4144.43,
+        "priceMove": 0.046060013077782125,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-01T00:00:00.000Z",
+        "price": 4145.84,
+        "priceMove": 0.011949327518661401,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-01T00:30:00.000Z",
+        "price": 4126.8,
+        "priceMove": 0.2748618784530351,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-01T03:45:00.000Z",
+        "price": 4128.66,
+        "priceMove": 0.1985716915415761,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-10T21:15:00.000Z",
+        "price": 3590,
+        "priceMove": 7.702924791086358,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-11T20:15:00.000Z",
+        "price": 3720.36,
+        "priceMove": 0.37601468675074345,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-11T20:45:00.000Z",
+        "price": 3695.15,
+        "priceMove": 1.0625312910166027,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T08:45:00.000Z",
+        "price": 3823.17,
+        "priceMove": -0.015116382478414042,
+        "successful": false,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T09:15:00.000Z",
+        "price": 3820.16,
+        "priceMove": 0.0638611995309159,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T10:45:00.000Z",
+        "price": 3820,
+        "priceMove": 0.10654450261779819,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T11:15:00.000Z",
+        "price": 3821.02,
+        "priceMove": -0.008964883722146516,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-12T11:45:00.000Z",
+        "price": 3820.36,
+        "priceMove": 0.26251714498109935,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T06:45:00.000Z",
+        "price": 4003.38,
+        "priceMove": 0.13367579395410056,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-15T14:45:00.000Z",
+        "price": 4009.87,
+        "priceMove": 0.047017110280390906,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-15T15:15:00.000Z",
+        "price": 4009.4,
+        "priceMove": -0.01405447199082066,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-15T15:45:00.000Z",
+        "price": 3980.97,
+        "priceMove": 0.061481875020411914,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-16T15:45:00.000Z",
+        "price": 3907.18,
+        "priceMove": 1.2963838369361043,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-16T16:15:00.000Z",
+        "price": 3879.73,
+        "priceMove": 0.5150016882618078,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-17T07:15:00.000Z",
+        "price": 3784.84,
+        "priceMove": 0.05912799484257769,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-17T07:45:00.000Z",
+        "price": 3756.49,
+        "priceMove": 0.10964424236455356,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-17T08:15:00.000Z",
+        "price": 3731.41,
+        "priceMove": 0.49931460225491264,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-17T08:45:00.000Z",
+        "price": 3708.8,
+        "priceMove": 0.583423209663499,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-18T00:15:00.000Z",
+        "price": 3840.11,
+        "priceMove": 0.07264700750759412,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-18T00:45:00.000Z",
+        "price": 3840.25,
+        "priceMove": 0.068989649111386,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-21T04:15:00.000Z",
+        "price": 3877.18,
+        "priceMove": -0.029994738443915425,
+        "successful": false,
+        "exitTime": 7200000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-21T04:45:00.000Z",
+        "price": 3851,
+        "priceMove": 0.13847052713580982,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-21T22:15:00.000Z",
+        "price": 3912.12,
+        "priceMove": 0.043958263038966106,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-21T22:45:00.000Z",
+        "price": 3901.28,
+        "priceMove": 0.005300824344819655,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-21T23:45:00.000Z",
+        "price": 3873.05,
+        "priceMove": 0.16879139179715724,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-22T10:45:00.000Z",
+        "price": 3820.7,
+        "priceMove": -0.02229303530765897,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-22T11:15:00.000Z",
+        "price": 3823.81,
+        "priceMove": 0.1396637123706484,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-22T20:15:00.000Z",
+        "price": 3784.26,
+        "priceMove": 0.2150843229587795,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-22T21:15:00.000Z",
+        "price": 3724.1,
+        "priceMove": 0.4188864423619213,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-22T21:45:00.000Z",
+        "price": 3744.69,
+        "priceMove": 0.22640792695790962,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T20:15:00.000Z",
+        "price": 3851.35,
+        "priceMove": -0.025403429966113417,
+        "successful": false,
+        "exitTime": 10800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T20:45:00.000Z",
+        "price": 3829.2,
+        "priceMove": -0.04160137887809415,
+        "successful": false,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-23T21:15:00.000Z",
+        "price": 3827.48,
+        "priceMove": 0.3002314839006329,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-28T12:00:00.000Z",
+        "price": 4113.59,
+        "priceMove": 0.06164992135822256,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-28T12:30:00.000Z",
+        "price": 4114.77,
+        "priceMove": 0.03288336893676719,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-28T20:00:00.000Z",
+        "price": 4001.93,
+        "priceMove": -0.042849949899174566,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-28T20:30:00.000Z",
+        "price": 3979.15,
+        "priceMove": -0.01502519382280365,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-28T21:00:00.000Z",
+        "price": 3962.26,
+        "priceMove": 0.3996292519925442,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-29T09:00:00.000Z",
+        "price": 3994.66,
+        "priceMove": 0.03062463388623904,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-29T19:30:00.000Z",
+        "price": 3900.93,
+        "priceMove": 0.3670323486963407,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-29T20:00:00.000Z",
+        "price": 3901.89,
+        "priceMove": 0.7197864368293351,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-29T23:30:00.000Z",
+        "price": 3892.34,
+        "priceMove": 0.07525421725748144,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T00:00:00.000Z",
+        "price": 3906.05,
+        "priceMove": 0.03724670703139488,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T04:30:00.000Z",
+        "price": 3892.23,
+        "priceMove": 0.013602099567594006,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T05:00:00.000Z",
+        "price": 3872.78,
+        "priceMove": 0.8830362168777894,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 0.3168124740157499,
+    "profitFactor": 20,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 92,
+        "successful": 79,
+        "grossProfit": 29.457230179166782,
+        "grossLoss": 0.3104825697177943
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "War Warrior of ETHUSDT-MACDMA",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 24.11392405063291,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.2627620829666121,
+    "created_date": "2025-10-30T14:51:18.009Z"
+  },
+  {
+    "id": "1761835878015",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70,
+        "details": "MACD line (11.7576) is above Signal line (7.7210)",
+        "priority": 6,
+        "candle": 981,
+        "isEvent": false
+      },
+      {
+        "type": "EMA",
+        "value": "Bullish EMA Alignment",
+        "strength": 48,
+        "details": "Fast EMA above Slow EMA - bullish alignment",
+        "priority": 7,
+        "candle": 981,
+        "isEvent": false
+      },
+      {
+        "type": "MA200",
+        "value": "Price Above MA200",
+        "strength": 66,
+        "details": "Price 3726.96 is above MA200 3633.18",
+        "priority": 6,
+        "candle": 981,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bearish Ichimoku",
+        "strength": 55,
+        "isEvent": false,
+        "description": "Tenkan below Kijun - bearish"
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Above TEMA",
+        "strength": 48,
+        "isEvent": false,
+        "description": "Price is above TEMA"
+      }
+    ],
+    "combination_signature": "TF:15m|EMA:Bullish EMA Alignment+!Ichimoku:Bearish Ichimoku+!MA200:Price Above MA200+!MACD:MACD Above Signal+!TEMA:Price Above TEMA",
+    "signalCount": 5,
+    "combinedStrength": 287,
+    "successRate": 83.33333333333334,
+    "occurrences": 24,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-07T08:15:00.000Z",
+        "price": 3726.96,
+        "priceMove": 0.01938845600703959,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-07T08:45:00.000Z",
+        "price": 3721.25,
+        "priceMove": -0.045230097413506476,
+        "successful": false,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-07T09:45:00.000Z",
+        "price": 3732.41,
+        "priceMove": 1.5603584547249678,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-07T20:00:00.000Z",
+        "price": 3856.47,
+        "priceMove": 0.007230057539668988,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-07T21:00:00.000Z",
+        "price": 3867.01,
+        "priceMove": 0.23978409675691553,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-08T14:15:00.000Z",
+        "price": 3962.97,
+        "priceMove": 0.29327940913002626,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T03:30:00.000Z",
+        "price": 4045.49,
+        "priceMove": 0.10867101389449035,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T04:00:00.000Z",
+        "price": 4057.09,
+        "priceMove": 0.8076546243736238,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T04:30:00.000Z",
+        "price": 4081.18,
+        "priceMove": 2.661412875687918,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T16:30:00.000Z",
+        "price": 4209.87,
+        "priceMove": -0.03550406544620749,
+        "successful": false,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T17:00:00.000Z",
+        "price": 4217,
+        "priceMove": 0.2852146075408989,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T17:30:00.000Z",
+        "price": 4229.71,
+        "priceMove": -0.006720909944181452,
+        "successful": false,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T18:00:00.000Z",
+        "price": 4226.88,
+        "priceMove": 0.06039442804148426,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T18:30:00.000Z",
+        "price": 4230.01,
+        "priceMove": 0.33746906035681834,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-12T14:15:00.000Z",
+        "price": 4407.24,
+        "priceMove": 0.13028335193908702,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-11T23:00:00.000Z",
+        "price": 4465.8,
+        "priceMove": 0.9074633884186394,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-12T16:00:00.000Z",
+        "price": 4548.1,
+        "priceMove": 0.2754941623974766,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-12T16:30:00.000Z",
+        "price": 4559.27,
+        "priceMove": 0.1213313754175423,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-12T17:00:00.000Z",
+        "price": 4577,
+        "priceMove": 0.09323792877430714,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-12T17:30:00.000Z",
+        "price": 4617.01,
+        "priceMove": -0.011967160564959112,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-12T18:00:00.000Z",
+        "price": 4611.57,
+        "priceMove": 0.09435127299379842,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-02T13:00:00.000Z",
+        "price": 4397.07,
+        "priceMove": 0.2446475721332615,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-02T13:30:00.000Z",
+        "price": 4398.32,
+        "priceMove": 0.21608705141963297,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-03T10:45:00.000Z",
+        "price": 4489.56,
+        "priceMove": 0.08188107520557991,
+        "successful": true,
+        "exitTime": 9900000,
+        "marketRegime": "uptrend"
+      }
+    ],
+    "avgPriceMove": 0.3519255012243469,
+    "profitFactor": 20,
+    "dominantMarketRegime": "uptrend",
+    "marketRegimeDistribution": {
+      "uptrend": {
+        "occurrences": 24,
+        "successful": 20,
+        "grossProfit": 8.545634262753179,
+        "grossLoss": 0.09942223336885453
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Nuclear Shark of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 38.25,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.16371725824115568,
+    "created_date": "2025-10-30T14:51:18.015Z"
+  },
+  {
+    "id": "1761835878022",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70,
+        "details": "MACD line (-0.5891) is above Signal line (-4.0627)",
+        "priority": 6,
+        "candle": 426,
+        "isEvent": false
+      },
+      {
+        "type": "EMA",
+        "value": "Bullish EMA Alignment",
+        "strength": 46,
+        "details": "Fast EMA above Slow EMA - bullish alignment",
+        "priority": 7,
+        "candle": 426,
+        "isEvent": false
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75,
+        "details": "Price 3625.53 is below MA200 3761.54",
+        "priority": 6,
+        "candle": 426,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Kijun Bounce Bearish",
+        "strength": 82,
+        "isEvent": true,
+        "description": "Price bounced bearish off Kijun-Sen"
+      },
+      {
+        "type": "DEMA",
+        "value": "price_cross_down",
+        "strength": 70,
+        "isEvent": true,
+        "description": "Price crossed below DEMA"
+      }
+    ],
+    "combination_signature": "TF:15m|DEMA:price_cross_down+!EMA:Bullish EMA Alignment+!Ichimoku:Kijun Bounce Bearish+!MA200:Price Below MA200+!MACD:MACD Above Signal",
+    "signalCount": 5,
+    "combinedStrength": 343,
+    "successRate": 80,
+    "occurrences": 10,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-01T13:30:00.000Z",
+        "price": 3625.53,
+        "priceMove": 0.48892644661607987,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-18T14:30:00.000Z",
+        "price": 4296,
+        "priceMove": 0.6487430167597689,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-26T11:15:00.000Z",
+        "price": 4421.25,
+        "priceMove": 2.7751625671473,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-26T11:15:00.000Z",
+        "price": 4421.25,
+        "priceMove": 2.7751625671473,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-05T02:30:00.000Z",
+        "price": 4309.83,
+        "priceMove": 0.15767269242637666,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-10T00:15:00.000Z",
+        "price": 4298.07,
+        "priceMove": 0.12830933418953672,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-09T13:30:00.000Z",
+        "price": 4367.95,
+        "priceMove": 0.19437321855790146,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-09T13:30:00.000Z",
+        "price": 4367.95,
+        "priceMove": 0.19437321855790146,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-29T13:30:00.000Z",
+        "price": 4002.77,
+        "priceMove": -0.21202629678947374,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-29T13:30:00.000Z",
+        "price": 4002.77,
+        "priceMove": -0.21202629678947374,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 0.6938670467823217,
+    "profitFactor": 17.36275917867112,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 10,
+        "successful": 8,
+        "grossProfit": 7.362723061402164,
+        "grossLoss": 0.4240525935789475
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Swift Shark of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 41.25,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.41248441565594857,
+    "created_date": "2025-10-30T14:51:18.022Z"
+  },
+  {
+    "id": "1761835878029",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70,
+        "details": "MACD line (-8.5456) is below Signal line (-2.3462)",
+        "priority": 6,
+        "candle": 770,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bearish Ichimoku",
+        "strength": 55,
+        "isEvent": false,
+        "description": "Tenkan below Kijun - bearish"
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 54,
+        "details": "Price is below PSAR, indicating a downtrend. Distance: 0.74%",
+        "priority": 7,
+        "candle": 770,
+        "isEvent": false
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Below TEMA",
+        "strength": 48,
+        "isEvent": false,
+        "description": "Price is below TEMA"
+      },
+      {
+        "type": "DEMA",
+        "value": "Price Below DEMA",
+        "strength": 46,
+        "isEvent": false,
+        "description": "Price is below DEMA"
+      }
+    ],
+    "combination_signature": "TF:15m|DEMA:Price Below DEMA+!Ichimoku:Bearish Ichimoku+!MACD:MACD Below Signal+!PSAR:Downtrending+!TEMA:Price Below TEMA",
+    "signalCount": 5,
+    "combinedStrength": 273,
+    "successRate": 77.27272727272727,
+    "occurrences": 22,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-06T22:00:00.000Z",
+        "price": 3676.87,
+        "priceMove": -0.04711004196503993,
+        "successful": false,
+        "exitTime": 3600000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-08T02:45:00.000Z",
+        "price": 3893.68,
+        "priceMove": 0.03045448008054269,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T12:45:00.000Z",
+        "price": 4196.24,
+        "priceMove": 0.46468743446513505,
+        "successful": true,
+        "exitTime": 8100000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T13:15:00.000Z",
+        "price": 4191.83,
+        "priceMove": 0.5706439669547582,
+        "successful": true,
+        "exitTime": 6300000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-09T23:30:00.000Z",
+        "price": 4262.86,
+        "priceMove": -0.003217323580872039,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-10T00:00:00.000Z",
+        "price": 4265.99,
+        "priceMove": 0.25844001040791253,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-17T07:30:00.000Z",
+        "price": 4469.16,
+        "priceMove": 0.11539304925310184,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-17T08:00:00.000Z",
+        "price": 4463.27,
+        "priceMove": -0.014074322189790378,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-22T05:30:00.000Z",
+        "price": 4278.85,
+        "priceMove": 0.12556820173644107,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-22T09:30:00.000Z",
+        "price": 4322.04,
+        "priceMove": -0.019553266513034656,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-22T10:00:00.000Z",
+        "price": 4318.42,
+        "priceMove": 6.270440346237742,
+        "successful": true,
+        "exitTime": 14400000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-23T21:00:00.000Z",
+        "price": 4749.89,
+        "priceMove": 0.07084953546292189,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-24T02:00:00.000Z",
+        "price": 4776.76,
+        "priceMove": 0.00854344786004435,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-31T07:15:00.000Z",
+        "price": 4449.71,
+        "priceMove": 0.0540647592764415,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-31T10:15:00.000Z",
+        "price": 4459.17,
+        "priceMove": 0.10051366061397321,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-03T12:45:00.000Z",
+        "price": 4353.96,
+        "priceMove": 0.33498470358019494,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-08T11:45:00.000Z",
+        "price": 4312.41,
+        "priceMove": -0.017183547018953138,
+        "successful": false,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-10T09:45:00.000Z",
+        "price": 4325.08,
+        "priceMove": 0.006873861292731542,
+        "successful": true,
+        "exitTime": 8100000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-02T22:00:00.000Z",
+        "price": 4480.42,
+        "priceMove": 0.058453225367258166,
+        "successful": true,
+        "exitTime": 14400000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-02T23:00:00.000Z",
+        "price": 4473.45,
+        "priceMove": 0.07569940426294292,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-03T18:30:00.000Z",
+        "price": 4500.97,
+        "priceMove": 0.008388747314470202,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-06T21:45:00.000Z",
+        "price": 4693.64,
+        "priceMove": 0.04742374788011089,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "uptrend"
+      }
+    ],
+    "avgPriceMove": 0.38637654912631963,
+    "profitFactor": 20,
+    "dominantMarketRegime": "uptrend",
+    "marketRegimeDistribution": {
+      "uptrend": {
+        "occurrences": 22,
+        "successful": 17,
+        "grossProfit": 8.601422582046723,
+        "grossLoss": 0.10113850126769014
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Raging Blizzard of ETHUSDT-MACDIP",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 74.11764705882354,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.1342822847798728,
+    "created_date": "2025-10-30T14:51:18.029Z"
+  },
+  {
+    "id": "1761835878035",
+    "coin": "ETH/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "Bullish Cross",
+        "strength": 80,
+        "details": "MACD line crossed above Signal line",
+        "priority": 9,
+        "candle": 550,
+        "isEvent": true
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 50,
+        "details": "Fast EMA below Slow EMA - bearish alignment",
+        "priority": 7,
+        "candle": 550,
+        "isEvent": false
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 77,
+        "details": "ADX 38.4 indicates strong trending market",
+        "priority": 7,
+        "candle": 550,
+        "isEvent": false
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 51,
+        "details": "Price is below PSAR, indicating a downtrend. Distance: 0.29%",
+        "priority": 7,
+        "candle": 550,
+        "isEvent": false
+      },
+      {
+        "type": "DEMA",
+        "value": "Price Above DEMA",
+        "strength": 46,
+        "isEvent": false,
+        "description": "Price is above DEMA"
+      }
+    ],
+    "combination_signature": "TF:15m|ADX:Strong Trend+!DEMA:Price Above DEMA+!EMA:Bearish EMA Alignment+!MACD:Bullish Cross+!PSAR:Downtrending",
+    "signalCount": 5,
+    "combinedStrength": 304,
+    "successRate": 71.42857142857143,
+    "occurrences": 14,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-02T20:30:00.000Z",
+        "price": 3409.14,
+        "priceMove": 0.1858870565597226,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-18T07:45:00.000Z",
+        "price": 4257.47,
+        "priceMove": 0.3449542803589908,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-25T11:15:00.000Z",
+        "price": 4568.51,
+        "priceMove": 0.41739483989308945,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-01T03:30:00.000Z",
+        "price": 4392.8,
+        "priceMove": 0.11081770169366811,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-02T17:45:00.000Z",
+        "price": 4319.36,
+        "priceMove": 0.1273707215883877,
+        "successful": true,
+        "exitTime": 13500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-04T19:15:00.000Z",
+        "price": 4281.69,
+        "priceMove": 0.1979539621037556,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-05T18:15:00.000Z",
+        "price": 4298.38,
+        "priceMove": -0.03782704181575641,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-09T18:00:00.000Z",
+        "price": 4285.77,
+        "priceMove": -0.03813608756419673,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T18:00:00.000Z",
+        "price": 4173.61,
+        "priceMove": 0.13096515965795913,
+        "successful": true,
+        "exitTime": 9900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T07:15:00.000Z",
+        "price": 4012.59,
+        "priceMove": -0.021967731564908555,
+        "successful": false,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-08T00:45:00.000Z",
+        "price": 4471.6,
+        "priceMove": 0.09998658198406912,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-10T20:15:00.000Z",
+        "price": 4024.4,
+        "priceMove": 8.58609979127323,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T11:00:00.000Z",
+        "price": 3976.29,
+        "priceMove": -0.005802519433943776,
+        "successful": false,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T06:00:00.000Z",
+        "price": 3906.24,
+        "priceMove": 0.284017367084463,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 0.7415510058441808,
+    "profitFactor": 20,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 14,
+        "successful": 10,
+        "grossProfit": 10.485447462197335,
+        "grossLoss": 0.10373338037880547
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Phantom Hurricane of ETHUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 64.5,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.1814179064986844,
+    "created_date": "2025-10-30T14:51:18.035Z"
   }
 ]

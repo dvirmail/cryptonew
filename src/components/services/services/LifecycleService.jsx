@@ -296,37 +296,83 @@ export class LifecycleService {
      * Starts the scan loop by executing the first scan cycle.
      */
     async _startScanLoop() {
+        console.log('[LifecycleService] 🔍 ===== _START_SCAN_LOOP ENTRY =====');
+        console.log('[LifecycleService] 🔍 Scanner state before initial scan:', {
+            isRunning: this.scannerService.state.isRunning,
+            isScanning: this.scannerService.state.isScanning,
+            isHardResetting: this.scannerService.isHardResetting
+        });
         
         try {
             await this.scannerService.scanEngineService.scanCycle();
+            console.log('[LifecycleService] ✅ Initial scan completed successfully');
         } catch (e) {
             console.error(`[LifecycleService] ❌ Initial scan failed: ${e.message}`, e);
             console.error('[LifecycleService] ❌ Full error details:', e);
         }
+        
+        console.log('[LifecycleService] 🔍 Scanner state after initial scan:', {
+            isRunning: this.scannerService.state.isRunning,
+            isScanning: this.scannerService.state.isScanning,
+            isHardResetting: this.scannerService.isHardResetting
+        });
     }
 
     /**
      * Starts the countdown timer for the next scan cycle.
      */
     _startCountdown() {
+        console.log('[LifecycleService] 🔍 ===== _START_COUNTDOWN ENTRY =====');
+        console.log('[LifecycleService] 🔍 Scanner state before countdown:', {
+            isRunning: this.scannerService.state.isRunning,
+            isScanning: this.scannerService.state.isScanning,
+            isHardResetting: this.scannerService.isHardResetting,
+            hasExistingInterval: !!this.countdownInterval
+        });
+        
         if (this.countdownInterval) {
+            console.log('[LifecycleService] 🔍 Clearing existing countdown interval');
             clearInterval(this.countdownInterval);
             this.countdownInterval = null;
         }
 
         if (!this.scannerService.state.isRunning || this.scannerService.state.isScanning) {
+            console.log('[LifecycleService] ⏸️ Countdown not started:', {
+                reason: !this.scannerService.state.isRunning ? 'Scanner not running' : 'Scanner is scanning',
+                isRunning: this.scannerService.state.isRunning,
+                isScanning: this.scannerService.state.isScanning
+            });
             return;
         }
 
         const scanFrequency = this.scannerService.state.settings?.scanFrequency || 60000;
         this.scannerService.state.nextScanTime = Date.now() + scanFrequency;
 
-        console.log(`[AutoScannerService] ⏰ Next scan in ${Math.round(scanFrequency / 1000)} seconds...`);
+        console.log(`[LifecycleService] ⏰ Next scan in ${Math.round(scanFrequency / 1000)} seconds...`);
+        console.log(`[LifecycleService] ⏰ Countdown details:`, {
+            scanFrequency: scanFrequency,
+            nextScanTime: this.scannerService.state.nextScanTime,
+            currentTime: Date.now(),
+            timeUntilScan: this.scannerService.state.nextScanTime - Date.now()
+        });
 
         this.scannerService.notifySubscribers();
 
         this.countdownInterval = setInterval(() => {
+            /*console.log('[LifecycleService] ⏰ COUNTDOWN INTERVAL TICK:', {
+                now: Date.now(),
+                nextScanTime: this.scannerService.state.nextScanTime,
+                timeUntilScan: this.scannerService.state.nextScanTime ? this.scannerService.state.nextScanTime - Date.now() : 0,
+                isRunning: this.scannerService.state.isRunning,
+                isScanning: this.scannerService.state.isScanning
+            });*/
+            
             if (!this.scannerService.state.isRunning || this.scannerService.state.isScanning) {
+                console.log('[LifecycleService] 🔍 Countdown stopped:', {
+                    reason: !this.scannerService.state.isRunning ? 'Scanner not running' : 'Scanner is scanning',
+                    isRunning: this.scannerService.state.isRunning,
+                    isScanning: this.scannerService.state.isScanning
+                });
                 clearInterval(this.countdownInterval);
                 this.countdownInterval = null;
                 this.scannerService.state.nextScanTime = null;
@@ -336,12 +382,17 @@ export class LifecycleService {
             }
 
             if (this.scannerService.state.nextScanTime && Date.now() >= this.scannerService.state.nextScanTime) {
+                console.log('[LifecycleService] 🚀 ===== COUNTDOWN EXPIRED - TRIGGERING SCAN CYCLE =====');
+                console.log('[LifecycleService] 🚀 Countdown expired at:', new Date().toISOString());
+                console.log('[LifecycleService] 🚀 nextScanTime was:', this.scannerService.state.nextScanTime);
+                console.log('[LifecycleService] 🚀 Current time is:', Date.now());
+                
                 clearInterval(this.countdownInterval);
                 this.countdownInterval = null;
                 this.scannerService.state.nextScanTime = null;
 
                 this.scannerService.scanEngineService.scanCycle().catch(e => {
-                    console.error(`[AutoScannerService] Scan cycle error: ${e.message}`, e);
+                    console.error(`[LifecycleService] ❌ Scan cycle error: ${e.message}`, e);
                 });
                 return;
             }

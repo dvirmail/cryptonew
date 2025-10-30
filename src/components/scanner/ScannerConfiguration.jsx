@@ -35,7 +35,7 @@ export default function ScannerConfiguration({
         return Number(s?.walletSummary?.balance_in_trades || 0);
     });
 
-    const { balanceInTrades: walletBalanceInTrades = 0 } = useWallet() || {};
+    const { balanceInTrades: walletBalanceInTrades = 0, totalEquity: walletTotalEquity = 0 } = useWallet() || {};
 
     useEffect(() => {
         const unsubscribe = scanner.subscribe((state) => {
@@ -86,6 +86,7 @@ export default function ScannerConfiguration({
 
     const capNum = Number(investCap) || 0;
     const usedPct = capNum > 0 ? Math.min(100, Math.max(0, (displayInvested / capNum) * 100)) : 0;
+    const investedOfTotalPct = walletTotalEquity > 0 ? Math.min(100, Math.max(0, (displayInvested / walletTotalEquity) * 100)) : 0;
     const remaining = capNum > 0 ? Math.max(0, capNum - displayInvested) : 0;
 
     return (
@@ -235,44 +236,7 @@ export default function ScannerConfiguration({
                         )}
                     </div>
 
-                    {/* Max Balance Percent Risk - NEW */}
-                    <div className="space-y-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
-                        <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-2">
-                                <Label htmlFor="maxBalancePercentRisk" className="font-semibold text-blue-900 dark:text-blue-100">
-                                    Max Balance Percent Risk (%)
-                                </Label>
-                                <TooltipProvider>
-                                    <Tooltip>
-                                        <TooltipTrigger>
-                                            <Info className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                                        </TooltipTrigger>
-                                        <TooltipContent>
-                                            <p className="max-w-xs">
-                                                Limits the maximum percentage of your free balance that can be allocated to trading operations.
-                                                This provides an additional safety layer to prevent over-exposure.
-                                            </p>
-                                        </TooltipContent>
-                                    </Tooltip>
-                                </TooltipProvider>
-                            </div>
-                            <span className="text-2xl font-bold text-blue-900 dark:text-blue-100">
-                                {localConfig.maxBalancePercentRisk || 100}%
-                            </span>
-                        </div>
-                        <Slider
-                            id="maxBalancePercentRisk"
-                            value={[localConfig.maxBalancePercentRisk || 100]}
-                            onValueChange={(values) => handleSliderChange('maxBalancePercentRisk', values)}
-                            min={10}
-                            max={100}
-                            step={5}
-                            className="w-full"
-                        />
-                        <p className="text-xs text-gray-600 dark:text-gray-400">
-                            Set to 100% to use your full available balance, or lower to limit exposure (e.g., 50% means only half of free balance is available for trading).
-                        </p>
-                    </div>
+                    {/* Max Balance Percent Risk removed per new policy - rely solely on absolute cap */}
 
                     {/* NEW: Absolute cap control, place near percent risk section and before quality filters */}
                     <div className="rounded-lg border bg-blue-50/50 p-4 mt-4">
@@ -288,11 +252,10 @@ export default function ScannerConfiguration({
                                     {capNum > 0 && (
                                         <>
                                             {" "}({usedPct.toFixed(1)}% of cap)
-                                            {" • "}Remaining: <span className="font-semibold">
-                                                {formatUSDT(remaining, { minDecimals: 2, maxDecimals: 2 })}
-                                            </span>
+                                            {" • "}Remaining: <span className="font-semibold">{formatUSDT(remaining, { minDecimals: 2, maxDecimals: 2 })}</span>
                                         </>
                                     )}
+                                    {" • "}Portfolio: <span className="font-semibold">{investedOfTotalPct.toFixed(1)}%</span>
                                 </p>
                             </div>
                             <div className="w-40">

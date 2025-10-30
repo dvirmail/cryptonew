@@ -1,438 +1,48 @@
 [
   {
-    "id": "trade_1761762560135_xblhvv26b",
-    "trade_id": "pos_1761761872889_5mr0216ke",
-    "strategy_name": "Crimson Sentinel of SOLUSDT-MACDEM",
-    "symbol": "SOL/USDT",
+    "id": "trade_1761848791811_mvsklxt7k",
+    "trade_id": "pos_1761847181350_18kw5x23k",
+    "strategy_name": "War Warrior of ETHUSDT-MACDMA",
+    "symbol": "ETH/USDT",
     "direction": "long",
-    "entry_price": 196.35,
-    "quantity_crypto": 0.582,
-    "entry_value_usdt": 114.27569999999999,
-    "entry_timestamp": "2025-10-29T18:17:52.889Z",
+    "entry_price": 3766.18,
+    "quantity_crypto": 0.018,
+    "entry_value_usdt": 67.79124,
+    "entry_timestamp": "2025-10-30T17:59:41.350Z",
     "trading_mode": "testnet",
     "trigger_signals": [
       {
         "type": "MACD",
-        "value": "MACD Below Zero",
-        "strength": 60
-      },
-      {
-        "type": "EMA",
-        "value": "Bearish EMA Alignment",
-        "strength": 47
+        "value": "MACD Below Signal",
+        "strength": 70
       },
       {
         "type": "MA200",
-        "value": "price_cross_down",
-        "strength": 80
+        "value": "Price Below MA200",
+        "strength": 75
       },
       {
         "type": "Ichimoku",
-        "value": "Kijun Bounce Bearish",
-        "strength": 82
-      },
-      {
-        "type": "TEMA",
-        "value": "price_cross_down",
-        "strength": 74
-      }
-    ],
-    "combined_strength": 576.4,
-    "conviction_score": 73.17478103892705,
-    "conviction_breakdown": {
-      "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
-      },
-      "signalStrength": {
-        "score": 37.44,
-        "details": "Avg Strength: 68.60, Confluence Bonus: 10"
-      },
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": 1.25,
-    "market_regime": "downtrend",
-    "regime_confidence": 0.91756496622833,
-    "atr_value": 1.4703441677713422,
-    "is_event_driven_strategy": false,
-    "fear_greed_score": "51",
-    "fear_greed_classification": "Neutral",
-    "lpm_score": 59,
-    "exit_price": 196.46,
-    "exit_value_usdt": 114.33972,
-    "pnl_usdt": 0.06402000000000793,
-    "pnl_percentage": 0.05602240896359238,
-    "exit_timestamp": "2025-10-29T18:29:20.029Z",
-    "duration_seconds": 687,
-    "exit_reason": "manual_close",
-    "total_fees_usdt": 0.22861541999999999,
-    "commission_migrated": true,
-    "created_date": "2025-10-29T18:29:20.135Z",
-    "updated_date": "2025-10-29T18:29:20.135Z"
-  },
-  {
-    "id": "trade_1761745133050_gi8udzkhs",
-    "trade_id": "pos_1761737098393_2uwq7l1a6",
-    "strategy_name": "Electric Lion of XRPUSDT-MACDEM",
-    "symbol": "XRP/USDT",
-    "direction": "long",
-    "entry_price": 2.6497,
-    "quantity_crypto": 40.3,
-    "entry_value_usdt": 106.78291,
-    "entry_timestamp": "2025-10-29T11:24:58.394Z",
-    "trading_mode": "testnet",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Above Signal",
-        "strength": 40
-      },
-      {
-        "type": "EMA",
-        "value": "Bullish EMA Alignment",
-        "strength": 47
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Bearish Ichimoku",
-        "strength": 55
-      },
-      {
-        "type": "ADX",
-        "value": "Bullish Directional Movement",
-        "strength": 53
+        "value": "Price Below Kumo",
+        "strength": 45
       },
       {
         "type": "TEMA",
         "value": "Price Below TEMA",
         "strength": 48
-      }
-    ],
-    "combined_strength": "396.90",
-    "conviction_score": 64,
-    "conviction_breakdown": {
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 29.880930101701974,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.20"
-      },
-      "signalStrength": {
-        "score": 29.439999999999998,
-        "details": "Avg Strength: 48.60, Confluence Bonus: 10"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": "1.00",
-    "market_regime": "downtrend",
-    "regime_confidence": "0.78",
-    "atr_value": "0.01053065",
-    "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "57.00",
-    "exit_price": 2.6377,
-    "exit_value_usdt": 106.29931,
-    "pnl_usdt": -0.4836000000000004,
-    "pnl_percentage": -0.45288145827829607,
-    "exit_timestamp": "2025-10-29T13:38:50.198Z",
-    "duration_seconds": 8031,
-    "exit_reason": "stop_loss",
-    "total_fees_usdt": 0.21308222000000002,
-    "commission_migrated": true,
-    "created_date": "2025-10-29T13:38:53.050Z",
-    "updated_date": "2025-10-29T13:38:53.050Z"
-  },
-  {
-    "id": "trade_1761745029918_hekws0eye",
-    "trade_id": "pos_1761737107392_ybgga658f",
-    "strategy_name": "Crimson Hurricane of XRPUSDT-MACDEM",
-    "symbol": "XRP/USDT",
-    "direction": "long",
-    "entry_price": 2.6497,
-    "quantity_crypto": 40.3,
-    "entry_value_usdt": 106.78291,
-    "entry_timestamp": "2025-10-29T11:25:07.392Z",
-    "trading_mode": "testnet",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Above Zero",
-        "strength": 42
-      },
-      {
-        "type": "EMA",
-        "value": "Bullish EMA Alignment",
-        "strength": 47
-      },
-      {
-        "type": "MA200",
-        "value": "Price Above MA200",
-        "strength": 42
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Bearish Ichimoku",
-        "strength": 55
-      },
-      {
-        "type": "PSAR",
-        "value": "Uptrending",
-        "strength": 51
-      }
-    ],
-    "combined_strength": "418.60",
-    "conviction_score": 64,
-    "conviction_breakdown": {
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 29.880930101701974,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.20"
-      },
-      "signalStrength": {
-        "score": 28.96,
-        "details": "Avg Strength: 47.40, Confluence Bonus: 10"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": "1.00",
-    "market_regime": "downtrend",
-    "regime_confidence": "0.78",
-    "atr_value": "0.01053065",
-    "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "57.00",
-    "exit_price": 2.6407,
-    "exit_value_usdt": 106.42020999999998,
-    "pnl_usdt": -0.36270000000001373,
-    "pnl_percentage": -0.3396610937087346,
-    "exit_timestamp": "2025-10-29T13:37:07.724Z",
-    "duration_seconds": 7920,
-    "exit_reason": "timeout",
-    "total_fees_usdt": 0.21320312,
-    "commission_migrated": true,
-    "created_date": "2025-10-29T13:37:09.918Z",
-    "updated_date": "2025-10-29T13:37:09.918Z"
-  },
-  {
-    "id": "trade_1761743231795_vcsfowq5c",
-    "trade_id": "pos_1761737168741_vec05j5kr",
-    "strategy_name": "Steel Knight of SOLUSDT-MACDEM",
-    "symbol": "SOL/USDT",
-    "direction": "long",
-    "entry_price": 198.84,
-    "quantity_crypto": 0.538,
-    "entry_value_usdt": 106.97592,
-    "entry_timestamp": "2025-10-29T11:26:08.741Z",
-    "trading_mode": "testnet",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Above Signal",
-        "strength": 70
-      },
-      {
-        "type": "EMA",
-        "value": "Price Above EMA",
-        "strength": 48
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Bullish Ichimoku",
-        "strength": 55
-      },
-      {
-        "type": "ADX",
-        "value": "Bullish Directional Movement",
-        "strength": 65
-      },
-      {
-        "type": "PSAR",
-        "value": "Uptrending",
-        "strength": 59
-      }
-    ],
-    "combined_strength": 486,
-    "conviction_score": 68.64093010170197,
-    "conviction_breakdown": {
-      "marketRegime": {
-        "score": 29.880930101701974,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.20"
-      },
-      "signalStrength": {
-        "score": 33.76,
-        "details": "Avg Strength: 59.40, Confluence Bonus: 10"
-      },
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": 1.25,
-    "market_regime": "downtrend",
-    "regime_confidence": 0.7809488162723163,
-    "atr_value": 1.0040015403028506,
-    "is_event_driven_strategy": false,
-    "fear_greed_score": "51",
-    "fear_greed_classification": "Neutral",
-    "lpm_score": 57,
-    "exit_price": 201.01,
-    "exit_value_usdt": 108.14338000000001,
-    "pnl_usdt": 1.1674599999999933,
-    "pnl_percentage": 1.0913297123315167,
-    "exit_timestamp": "2025-10-29T13:07:07.898Z",
-    "duration_seconds": 6059,
-    "exit_reason": "take_profit",
-    "total_fees_usdt": 0.2151193,
-    "commission_migrated": true,
-    "created_date": "2025-10-29T13:07:11.795Z",
-    "updated_date": "2025-10-29T13:07:11.795Z"
-  },
-  {
-    "id": "trade_1761743230915_sg46rpijj",
-    "trade_id": "pos_1761737160444_q7jnb8jpn",
-    "strategy_name": "Battle Lion of SOLUSDT-MACDEM",
-    "symbol": "SOL/USDT",
-    "direction": "long",
-    "entry_price": 198.84,
-    "quantity_crypto": 0.538,
-    "entry_value_usdt": 106.97592,
-    "entry_timestamp": "2025-10-29T11:26:00.444Z",
-    "trading_mode": "testnet",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Above Signal",
-        "strength": 70
-      },
-      {
-        "type": "EMA",
-        "value": "Price Above EMA",
-        "strength": 48
-      },
-      {
-        "type": "MA200",
-        "value": "Price Below MA200",
-        "strength": 43
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Bullish Ichimoku",
-        "strength": 55
-      },
-      {
-        "type": "PSAR",
-        "value": "Uptrending",
-        "strength": 59
-      }
-    ],
-    "combined_strength": 482.5,
-    "conviction_score": 66.88093010170198,
-    "conviction_breakdown": {
-      "marketRegime": {
-        "score": 29.880930101701974,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.20"
-      },
-      "signalStrength": {
-        "score": 32,
-        "details": "Avg Strength: 55.00, Confluence Bonus: 10"
-      },
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": 1.25,
-    "market_regime": "downtrend",
-    "regime_confidence": 0.7809488162723163,
-    "atr_value": 1.0040015403028506,
-    "is_event_driven_strategy": false,
-    "fear_greed_score": "51",
-    "fear_greed_classification": "Neutral",
-    "lpm_score": 57,
-    "exit_price": 201.01,
-    "exit_value_usdt": 108.14338000000001,
-    "pnl_usdt": 1.1674599999999933,
-    "pnl_percentage": 1.0913297123315167,
-    "exit_timestamp": "2025-10-29T13:07:07.898Z",
-    "duration_seconds": 6067,
-    "exit_reason": "timeout",
-    "total_fees_usdt": 0.2151193,
-    "commission_migrated": true,
-    "created_date": "2025-10-29T13:07:10.915Z",
-    "updated_date": "2025-10-29T13:07:10.915Z"
-  },
-  {
-    "id": "trade_1761743230108_m4sl5e1g8",
-    "trade_id": "pos_1761737152124_ylbxepnlk",
-    "strategy_name": "Brutal Blizzard of SOLUSDT-MACDIA",
-    "symbol": "SOL/USDT",
-    "direction": "long",
-    "entry_price": 198.84,
-    "quantity_crypto": 0.538,
-    "entry_value_usdt": 106.97592,
-    "entry_timestamp": "2025-10-29T11:25:52.125Z",
-    "trading_mode": "testnet",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Above Signal",
-        "strength": 70
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Bullish Ichimoku",
-        "strength": 55
-      },
-      {
-        "type": "ADX",
-        "value": "Bullish Directional Movement",
-        "strength": 65
-      },
-      {
-        "type": "TEMA",
-        "value": "Price Above TEMA",
-        "strength": 48
       },
       {
         "type": "DEMA",
-        "value": "Price Above DEMA",
+        "value": "Price Below DEMA",
         "strength": 46
       }
     ],
-    "combined_strength": 435.3,
-    "conviction_score": 67.60093010170198,
+    "combined_strength": 462.8,
+    "conviction_score": 68.81722588794153,
     "conviction_breakdown": {
       "marketRegime": {
-        "score": 29.880930101701974,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.20"
+        "score": 31.097225887941534,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
       },
       "signalStrength": {
         "score": 32.72,
@@ -449,34 +59,34 @@
     },
     "conviction_multiplier": 1.25,
     "market_regime": "downtrend",
-    "regime_confidence": 0.7809488162723163,
-    "atr_value": 1.0040015403028506,
+    "regime_confidence": 0.9755561420706451,
+    "atr_value": 24.075842668963652,
     "is_event_driven_strategy": false,
-    "fear_greed_score": "51",
-    "fear_greed_classification": "Neutral",
-    "lpm_score": 57,
-    "exit_price": 201.01,
-    "exit_value_usdt": 108.14338000000001,
-    "pnl_usdt": 1.1674599999999933,
-    "pnl_percentage": 1.0913297123315167,
-    "exit_timestamp": "2025-10-29T13:07:07.898Z",
-    "duration_seconds": 6075,
-    "exit_reason": "take_profit",
-    "total_fees_usdt": 0.2151193,
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 68,
+    "exit_price": 3742.82,
+    "exit_value_usdt": 67.37076,
+    "pnl_usdt": -0.4204799999999941,
+    "pnl_percentage": -0.6202571305673035,
+    "exit_timestamp": "2025-10-30T18:26:25.805Z",
+    "duration_seconds": 1604,
+    "exit_reason": "timeout",
+    "total_fees_usdt": 0.135162,
     "commission_migrated": true,
-    "created_date": "2025-10-29T13:07:10.108Z",
-    "updated_date": "2025-10-29T13:07:10.108Z"
+    "created_date": "2025-10-30T18:26:31.811Z",
+    "updated_date": "2025-10-30T18:26:31.811Z"
   },
   {
-    "id": "trade_1761741842018_nbb8t9s1u",
-    "trade_id": "pos_1761737144340_sgendansc",
-    "strategy_name": "Storm Tornado of SOLUSDT-MACDMA",
-    "symbol": "SOL/USDT",
+    "id": "trade_1761848789353_21gexda2u",
+    "trade_id": "pos_1761844816817_2hr3aip31",
+    "strategy_name": "Phantom Hurricane of ETHUSDT-MACDEM",
+    "symbol": "ETH/USDT",
     "direction": "long",
-    "entry_price": 198.84,
-    "quantity_crypto": 0.538,
-    "entry_value_usdt": 106.97592,
-    "entry_timestamp": "2025-10-29T11:25:44.340Z",
+    "entry_price": 3747.61,
+    "quantity_crypto": 0.017,
+    "entry_value_usdt": 63.70937000000001,
+    "entry_timestamp": "2025-10-30T17:20:16.817Z",
     "trading_mode": "testnet",
     "trigger_signals": [
       {
@@ -485,114 +95,36 @@
         "strength": 70
       },
       {
-        "type": "MA200",
-        "value": "Price Below MA200",
-        "strength": 43
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Bullish Ichimoku",
-        "strength": 55
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 50
       },
       {
         "type": "ADX",
-        "value": "Bullish Directional Movement",
-        "strength": 65
+        "value": "Strong Trend",
+        "strength": 80
       },
       {
         "type": "PSAR",
-        "value": "Uptrending",
-        "strength": 59
-      }
-    ],
-    "combined_strength": 473.7,
-    "conviction_score": 68.24093010170198,
-    "conviction_breakdown": {
-      "marketRegime": {
-        "score": 29.880930101701974,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.20"
-      },
-      "signalStrength": {
-        "score": 33.36,
-        "details": "Avg Strength: 58.40, Confluence Bonus: 10"
-      },
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": 1.25,
-    "market_regime": "downtrend",
-    "regime_confidence": 0.7809488162723163,
-    "atr_value": 1.0040015403028506,
-    "is_event_driven_strategy": false,
-    "fear_greed_score": "51",
-    "fear_greed_classification": "Neutral",
-    "lpm_score": 57,
-    "exit_price": 198.45,
-    "exit_value_usdt": 106.7661,
-    "pnl_usdt": -0.20982000000000797,
-    "pnl_percentage": -0.19613759806880646,
-    "exit_timestamp": "2025-10-29T12:43:59.239Z",
-    "duration_seconds": 4694,
-    "exit_reason": "timeout",
-    "total_fees_usdt": 0.21374202,
-    "commission_migrated": true,
-    "created_date": "2025-10-29T12:44:02.018Z",
-    "updated_date": "2025-10-29T12:44:02.018Z"
-  },
-  {
-    "id": "trade_1761762990758_enaxpk3a5",
-    "trade_id": "pos_1761761880885_y7glvfmxg",
-    "strategy_name": "War Blizzard of SOLUSDT-MACDMA",
-    "symbol": "SOL/USDT",
-    "direction": "long",
-    "entry_price": 196.35,
-    "quantity_crypto": 0.582,
-    "entry_value_usdt": 114.27569999999999,
-    "entry_timestamp": "2025-10-29T18:18:00.885Z",
-    "trading_mode": "testnet",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Below Signal",
-        "strength": 59
-      },
-      {
-        "type": "MA200",
-        "value": "Price Below MA200",
-        "strength": 53
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Price Below Kumo",
-        "strength": 45
-      },
-      {
-        "type": "ADX",
-        "value": "Bearish Directional Movement",
-        "strength": 47
+        "value": "Downtrending",
+        "strength": 56
       },
       {
         "type": "DEMA",
-        "value": "Price Below DEMA",
-        "strength": 46
+        "value": "price_cross_down",
+        "strength": 70
       }
     ],
-    "combined_strength": 408.79999999999995,
-    "conviction_score": 65.73478103892705,
+    "combined_strength": 483.8,
+    "conviction_score": 72.13836812841964,
     "conviction_breakdown": {
       "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
+        "score": 31.05836812841965,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
       },
       "signalStrength": {
-        "score": 30,
-        "details": "Avg Strength: 50.00, Confluence Bonus: 10"
+        "score": 36.08,
+        "details": "Avg Strength: 65.20, Confluence Bonus: 10"
       },
       "volatility": {
         "score": 5,
@@ -605,34 +137,34 @@
     },
     "conviction_multiplier": 1.25,
     "market_regime": "downtrend",
-    "regime_confidence": 0.91756496622833,
-    "atr_value": 1.4703441677713422,
+    "regime_confidence": 0.9693389005471441,
+    "atr_value": 23.301121068313826,
     "is_event_driven_strategy": false,
-    "fear_greed_score": "51",
-    "fear_greed_classification": "Neutral",
-    "lpm_score": 59,
-    "exit_price": 194.43,
-    "exit_value_usdt": 113.15826,
-    "pnl_usdt": -1.1174399999999927,
-    "pnl_percentage": -0.9778456837280304,
-    "exit_timestamp": "2025-10-29T18:36:18.757Z",
-    "duration_seconds": 1097,
-    "exit_reason": "stop_loss",
-    "total_fees_usdt": 0.22743396,
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 66,
+    "exit_price": 3742.82,
+    "exit_value_usdt": 63.62794000000001,
+    "pnl_usdt": -0.08142999999999939,
+    "pnl_percentage": -0.1278147939620175,
+    "exit_timestamp": "2025-10-30T18:26:25.805Z",
+    "duration_seconds": 3968,
+    "exit_reason": "timeout",
+    "total_fees_usdt": 0.12733731,
     "commission_migrated": true,
-    "created_date": "2025-10-29T18:36:30.758Z",
-    "updated_date": "2025-10-29T18:36:30.758Z"
+    "created_date": "2025-10-30T18:26:29.353Z",
+    "updated_date": "2025-10-30T18:26:29.353Z"
   },
   {
-    "id": "trade_1761763008764_tt4axb6e4",
-    "trade_id": "pos_1761761899890_7rpahtip7",
-    "strategy_name": "Battle Typhoon of XRPUSDT-MACDEM",
+    "id": "trade_1761848892390_5u6g4nj04",
+    "trade_id": "pos_1761846473364_elnmy1pun",
+    "strategy_name": "Electric Lion of XRPUSDT-MACDEM",
     "symbol": "XRP/USDT",
     "direction": "long",
-    "entry_price": 2.6456,
-    "quantity_crypto": 43.2,
-    "entry_value_usdt": 114.28992000000001,
-    "entry_timestamp": "2025-10-29T18:18:19.890Z",
+    "entry_price": 2.4496,
+    "quantity_crypto": 27.8,
+    "entry_value_usdt": 68.09888000000001,
+    "entry_timestamp": "2025-10-30T17:47:53.364Z",
     "trading_mode": "testnet",
     "trigger_signals": [
       {
@@ -642,35 +174,35 @@
       },
       {
         "type": "EMA",
-        "value": "Bullish EMA Alignment",
-        "strength": 45
+        "value": "Bearish EMA Alignment",
+        "strength": 52
       },
       {
-        "type": "PSAR",
-        "value": "Uptrending",
-        "strength": 54
+        "type": "Ichimoku",
+        "value": "Bullish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80
       },
       {
         "type": "TEMA",
-        "value": "Price Above TEMA",
-        "strength": 48
-      },
-      {
-        "type": "DEMA",
-        "value": "Price Above DEMA",
-        "strength": 46
+        "value": "price_cross_up",
+        "strength": 74
       }
     ],
-    "combined_strength": 351.99999999999994,
-    "conviction_score": 64.37478103892707,
+    "combined_strength": 468.5,
+    "conviction_score": 70.18939555411552,
     "conviction_breakdown": {
       "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
+        "score": 31.109395554115526,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
       },
       "signalStrength": {
-        "score": 28.64,
-        "details": "Avg Strength: 46.60, Confluence Bonus: 10"
+        "score": 34.08,
+        "details": "Avg Strength: 60.20, Confluence Bonus: 10"
       },
       "volatility": {
         "score": 5,
@@ -681,24 +213,180 @@
         "details": "Not enough demo trades (0)"
       }
     },
-    "conviction_multiplier": 1,
+    "conviction_multiplier": 1.25,
     "market_regime": "downtrend",
-    "regime_confidence": 0.91756496622833,
-    "atr_value": 0.01400542028273257,
+    "regime_confidence": 0.9775032886584838,
+    "atr_value": 0.016509929437494474,
     "is_event_driven_strategy": false,
-    "fear_greed_score": "51",
-    "fear_greed_classification": "Neutral",
-    "lpm_score": 59,
-    "exit_price": 2.6247,
-    "exit_value_usdt": 113.38704,
-    "pnl_usdt": -0.9028800000000061,
-    "pnl_percentage": -0.7899909283338425,
-    "exit_timestamp": "2025-10-29T18:36:18.757Z",
-    "duration_seconds": 1078,
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 68,
+    "exit_price": 2.4326,
+    "exit_value_usdt": 67.62628,
+    "pnl_usdt": -0.4726000000000097,
+    "pnl_percentage": -0.6939908556499161,
+    "exit_timestamp": "2025-10-30T18:28:07.064Z",
+    "duration_seconds": 2413,
     "exit_reason": "stop_loss",
-    "total_fees_usdt": 0.22767696,
+    "total_fees_usdt": 0.13572516,
     "commission_migrated": true,
-    "created_date": "2025-10-29T18:36:48.764Z",
-    "updated_date": "2025-10-29T18:36:48.764Z"
+    "created_date": "2025-10-30T18:28:12.390Z",
+    "updated_date": "2025-10-30T18:28:12.390Z"
+  },
+  {
+    "id": "trade_1761848897840_kb9qxv140",
+    "trade_id": "pos_1761847190103_ic14zkqnz",
+    "strategy_name": "Blazing Eagle of ETHUSDT-MACDMA",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 3766.18,
+    "quantity_crypto": 0.018,
+    "entry_value_usdt": 67.79124,
+    "entry_timestamp": "2025-10-30T17:59:50.103Z",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70
+      },
+      {
+        "type": "MA200",
+        "value": "Bearish MA Alignment",
+        "strength": 55
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 45
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 56
+      }
+    ],
+    "combined_strength": 488.8,
+    "conviction_score": 70.57722588794154,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.097225887941534,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 34.480000000000004,
+        "details": "Avg Strength: 61.20, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9755561420706451,
+    "atr_value": 24.075842668963652,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 68,
+    "exit_price": 3740.11,
+    "exit_value_usdt": 67.32198,
+    "pnl_usdt": -0.46925999999999474,
+    "pnl_percentage": -0.6922133302178788,
+    "exit_timestamp": "2025-10-30T18:28:07.064Z",
+    "duration_seconds": 1696,
+    "exit_reason": "stop_loss",
+    "total_fees_usdt": 0.13511322,
+    "commission_migrated": true,
+    "created_date": "2025-10-30T18:28:17.840Z",
+    "updated_date": "2025-10-30T18:28:17.840Z"
+  },
+  {
+    "id": "trade_1761848898758_c9kv20fnr",
+    "trade_id": "pos_1761847198909_ez2ugsmns",
+    "strategy_name": "Nuclear Hawk of ETHUSDT-MACDEM",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 3766.18,
+    "quantity_crypto": 0.018,
+    "entry_value_usdt": 67.79124,
+    "entry_timestamp": "2025-10-30T17:59:58.909Z",
+    "trading_mode": "testnet",
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 51
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80
+      },
+      {
+        "type": "DEMA",
+        "value": "Price Below DEMA",
+        "strength": 46
+      }
+    ],
+    "combined_strength": 506.3,
+    "conviction_score": 71.85722588794154,
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.097225887941534,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 35.760000000000005,
+        "details": "Avg Strength: 64.40, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9755561420706451,
+    "atr_value": 24.075842668963652,
+    "is_event_driven_strategy": false,
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 68,
+    "exit_price": 3740.11,
+    "exit_value_usdt": 67.32198,
+    "pnl_usdt": -0.46925999999999474,
+    "pnl_percentage": -0.6922133302178788,
+    "exit_timestamp": "2025-10-30T18:28:07.064Z",
+    "duration_seconds": 1688,
+    "exit_reason": "stop_loss",
+    "total_fees_usdt": 0.13511322,
+    "commission_migrated": true,
+    "created_date": "2025-10-30T18:28:18.758Z",
+    "updated_date": "2025-10-30T18:28:18.758Z"
   }
 ]

@@ -36,6 +36,13 @@ export async function updatePerformanceSnapshot(params = {}) {
         // Determine which period types to process
         const periodTypes = periodType ? [periodType] : ['hourly', 'daily'];
         
+        // SAFETY: If there are no trades at all for this mode, force a zero baseline
+        let hasAnyTrades = false;
+        try {
+            const any = await queueEntityCall('Trade', 'filter', { trading_mode: mode }, '-created_date', 1).catch(() => []);
+            hasAnyTrades = Array.isArray(any) && any.length > 0;
+        } catch (_) {}
+        
         for (const currentPeriodType of periodTypes) {
             try {
                 console.log(`[updatePerformanceSnapshot] 📊 Processing ${currentPeriodType} snapshots for mode: ${mode}`);
@@ -43,7 +50,8 @@ export async function updatePerformanceSnapshot(params = {}) {
                 const snapshotResult = await createSnapshotForPeriod({
                     mode,
                     periodType: currentPeriodType,
-                    specificTimestamp
+                    specificTimestamp,
+                    forceZeroBaseline: !hasAnyTrades
                 });
                 
                 if (snapshotResult.success) {
@@ -96,7 +104,7 @@ export async function updatePerformanceSnapshot(params = {}) {
 /**
  * Creates a snapshot for a specific period type
  */
-async function createSnapshotForPeriod({ mode, periodType, specificTimestamp }) {
+async function createSnapshotForPeriod({ mode, periodType, specificTimestamp, forceZeroBaseline = false }) {
     const now = specificTimestamp || new Date();
     
     // Calculate period boundaries
@@ -118,7 +126,7 @@ async function createSnapshotForPeriod({ mode, periodType, specificTimestamp }) 
         console.log(`[createSnapshotForPeriod] 📈 ${periodType} period stats:`, periodStats);
 
         // 3. Get previous snapshot for cumulative calculations
-        const previousSnapshot = await getPreviousSnapshot(mode, periodType, periodStart);
+        const previousSnapshot = forceZeroBaseline ? null : await getPreviousSnapshot(mode, periodType, periodStart);
         console.log(`[createSnapshotForPeriod] 🔗 Previous ${periodType} snapshot:`, previousSnapshot ? 'found' : 'none');
 
         // 4. Calculate cumulative stats

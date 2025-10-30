@@ -1,223 +1,63 @@
 [
   {
-    "id": "54c0be35-44ba-46cc-90a5-d1c5e35d55e4",
-    "symbol": "SOL/USDT",
-    "side": "BUY",
-    "quantity": "0.61900000",
-    "entry_price": "196.29000000",
-    "current_price": "196.29000000",
-    "unrealized_pnl": "0.00000000",
-    "trading_mode": "testnet",
-    "entry_timestamp": "2025-10-29T18:25:11.834Z",
-    "created_date": "2025-10-29T18:25:11.841Z",
-    "updated_date": "2025-10-29T18:25:11.841Z",
-    "strategy_name": "Battle Lion of SOLUSDT-MACDEM",
-    "direction": "long",
-    "quantity_crypto": "0.61900000",
-    "entry_value_usdt": "121.50351000",
-    "status": "open",
-    "stop_loss_price": "194.79465583",
-    "take_profit_price": "198.53301625",
-    "is_trailing": false,
-    "trailing_stop_price": null,
-    "trailing_peak_price": null,
-    "peak_price": "196.29000000",
-    "trough_price": "196.29000000",
-    "time_exit_hours": "1.67",
-    "wallet_id": "hvazdukoq",
-    "last_updated_timestamp": "2025-10-29T18:25:11.834Z",
-    "last_price_update": "2025-10-29T18:25:11.834Z",
-    "binance_order_id": "2515335",
-    "binance_executed_price": "196.29000000",
-    "binance_executed_quantity": "0.61900000",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Below Zero",
-        "strength": 60
-      },
-      {
-        "type": "EMA",
-        "value": "Bearish EMA Alignment",
-        "strength": 47
-      },
-      {
-        "type": "MA200",
-        "value": "Price Below MA200",
-        "strength": 53
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Price Below Kumo",
-        "strength": 45
-      },
-      {
-        "type": "PSAR",
-        "value": "Uptrending",
-        "strength": 52
-      }
-    ],
-    "combined_strength": "451.80",
-    "conviction_score": 66,
-    "conviction_breakdown": {
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
-      },
-      "signalStrength": {
-        "score": 30.560000000000002,
-        "details": "Avg Strength: 51.40, Confluence Bonus: 10"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": "1.25",
-    "market_regime": "downtrend",
-    "regime_confidence": "0.92",
-    "atr_value": "1.49534417",
-    "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "66.00",
-    "conviction_details": {},
-    "position_id": "pos_1761762311834_dg5h4s68m"
-  },
-  {
-    "id": "f013f607-73c0-420b-8096-42e8ff02f196",
-    "symbol": "SOL/USDT",
-    "side": "BUY",
-    "quantity": "0.61900000",
-    "entry_price": "196.29000000",
-    "current_price": "196.29000000",
-    "unrealized_pnl": "0.00000000",
-    "trading_mode": "testnet",
-    "entry_timestamp": "2025-10-29T18:25:03.835Z",
-    "created_date": "2025-10-29T18:25:03.841Z",
-    "updated_date": "2025-10-29T18:25:03.841Z",
-    "strategy_name": "Brutal Blizzard of SOLUSDT-MACDIA",
-    "direction": "long",
-    "quantity_crypto": "0.61900000",
-    "entry_value_usdt": "121.50351000",
-    "status": "open",
-    "stop_loss_price": "194.79465583",
-    "take_profit_price": "198.53301625",
-    "is_trailing": false,
-    "trailing_stop_price": null,
-    "trailing_peak_price": null,
-    "peak_price": "196.29000000",
-    "trough_price": "196.29000000",
-    "time_exit_hours": "1.76",
-    "wallet_id": "hvazdukoq",
-    "last_updated_timestamp": "2025-10-29T18:25:03.835Z",
-    "last_price_update": "2025-10-29T18:25:03.835Z",
-    "binance_order_id": "2515328",
-    "binance_executed_price": "196.29000000",
-    "binance_executed_quantity": "0.61900000",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Below Signal",
-        "strength": 59
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Price Below Kumo",
-        "strength": 45
-      },
-      {
-        "type": "ADX",
-        "value": "Bearish Directional Movement",
-        "strength": 47
-      },
-      {
-        "type": "TEMA",
-        "value": "price_cross_down",
-        "strength": 74
-      },
-      {
-        "type": "DEMA",
-        "value": "Price Below DEMA",
-        "strength": 46
-      }
-    ],
-    "combined_strength": "408.10",
-    "conviction_score": 67,
-    "conviction_breakdown": {
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
-      },
-      "signalStrength": {
-        "score": 31.68,
-        "details": "Avg Strength: 54.20, Confluence Bonus: 10"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": "1.25",
-    "market_regime": "downtrend",
-    "regime_confidence": "0.92",
-    "atr_value": "1.49534417",
-    "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "66.00",
-    "conviction_details": {},
-    "position_id": "pos_1761762303835_v1y3djyo3"
-  },
-  {
-    "id": "ba315f82-c7f3-4e09-88df-ac40c5913f4b",
-    "symbol": "SOL/USDT",
-    "side": "BUY",
-    "quantity": "0.61900000",
-    "entry_price": "196.29000000",
-    "current_price": "196.29000000",
-    "unrealized_pnl": "0.00000000",
-    "trading_mode": "testnet",
-    "entry_timestamp": "2025-10-29T18:24:53.835Z",
-    "created_date": "2025-10-29T18:24:53.840Z",
-    "updated_date": "2025-10-29T18:24:53.840Z",
+    "id": "93c6697f-f77a-4fbc-bd21-1b6cad78aec5",
+    "position_id": "pos_1761846337370_ieojoxlvq",
     "strategy_name": "Storm Tornado of SOLUSDT-MACDMA",
+    "symbol": "SOL/USDT",
     "direction": "long",
-    "quantity_crypto": "0.61900000",
-    "entry_value_usdt": "121.50351000",
+    "entry_price": 182.73,
+    "current_price": 182.73,
+    "quantity_crypto": "0.27500000",
+    "entry_value_usdt": 50.250750000000004,
+    "conviction_score": 70.98939555411552,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.109395554115526,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 34.879999999999995,
+        "details": "Avg Strength: 62.20, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9775032886584838,
+    "combined_strength": 489.8,
+    "atr_value": 1.391196851056651,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-10-30T17:45:37.370Z",
     "status": "open",
-    "stop_loss_price": "194.79465583",
-    "take_profit_price": "198.53301625",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 181.33880314894333,
+    "take_profit_price": 184.81679527658497,
+    "enableTrailingTakeProfit": true,
     "is_trailing": false,
     "trailing_stop_price": null,
     "trailing_peak_price": null,
-    "peak_price": "196.29000000",
-    "trough_price": "196.29000000",
-    "time_exit_hours": "1.30",
-    "wallet_id": "hvazdukoq",
-    "last_updated_timestamp": "2025-10-29T18:24:53.835Z",
-    "last_price_update": "2025-10-29T18:24:53.835Z",
-    "binance_order_id": "2515326",
-    "binance_executed_price": "196.29000000",
-    "binance_executed_quantity": "0.61900000",
+    "peak_price": 182.73,
+    "trough_price": 182.73,
+    "time_exit_hours": 1.2954545454545454,
     "trigger_signals": [
       {
         "type": "MACD",
         "value": "MACD Below Signal",
-        "strength": 59
+        "strength": 51
       },
       {
         "type": "MA200",
         "value": "Price Below MA200",
-        "strength": 53
+        "strength": 75
       },
       {
         "type": "Ichimoku",
@@ -227,76 +67,509 @@
       {
         "type": "ADX",
         "value": "Strong Trend",
-        "strength": 74
+        "strength": 80
       },
       {
         "type": "PSAR",
-        "value": "Uptrending",
-        "strength": 52
+        "value": "Downtrending",
+        "strength": 60
       }
     ],
-    "combined_strength": "453.60",
-    "conviction_score": 68,
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 60,
+    "created_date": "2025-10-30T17:45:37.374Z",
+    "last_updated_timestamp": "2025-10-30T17:45:37.371Z",
+    "last_price_update": "2025-10-30T17:45:37.371Z",
+    "binance_order_id": 2627371,
+    "binance_executed_price": 182.73,
+    "binance_executed_quantity": "0.27500000",
+    "updated_date": "2025-10-30T17:45:37.374Z"
+  },
+  {
+    "id": "2268cfa9-8485-4776-88ee-031928a1f125",
+    "position_id": "pos_1761848429379_q0a1h3x4l",
+    "strategy_name": "Frozen Typhoon of ETHUSDT-MACDEM",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 3749.07,
+    "current_price": 3749.07,
+    "quantity_crypto": "0.01440000",
+    "entry_value_usdt": 53.986608000000004,
+    "conviction_score": 69.5371220395362,
+    "conviction_details": {},
     "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.097122039536195,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 33.44,
+        "details": "Avg Strength: 58.60, Confluence Bonus: 10"
+      },
       "volatility": {
         "score": 5,
         "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
-      },
-      "signalStrength": {
-        "score": 32.64,
-        "details": "Avg Strength: 56.60, Confluence Bonus: 10"
       },
       "demoPerformance": {
         "score": 0,
         "details": "Not enough demo trades (0)"
       }
     },
-    "conviction_multiplier": "1.25",
+    "conviction_multiplier": 1.25,
     "market_regime": "downtrend",
-    "regime_confidence": "0.92",
-    "atr_value": "1.49534417",
+    "regime_confidence": 0.9755395263257909,
+    "combined_strength": 474.09999999999997,
+    "atr_value": 22.905752107425183,
     "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "66.00",
-    "conviction_details": {},
-    "position_id": "pos_1761762293835_nmst4u7s6"
-  },
-  {
-    "id": "e7000958-01c1-44e8-b896-f54edd461ef4",
-    "symbol": "XRP/USDT",
-    "side": "BUY",
-    "quantity": "43.20000000",
-    "entry_price": "2.64560000",
-    "current_price": "2.64560000",
-    "unrealized_pnl": "0.00000000",
-    "trading_mode": "testnet",
-    "entry_timestamp": "2025-10-29T18:18:19.890Z",
-    "created_date": "2025-10-29T18:18:19.896Z",
-    "updated_date": "2025-10-29T18:18:19.896Z",
-    "strategy_name": "Battle Typhoon of XRPUSDT-MACDEM",
-    "direction": "long",
-    "quantity_crypto": "43.20000000",
-    "entry_value_usdt": "114.28992000",
+    "entry_timestamp": "2025-10-30T18:20:29.380Z",
     "status": "open",
-    "stop_loss_price": "2.63159458",
-    "take_profit_price": "2.66660813",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 3726.164247892575,
+    "take_profit_price": 3783.428628161138,
+    "enableTrailingTakeProfit": true,
     "is_trailing": false,
     "trailing_stop_price": null,
     "trailing_peak_price": null,
-    "peak_price": "2.64560000",
-    "trough_price": "2.64560000",
-    "time_exit_hours": "1.81",
+    "peak_price": 3749.07,
+    "trough_price": 3749.07,
+    "time_exit_hours": 0.3541666666666667,
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Price Below EMA",
+        "strength": 44
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 45
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 54
+      }
+    ],
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 62,
+    "created_date": "2025-10-30T18:20:29.389Z",
+    "last_updated_timestamp": "2025-10-30T18:20:29.380Z",
+    "last_price_update": "2025-10-30T18:20:29.380Z",
+    "binance_order_id": 10034239,
+    "binance_executed_price": 3749.07,
+    "binance_executed_quantity": "0.01440000",
+    "updated_date": "2025-10-30T18:20:29.389Z"
+  },
+  {
+    "id": "6b958632-47a2-4be3-855e-fe050cb04164",
+    "position_id": "pos_1761848437378_06u1e4qjc",
+    "strategy_name": "Savage Viper of ETHUSDT-MACDEM",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 3749.07,
+    "current_price": 3749.07,
+    "quantity_crypto": "0.01440000",
+    "entry_value_usdt": 53.986608000000004,
+    "conviction_score": 69.77712203953621,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.097122039536195,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 33.68000000000001,
+        "details": "Avg Strength: 59.20, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9755395263257909,
+    "combined_strength": 512.2,
+    "atr_value": 22.905752107425183,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-10-30T18:20:37.378Z",
+    "status": "open",
+    "trading_mode": "testnet",
     "wallet_id": "hvazdukoq",
-    "last_updated_timestamp": "2025-10-29T18:18:19.890Z",
-    "last_price_update": "2025-10-29T18:18:19.890Z",
-    "binance_order_id": "2457214",
-    "binance_executed_price": "2.64560000",
-    "binance_executed_quantity": "43.20000000",
+    "stop_loss_price": 3726.164247892575,
+    "take_profit_price": 3783.428628161138,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 3749.07,
+    "trough_price": 3749.07,
+    "time_exit_hours": 1.8214285714285716,
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 50
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bullish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "DEMA",
+        "value": "Price Above DEMA",
+        "strength": 46
+      }
+    ],
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 62,
+    "created_date": "2025-10-30T18:20:37.387Z",
+    "last_updated_timestamp": "2025-10-30T18:20:37.378Z",
+    "last_price_update": "2025-10-30T18:20:37.378Z",
+    "binance_order_id": 10034253,
+    "binance_executed_price": 3749.07,
+    "binance_executed_quantity": "0.01440000",
+    "updated_date": "2025-10-30T18:20:37.387Z"
+  },
+  {
+    "id": "7ea35db9-f134-4688-9c49-c04b667b3729",
+    "position_id": "pos_1761848800947_5d41szzp1",
+    "strategy_name": "Brutal Bear of ETHUSDT-MACDEM",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 3742.82,
+    "current_price": 3742.82,
+    "quantity_crypto": "0.01340000",
+    "entry_value_usdt": 50.153788000000006,
+    "conviction_score": 71.21840770772963,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.098407707729624,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 35.120000000000005,
+        "details": "Avg Strength: 62.80, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9757452332367401,
+    "combined_strength": 526.4,
+    "atr_value": 23.570752107425182,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-10-30T18:26:40.947Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 3719.249247892575,
+    "take_profit_price": 3778.176128161138,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 3742.82,
+    "trough_price": 3742.82,
+    "time_exit_hours": 0.3392857142857143,
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Price Below EMA",
+        "strength": 44
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 45
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80
+      }
+    ],
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 60,
+    "created_date": "2025-10-30T18:26:40.951Z",
+    "last_updated_timestamp": "2025-10-30T18:26:40.947Z",
+    "last_price_update": "2025-10-30T18:26:40.947Z",
+    "binance_order_id": 10035301,
+    "binance_executed_price": 3742.82,
+    "binance_executed_quantity": "0.01340000",
+    "updated_date": "2025-10-30T18:26:40.951Z"
+  },
+  {
+    "id": "9c84bc4d-78d8-4f83-9808-6f537da5cba0",
+    "position_id": "pos_1761848809734_kuz4tp814",
+    "strategy_name": "Lightning Wolf of ETHUSDT-MACDEM",
+    "symbol": "ETH/USDT",
+    "direction": "long",
+    "entry_price": 3742.82,
+    "current_price": 3742.82,
+    "quantity_crypto": "0.01340000",
+    "entry_value_usdt": 50.153788000000006,
+    "conviction_score": 69.61840770772962,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.098407707729624,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 33.519999999999996,
+        "details": "Avg Strength: 58.80, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9757452332367401,
+    "combined_strength": 510.2,
+    "atr_value": 23.570752107425182,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-10-30T18:26:49.734Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 3719.249247892575,
+    "take_profit_price": 3778.176128161138,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 3742.82,
+    "trough_price": 3742.82,
+    "time_exit_hours": 2.0277777777777777,
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal",
+        "strength": 70
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 50
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 45
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 54
+      }
+    ],
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 60,
+    "created_date": "2025-10-30T18:26:49.736Z",
+    "last_updated_timestamp": "2025-10-30T18:26:49.734Z",
+    "last_price_update": "2025-10-30T18:26:49.734Z",
+    "binance_order_id": 10035306,
+    "binance_executed_price": 3742.82,
+    "binance_executed_quantity": "0.01340000",
+    "updated_date": "2025-10-30T18:26:49.736Z"
+  },
+  {
+    "id": "7c76fb13-c723-4110-80f1-ac814a519298",
+    "position_id": "pos_1761848907770_d25b27iy4",
+    "strategy_name": "Crimson Hurricane of XRPUSDT-MACDEM",
+    "symbol": "XRP/USDT",
+    "direction": "long",
+    "entry_price": 2.4326,
+    "current_price": 2.4326,
+    "quantity_crypto": "28.00000000",
+    "entry_value_usdt": 68.1128,
+    "conviction_score": 68.49840770772963,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.098407707729624,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 32.400000000000006,
+        "details": "Avg Strength: 56.00, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9757452332367401,
+    "combined_strength": 484.8,
+    "atr_value": 0.01634088664152972,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-10-30T18:28:27.770Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 2.4162591133584703,
+    "take_profit_price": 2.4571113299622946,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 2.4326,
+    "trough_price": 2.4326,
+    "time_exit_hours": 2.2045454545454546,
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Zero",
+        "strength": 55
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 51
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 45
+      },
+      {
+        "type": "PSAR",
+        "value": "Downtrending",
+        "strength": 54
+      }
+    ],
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 68,
+    "created_date": "2025-10-30T18:28:27.776Z",
+    "last_updated_timestamp": "2025-10-30T18:28:27.770Z",
+    "last_price_update": "2025-10-30T18:28:27.770Z",
+    "binance_order_id": 2559304,
+    "binance_executed_price": 2.4326,
+    "binance_executed_quantity": "28.00000000",
+    "updated_date": "2025-10-30T18:28:27.776Z"
+  },
+  {
+    "id": "12fb8948-9c86-424f-a6c8-c9da04643bdc",
+    "position_id": "pos_1761848915429_xp9vl4hli",
+    "strategy_name": "Battle Typhoon of XRPUSDT-MACDEM",
+    "symbol": "XRP/USDT",
+    "direction": "long",
+    "entry_price": 2.4326,
+    "current_price": 2.4326,
+    "quantity_crypto": "28.00000000",
+    "entry_value_usdt": 68.1128,
+    "conviction_score": 65.21840770772963,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 31.098407707729624,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.24"
+      },
+      "signalStrength": {
+        "score": 29.119999999999997,
+        "details": "Avg Strength: 47.80, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9757452332367401,
+    "combined_strength": 361.59999999999997,
+    "atr_value": 0.01634088664152972,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-10-30T18:28:35.430Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 2.4162591133584703,
+    "take_profit_price": 2.4571113299622946,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 2.4326,
+    "trough_price": 2.4326,
+    "time_exit_hours": 1.8125,
     "trigger_signals": [
       {
         "type": "MACD",
@@ -305,12 +578,12 @@
       },
       {
         "type": "EMA",
-        "value": "Bullish EMA Alignment",
-        "strength": 45
+        "value": "Bearish EMA Alignment",
+        "strength": 51
       },
       {
         "type": "PSAR",
-        "value": "Uptrending",
+        "value": "Downtrending",
         "strength": 54
       },
       {
@@ -324,311 +597,15 @@
         "strength": 46
       }
     ],
-    "combined_strength": "352.00",
-    "conviction_score": 64,
-    "conviction_breakdown": {
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
-      },
-      "signalStrength": {
-        "score": 28.64,
-        "details": "Avg Strength: 46.60, Confluence Bonus: 10"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": "1.00",
-    "market_regime": "downtrend",
-    "regime_confidence": "0.92",
-    "atr_value": "0.01400542",
-    "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "59.00",
-    "conviction_details": {},
-    "position_id": "pos_1761761899890_7rpahtip7"
-  },
-  {
-    "id": "27919384-fd9f-4ce9-9a2d-cb7f9a05919d",
-    "symbol": "SOL/USDT",
-    "side": "BUY",
-    "quantity": "0.58200000",
-    "entry_price": "196.35000000",
-    "current_price": "196.35000000",
-    "unrealized_pnl": "0.00000000",
-    "trading_mode": "testnet",
-    "entry_timestamp": "2025-10-29T18:18:09.888Z",
-    "created_date": "2025-10-29T18:18:09.894Z",
-    "updated_date": "2025-10-29T18:18:09.894Z",
-    "strategy_name": "Ice Ninja of SOLUSDT-MACDEM",
-    "direction": "long",
-    "quantity_crypto": "0.58200000",
-    "entry_value_usdt": "114.27570000",
-    "status": "open",
-    "stop_loss_price": "194.87965583",
-    "take_profit_price": "198.55551625",
-    "is_trailing": false,
-    "trailing_stop_price": null,
-    "trailing_peak_price": null,
-    "peak_price": "196.35000000",
-    "trough_price": "196.35000000",
-    "time_exit_hours": "1.95",
-    "wallet_id": "hvazdukoq",
-    "last_updated_timestamp": "2025-10-29T18:18:09.888Z",
-    "last_price_update": "2025-10-29T18:18:09.888Z",
-    "binance_order_id": "2514723",
-    "binance_executed_price": "196.35000000",
-    "binance_executed_quantity": "0.58200000",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Below Zero",
-        "strength": 60
-      },
-      {
-        "type": "EMA",
-        "value": "Bearish EMA Alignment",
-        "strength": 47
-      },
-      {
-        "type": "MA200",
-        "value": "Price Below MA200",
-        "strength": 53
-      },
-      {
-        "type": "ADX",
-        "value": "Strong Trend",
-        "strength": 74
-      },
-      {
-        "type": "PSAR",
-        "value": "Uptrending",
-        "strength": 52
-      }
-    ],
-    "combined_strength": "454.10",
-    "conviction_score": 69,
-    "conviction_breakdown": {
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
-      },
-      "signalStrength": {
-        "score": 32.88,
-        "details": "Avg Strength: 57.20, Confluence Bonus: 10"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": "1.25",
-    "market_regime": "downtrend",
-    "regime_confidence": "0.92",
-    "atr_value": "1.47034417",
-    "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "59.00",
-    "conviction_details": {},
-    "position_id": "pos_1761761889888_ztzin0lsc"
-  },
-  {
-    "id": "3f02e5f5-4771-4921-8e7c-4335db46e9a0",
-    "symbol": "SOL/USDT",
-    "side": "BUY",
-    "quantity": "0.58200000",
-    "entry_price": "196.35000000",
-    "current_price": "196.35000000",
-    "unrealized_pnl": "0.00000000",
-    "trading_mode": "testnet",
-    "entry_timestamp": "2025-10-29T18:18:00.885Z",
-    "created_date": "2025-10-29T18:18:00.889Z",
-    "updated_date": "2025-10-29T18:18:00.889Z",
-    "strategy_name": "War Blizzard of SOLUSDT-MACDMA",
-    "direction": "long",
-    "quantity_crypto": "0.58200000",
-    "entry_value_usdt": "114.27570000",
-    "status": "open",
-    "stop_loss_price": "194.87965583",
-    "take_profit_price": "198.55551625",
-    "is_trailing": false,
-    "trailing_stop_price": null,
-    "trailing_peak_price": null,
-    "peak_price": "196.35000000",
-    "trough_price": "196.35000000",
-    "time_exit_hours": "1.40",
-    "wallet_id": "hvazdukoq",
-    "last_updated_timestamp": "2025-10-29T18:18:00.885Z",
-    "last_price_update": "2025-10-29T18:18:00.885Z",
-    "binance_order_id": "2514718",
-    "binance_executed_price": "196.35000000",
-    "binance_executed_quantity": "0.58200000",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Below Signal",
-        "strength": 59
-      },
-      {
-        "type": "MA200",
-        "value": "Price Below MA200",
-        "strength": 53
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Price Below Kumo",
-        "strength": 45
-      },
-      {
-        "type": "ADX",
-        "value": "Bearish Directional Movement",
-        "strength": 47
-      },
-      {
-        "type": "DEMA",
-        "value": "Price Below DEMA",
-        "strength": 46
-      }
-    ],
-    "combined_strength": "408.80",
-    "conviction_score": 66,
-    "conviction_breakdown": {
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
-      },
-      "signalStrength": {
-        "score": 30,
-        "details": "Avg Strength: 50.00, Confluence Bonus: 10"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": "1.25",
-    "market_regime": "downtrend",
-    "regime_confidence": "0.92",
-    "atr_value": "1.47034417",
-    "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "59.00",
-    "conviction_details": {},
-    "position_id": "pos_1761761880885_y7glvfmxg"
-  },
-  {
-    "id": "1b8745fe-bbc2-4f67-b695-575ff09596e7",
-    "symbol": "SOL/USDT",
-    "side": "BUY",
-    "quantity": "0.58200000",
-    "entry_price": "196.35000000",
-    "current_price": "196.35000000",
-    "unrealized_pnl": "0.00000000",
-    "trading_mode": "testnet",
-    "entry_timestamp": "2025-10-29T18:17:52.889Z",
-    "created_date": "2025-10-29T18:17:52.899Z",
-    "updated_date": "2025-10-29T18:17:52.899Z",
-    "strategy_name": "Crimson Sentinel of SOLUSDT-MACDEM",
-    "direction": "long",
-    "quantity_crypto": "0.58200000",
-    "entry_value_usdt": "114.27570000",
-    "status": "open",
-    "stop_loss_price": "194.87965583",
-    "take_profit_price": "198.55551625",
-    "is_trailing": false,
-    "trailing_stop_price": null,
-    "trailing_peak_price": null,
-    "peak_price": "196.35000000",
-    "trough_price": "196.35000000",
-    "time_exit_hours": "1.13",
-    "wallet_id": "hvazdukoq",
-    "last_updated_timestamp": "2025-10-29T18:17:52.889Z",
-    "last_price_update": "2025-10-29T18:17:52.889Z",
-    "binance_order_id": "2514700",
-    "binance_executed_price": "196.35000000",
-    "binance_executed_quantity": "0.58200000",
-    "trigger_signals": [
-      {
-        "type": "MACD",
-        "value": "MACD Below Zero",
-        "strength": 60
-      },
-      {
-        "type": "EMA",
-        "value": "Bearish EMA Alignment",
-        "strength": 47
-      },
-      {
-        "type": "MA200",
-        "value": "price_cross_down",
-        "strength": 80
-      },
-      {
-        "type": "Ichimoku",
-        "value": "Kijun Bounce Bearish",
-        "strength": 82
-      },
-      {
-        "type": "TEMA",
-        "value": "price_cross_down",
-        "strength": 74
-      }
-    ],
-    "combined_strength": "576.40",
-    "conviction_score": 73,
-    "conviction_breakdown": {
-      "volatility": {
-        "score": 5,
-        "details": "Squeeze just fired"
-      },
-      "marketRegime": {
-        "score": 30.73478103892706,
-        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
-      },
-      "signalStrength": {
-        "score": 37.44,
-        "details": "Avg Strength: 68.60, Confluence Bonus: 10"
-      },
-      "demoPerformance": {
-        "score": 0,
-        "details": "Not enough demo trades (0)"
-      }
-    },
-    "conviction_multiplier": "1.25",
-    "market_regime": "downtrend",
-    "regime_confidence": "0.92",
-    "atr_value": "1.47034417",
-    "is_event_driven_strategy": false,
-    "fear_greed_score": 51,
-    "fear_greed_classification": "Neutral",
-    "lpm_score": "59.00",
-    "conviction_details": {},
-    "position_id": "pos_1761761872889_5mr0216ke"
-  },
-  {
-    "id": "test-db-connection",
-    "symbol": "TEST/USDT",
-    "status": "open",
-    "wallet_id": "hvazdukoq",
-    "trading_mode": "testnet",
-    "created_date": "2025-10-29T18:40:01.386Z",
-    "updated_date": "2025-10-29T18:40:01.386Z"
+    "fear_greed_score": "34",
+    "fear_greed_classification": "Fear",
+    "lpm_score": 68,
+    "created_date": "2025-10-30T18:28:35.434Z",
+    "last_updated_timestamp": "2025-10-30T18:28:35.430Z",
+    "last_price_update": "2025-10-30T18:28:35.430Z",
+    "binance_order_id": 2559323,
+    "binance_executed_price": 2.4326,
+    "binance_executed_quantity": "28.00000000",
+    "updated_date": "2025-10-30T18:28:35.434Z"
   }
 ]

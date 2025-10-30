@@ -51,6 +51,13 @@ const RegimeBlockingIndicator = () => {
           0
         );
         const blockByMaxCap = maxInvestmentCap > 0 && currentAllocated >= maxInvestmentCap;
+
+        // NEW: Block when remaining cap is below next trade EBR size
+        const defaultPositionSize = Number(state.settings?.defaultPositionSize ?? 100);
+        const ebrPercent = Number(state.adjustedBalanceRiskFactor ?? 100);
+        const ebrSize = defaultPositionSize * (Math.max(0, Math.min(100, ebrPercent)) / 100);
+        const remainingCap = maxInvestmentCap > 0 ? (maxInvestmentCap - currentAllocated) : Infinity;
+        const blockByRemainingCap = maxInvestmentCap > 0 && remainingCap < ebrSize;
         
         // Check if strategy evaluation is blocked from scanner state
         const strategyEvaluationBlocked = state.strategyEvaluationBlocked;
@@ -100,6 +107,10 @@ const RegimeBlockingIndicator = () => {
           finalBlocked = true;
           finalReason = 'max_cap_reached';
           finalDetails = `Allocated $${currentAllocated.toFixed(1)} ≥ cap $${maxInvestmentCap.toFixed(1)}`;
+        } else if (blockByRemainingCap) {
+          finalBlocked = true;
+          finalReason = 'insufficient_remaining_cap';
+          finalDetails = `Remaining $${Math.max(0, remainingCap).toFixed(1)} < EBR size $${ebrSize.toFixed(1)}`;
         } else if (blockByInsufficientBalance) {
           finalBlocked = true;
           finalReason = 'insufficient_balance';
@@ -161,6 +172,8 @@ const RegimeBlockingIndicator = () => {
         return `Blocked: Max cap ${blockedDetails}`;
       case 'insufficient_balance':
         return `Blocked: Low balance ${blockedDetails}`;
+      case 'insufficient_remaining_cap':
+        return `Blocked: Not enough remaining cap ${blockedDetails}`;
       case 'downtrend_config':
         return `Blocked: Downtrend ON`;
       case 'low_confidence':
