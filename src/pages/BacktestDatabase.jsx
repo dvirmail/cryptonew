@@ -65,14 +65,38 @@ export default function BacktestDatabase() {
     const fetchCombinations = useCallback(async () => {
         setIsLoading(true);
         try {
+            // Load combinations from PostgreSQL database
+            // This ensures toggle states (includedInScanner, includedInLiveScanner) persist across page refreshes
             const data = await BacktestCombination.list();
+            
+            // Validate that IDs are UUIDs, not composite IDs
+            const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+            const hasCompositeIds = data.some(c => {
+                const id = c.id;
+                const isComposite = typeof id === 'string' && id.includes('-') && !uuidPattern.test(id) && id.length > 36;
+                if (isComposite) {
+                    console.warn(`[BacktestDatabase] Found composite ID (not UUID): ${id.substring(0, 50)}...`);
+                }
+                return isComposite;
+            });
+            
+            if (hasCompositeIds && data.length > 0) {
+                console.error(`[BacktestDatabase] ⚠️ WARNING: Received composite IDs instead of UUIDs!`);
+                console.error(`[BacktestDatabase] ⚠️ This means the browser has cached old data. Please do a hard refresh (Cmd+Shift+R or Ctrl+Shift+R).`);
+                toast({
+                    title: "Cache Warning",
+                    description: "Old cached data detected. Please do a hard refresh (Cmd+Shift+R or Ctrl+Shift+R) to load correct IDs.",
+                    variant: "destructive",
+                });
+            }
+            
             setCombinations(data);
             setSelectedIds(new Set()); // Clear selection on refetch
         } catch (error) {
             console.error("Failed to fetch backtest combinations:", error);
             toast({
                 title: "Error",
-                description: "Could not fetch combinations.",
+                description: "Could not fetch combinations from database.",
                 variant: "destructive",
             });
         } finally {
@@ -119,40 +143,60 @@ export default function BacktestDatabase() {
     };
 
     const handleToggleScanner = async (combinationId, newStatus) => {
+        // Optimistic UI update - update UI immediately for better UX
+        const previousStatus = combinations.find(c => c.id === combinationId)?.includedInScanner;
+        setCombinations(prev => prev.map(c =>
+            c.id === combinationId ? { ...c, includedInScanner: newStatus } : c
+        ));
+
         try {
+            // Persist to database
             await BacktestCombination.update(combinationId, { includedInScanner: newStatus });
-            setCombinations(prev => prev.map(c =>
-                c.id === combinationId ? { ...c, includedInScanner: newStatus } : c
-            ));
+            
             toast({
                 title: "Success",
-                description: `Strategy has been ${newStatus ? 'enabled' : 'disabled'} for the demo scanner.`,
+                description: `Strategy ${newStatus ? 'enabled' : 'disabled'} for demo scanner. Saved to database.`,
             });
         } catch (error) {
+            // Revert optimistic update on error
+            setCombinations(prev => prev.map(c =>
+                c.id === combinationId ? { ...c, includedInScanner: previousStatus } : c
+            ));
+            
             console.error("Failed to update scanner status:", error);
             toast({
                 title: "Error",
-                description: "Could not update scanner status.",
+                description: `Could not update scanner status in database: ${error.message || 'Unknown error'}. Changes have been reverted.`,
                 variant: "destructive",
             });
         }
     };
     
     const handleToggleLiveScanner = async (combinationId, newStatus) => {
+        // Optimistic UI update - update UI immediately for better UX
+        const previousStatus = combinations.find(c => c.id === combinationId)?.includedInLiveScanner;
+        setCombinations(prev => prev.map(c =>
+            c.id === combinationId ? { ...c, includedInLiveScanner: newStatus } : c
+        ));
+
         try {
+            // Persist to database
             await BacktestCombination.update(combinationId, { includedInLiveScanner: newStatus });
-            setCombinations(prev => prev.map(c =>
-                c.id === combinationId ? { ...c, includedInLiveScanner: newStatus } : c
-            ));
+            
             toast({
                 title: "Success",
-                description: `Strategy has been ${newStatus ? 'enabled' : 'disabled'} for the live scanner.`,
+                description: `Strategy ${newStatus ? 'enabled' : 'disabled'} for live scanner. Saved to database.`,
             });
         } catch (error) {
+            // Revert optimistic update on error
+            setCombinations(prev => prev.map(c =>
+                c.id === combinationId ? { ...c, includedInLiveScanner: previousStatus } : c
+            ));
+            
             console.error("Failed to update live scanner status:", error);
             toast({
                 title: "Error",
-                description: "Could not update live scanner status.",
+                description: `Could not update live scanner status in database: ${error.message || 'Unknown error'}. Changes have been reverted.`,
                 variant: "destructive",
             });
         }
@@ -223,18 +267,56 @@ export default function BacktestDatabase() {
 
     const handleBulkUpdate = async (field, value) => {
         if (selectedIds.size === 0) return;
+        
+        // Store previous states for rollback
+        const previousStates = new Map();
+        selectedIds.forEach(id => {
+            const combo = combinations.find(c => c.id === id);
+            if (combo) {
+                previousStates.set(id, combo[field]);
+            }
+        });
+
+        // Optimistic UI update
+        setCombinations(prev => prev.map(c =>
+            selectedIds.has(c.id) ? { ...c, [field]: value } : c
+        ));
+
         try {
+            // Persist to database
             await Promise.all(
                 Array.from(selectedIds).map(id => BacktestCombination.update(id, { [field]: value }))
             );
+            
+            const fieldLabel = field === 'includedInScanner' 
+                ? (value ? 'enabled' : 'disabled') + ' in demo scanner'
+                : field === 'includedInLiveScanner'
+                    ? (value ? 'enabled' : 'disabled') + ' in live scanner'
+                    : 'updated';
+            
             toast({
                 title: "Bulk Update Successful",
-                description: `${selectedIds.size} strategies have been updated.`,
+                description: `${selectedIds.size} strategies ${fieldLabel}. Saved to database.`,
             });
+            
+            // Refresh to ensure consistency (optional, but ensures we have latest data)
             await fetchCombinations();
         } catch (error) {
+            // Revert optimistic update on error
+            setCombinations(prev => prev.map(c => {
+                if (selectedIds.has(c.id)) {
+                    const previousValue = previousStates.get(c.id);
+                    return { ...c, [field]: previousValue };
+                }
+                return c;
+            }));
+            
             console.error("Bulk update failed:", error);
-            toast({ title: "Error", description: "Bulk update failed.", variant: "destructive" });
+            toast({ 
+                title: "Error", 
+                description: `Bulk update failed: ${error.message || 'Unknown error'}. Changes have been reverted.`, 
+                variant: "destructive" 
+            });
         }
     };
 
@@ -245,15 +327,56 @@ export default function BacktestDatabase() {
         }
         try {
             const idsArray = Array.from(selectedIds);
-            await BacktestCombination.bulkDelete(idsArray);
-            toast({
-                title: "Bulk Delete Successful",
-                description: `${selectedIds.size} strategies have been deleted.`,
-            });
+            console.log('[BacktestDatabase] Attempting bulk delete with IDs:', idsArray);
+            const result = await BacktestCombination.bulkDelete(idsArray);
+            console.log('[BacktestDatabase] Bulk delete result:', result);
+            
+            // Handle different response formats
+            const deletedCount = result?.data?.count || 
+                                result?.data?.deleted?.length || 
+                                result?.count || 
+                                (result?.data?.deleted && Array.isArray(result.data.deleted) ? result.data.deleted.length : 0) ||
+                                0;
+            
+            const databaseResult = result?.databaseResult || {};
+            const actuallyDeleted = databaseResult.deleted || 0;
+            
+            console.log('[BacktestDatabase] Deleted count determined:', deletedCount);
+            console.log('[BacktestDatabase] Database result:', databaseResult);
+            console.log('[BacktestDatabase] Actually deleted from DB:', actuallyDeleted);
+            
+            // Clear selection immediately
+            setSelectedIds(new Set());
+            
+            // Refresh the list from database
             await fetchCombinations();
+            
+            // Check if deletion actually worked
+            if (actuallyDeleted === 0 && selectedIds.size > 0) {
+                toast({
+                    title: "Delete Failed",
+                    description: `No strategies were deleted from the database. This usually means the page needs to be refreshed to load correct IDs. Please refresh the page and try again.`,
+                    variant: "destructive",
+                });
+            } else if (actuallyDeleted < selectedIds.size) {
+                toast({
+                    title: "Partial Delete",
+                    description: `Only ${actuallyDeleted} of ${selectedIds.size} strategies were deleted. Some IDs may be invalid - please refresh the page.`,
+                    variant: "destructive",
+                });
+            } else {
+                toast({
+                    title: "Bulk Delete Successful",
+                    description: `${actuallyDeleted} strategies have been deleted from the database.`,
+                });
+            }
         } catch (error) {
             console.error("Bulk delete failed:", error);
-            toast({ title: "Error", description: "Bulk delete failed.", variant: "destructive" });
+            toast({ 
+                title: "Error", 
+                description: `Bulk delete failed: ${error.message || 'Unknown error'}.`, 
+                variant: "destructive" 
+            });
         }
     };
 
@@ -389,12 +512,18 @@ export default function BacktestDatabase() {
                                     <ProfitFactorCell value={combination.profitFactor} />
                                 </TableCell>
                                 <TableCell>
-                                    <Badge variant={combination.successRate > 60 ? 'default' : 'destructive'}>
-                                        {combination.successRate?.toFixed(1) || 'N/A'}%
+                                    <Badge variant={(Number(combination.successRate) || 0) > 60 ? 'default' : 'destructive'}>
+                                        {combination.successRate != null && !isNaN(Number(combination.successRate)) 
+                                            ? Number(combination.successRate).toFixed(1) + '%'
+                                            : 'N/A'}
                                     </Badge>
                                 </TableCell>
                                 <TableCell>{combination.occurrences || 0}</TableCell>
-                                <TableCell>{combination.combinedStrength?.toFixed(0) || 'N/A'}</TableCell>
+                                <TableCell>
+                                    {combination.combinedStrength != null && !isNaN(Number(combination.combinedStrength))
+                                        ? Number(combination.combinedStrength).toFixed(0)
+                                        : 'N/A'}
+                                </TableCell>
                                 <TableCell>
                                     <Switch
                                         checked={combination.includedInScanner}

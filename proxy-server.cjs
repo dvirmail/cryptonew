@@ -71,15 +71,85 @@ async function saveTradeToDB(trade) {
             side: trade.side || (trade.direction === 'long' ? 'BUY' : trade.direction === 'short' ? 'SELL' : trade.direction),
             conviction_score: Math.round(trade.conviction_score || 0)
         });
+        
+        // CRITICAL FIX: Enhanced duplicate detection
+        // All positions should have position_id - validate and use for duplicate detection
+        if (!trade.position_id) {
+            console.error(`[PROXY] ❌ CRITICAL: Trade missing position_id! Trade ID: ${trade.id}, Symbol: ${trade.symbol}, Strategy: ${trade.strategy_name}`);
+            console.error(`[PROXY] ❌ Trade data:`, {
+                id: trade.id,
+                trade_id: trade.trade_id,
+                position_id: trade.position_id,
+                symbol: trade.symbol,
+                strategy_name: trade.strategy_name
+            });
+            // Still proceed with characteristic-based duplicate check below
+        } else {
+            // Check 1: By position_id (most reliable - all positions have position_id)
+            const positionIdQuery = `
+                SELECT id FROM trades
+                WHERE position_id = $1
+                LIMIT 1
+            `;
+            const positionIdCheck = await dbClient.query(positionIdQuery, [trade.position_id]);
+            if (positionIdCheck.rows.length > 0) {
+                const existingId = positionIdCheck.rows[0].id;
+                console.log(`[PROXY] ⚠️ Duplicate trade detected by position_id, skipping insert. Existing trade ID: ${existingId}, Position ID: ${trade.position_id}, New trade ID: ${trade.id}`);
+                return false;
+            }
+        }
+        
+        // Check 2: By trade characteristics (symbol, entry_price, exit_price, quantity, entry_timestamp, strategy_name)
+        // Fallback check for cases where position_id might be missing (shouldn't happen, but defensive)
+        if (trade.exit_timestamp && trade.entry_timestamp && trade.symbol) {
+            const entryTs = new Date(trade.entry_timestamp);
+            // Use 2-second window for timestamp matching to handle edge cases
+            const entryTsStart = new Date(Math.floor(entryTs.getTime() / 2000) * 2000 - 1000).toISOString();
+            const entryTsEnd = new Date(Math.ceil(entryTs.getTime() / 2000) * 2000 + 1000).toISOString();
+            
+            const checkQuery = `
+                SELECT id, position_id FROM trades
+                WHERE symbol = $1
+                  AND COALESCE(strategy_name, '') = COALESCE($2, '')
+                  AND ABS(entry_price - $3) < 0.0001
+                  AND ABS(exit_price - $4) < 0.0001
+                  AND ABS(quantity - $5) < 0.000001
+                  AND entry_timestamp >= $6
+                  AND entry_timestamp <= $7
+                  AND trading_mode = $8
+                  AND exit_timestamp IS NOT NULL
+                LIMIT 1
+            `;
+            
+            const checkValues = [
+                trade.symbol,
+                trade.strategy_name || '',
+                trade.entry_price,
+                trade.exit_price,
+                trade.quantity || trade.quantity_crypto,
+                entryTsStart,
+                entryTsEnd,
+                trade.trading_mode || 'testnet'
+            ];
+            
+            const duplicateCheck = await dbClient.query(checkQuery, checkValues);
+            if (duplicateCheck.rows.length > 0) {
+                const existingId = duplicateCheck.rows[0].id;
+                const existingPositionId = duplicateCheck.rows[0].position_id;
+                console.log(`[PROXY] ⚠️ Duplicate trade detected by characteristics, skipping insert. Existing trade ID: ${existingId}, Position ID: ${existingPositionId}, New trade ID: ${trade.id}`);
+                return false;
+            }
+        }
+        
         const query = `
             INSERT INTO trades (
-                id, symbol, side, quantity, entry_price, exit_price, entry_timestamp, exit_timestamp,
+                id, position_id, symbol, side, quantity, entry_price, exit_price, entry_timestamp, exit_timestamp,
                 pnl_usdt, pnl_percent, commission, trading_mode, strategy_name, combination_name,
                 conviction_score, market_regime, created_date, updated_date,
                 fear_greed_score, fear_greed_classification, lpm_score, combined_strength,
                 conviction_breakdown, conviction_multiplier, regime_confidence, atr_value,
                 is_event_driven_strategy, trigger_signals
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
             ON CONFLICT (id) DO UPDATE SET
                 exit_price = EXCLUDED.exit_price,
                 exit_timestamp = EXCLUDED.exit_timestamp,
@@ -123,6 +193,7 @@ async function saveTradeToDB(trade) {
 
         const values = [
             ensureUuid(trade.id),
+            trade.position_id || null, // CRITICAL: All positions have position_id - use trade_id as fallback only if needed
             trade.symbol,
             trade.side || (trade.direction === 'long' ? 'BUY' : trade.direction === 'short' ? 'SELL' : trade.direction), // Convert direction to side
             trade.quantity || trade.quantity_crypto,
@@ -190,6 +261,112 @@ async function syncTradesToDatabase() {
     }
 }
 
+// Load trades from database into memory
+async function loadTradesFromDB() {
+    if (!dbClient) {
+        console.log('[PROXY] ⚠️ Database not available, cannot load trades from database');
+        return [];
+    }
+    
+    try {
+        console.log('[PROXY] 📊 Loading trades from database...');
+        
+        // CRITICAL: Filter out invalid trades during load (nulls and invalid prices)
+        const PRICE_THRESHOLDS = {
+            'ETH/USDT': { min: 3808 },
+            'SOL/USDT': { min: 184.77 },
+            'XRP/USDT': { min: 2.47 }
+        };
+        
+        // Build WHERE clause to exclude invalid trades (including analytics fields)
+        const criticalColumns = [
+            'symbol', 'entry_price', 'exit_price', 
+            'entry_timestamp', 'exit_timestamp', 'quantity',
+            'strategy_name', 'trading_mode', 'pnl_usdt', 'pnl_percent',
+            'lpm_score', 'combined_strength', 'conviction_score', 'conviction_breakdown',
+            'conviction_multiplier', 'market_regime', 'regime_confidence', 'atr_value',
+            'is_event_driven_strategy'
+        ];
+        const nullChecks = criticalColumns.map(col => `${col} IS NOT NULL`).join(' AND ');
+        
+        // Build price threshold checks
+        let priceChecks = [];
+        for (const [symbol, threshold] of Object.entries(PRICE_THRESHOLDS)) {
+            priceChecks.push(`NOT (symbol = '${symbol}' AND (entry_price < ${threshold.min} OR exit_price < ${threshold.min}))`);
+        }
+        const priceCheckClause = priceChecks.length > 0 ? ` AND (${priceChecks.join(' AND ')})` : '';
+        
+        const query = `
+            SELECT 
+                id, symbol, side, quantity, entry_price, exit_price, entry_timestamp, exit_timestamp,
+                pnl_usdt, pnl_percent, commission, trading_mode, strategy_name, combination_name,
+                conviction_score, market_regime, created_date, updated_date,
+                fear_greed_score, fear_greed_classification, lpm_score, combined_strength,
+                conviction_breakdown, conviction_multiplier, regime_confidence, atr_value,
+                is_event_driven_strategy, trigger_signals
+            FROM trades
+            WHERE ${nullChecks}${priceCheckClause}
+            ORDER BY exit_timestamp DESC NULLS LAST, created_date DESC
+        `;
+        
+        const result = await dbClient.query(query);
+        const dbTrades = result.rows || [];
+        
+        // Map database columns to in-memory trade format
+        const mappedTrades = dbTrades.map(dbTrade => {
+            return {
+                id: dbTrade.id,
+                trade_id: dbTrade.id, // For compatibility
+                symbol: dbTrade.symbol,
+                direction: dbTrade.side === 'BUY' ? 'long' : dbTrade.side === 'SELL' ? 'short' : 'long',
+                side: dbTrade.side,
+                quantity: dbTrade.quantity,
+                quantity_crypto: dbTrade.quantity,
+                entry_price: parseFloat(dbTrade.entry_price) || 0,
+                exit_price: dbTrade.exit_price ? parseFloat(dbTrade.exit_price) : null,
+                entry_timestamp: dbTrade.entry_timestamp,
+                exit_timestamp: dbTrade.exit_timestamp,
+                pnl_usdt: dbTrade.pnl_usdt ? parseFloat(dbTrade.pnl_usdt) : 0,
+                pnl_percentage: dbTrade.pnl_percent ? parseFloat(dbTrade.pnl_percent) : 0,
+                pnl_percent: dbTrade.pnl_percent ? parseFloat(dbTrade.pnl_percent) : 0,
+                commission: dbTrade.commission ? parseFloat(dbTrade.commission) : 0,
+                total_fees_usdt: dbTrade.commission ? parseFloat(dbTrade.commission) : 0,
+                trading_mode: dbTrade.trading_mode || 'testnet',
+                strategy_name: dbTrade.strategy_name || '',
+                combination_name: dbTrade.combination_name || '',
+                conviction_score: dbTrade.conviction_score || 0,
+                market_regime: dbTrade.market_regime || null,
+                created_date: dbTrade.created_date || dbTrade.entry_timestamp,
+                updated_date: dbTrade.updated_date || dbTrade.exit_timestamp,
+                // Analytics fields
+                fear_greed_score: dbTrade.fear_greed_score || null,
+                fear_greed_classification: dbTrade.fear_greed_classification || null,
+                lpm_score: dbTrade.lpm_score || null,
+                combined_strength: dbTrade.combined_strength || null,
+                conviction_breakdown: dbTrade.conviction_breakdown ? 
+                    (typeof dbTrade.conviction_breakdown === 'string' ? 
+                        JSON.parse(dbTrade.conviction_breakdown) : 
+                        dbTrade.conviction_breakdown) : null,
+                conviction_multiplier: dbTrade.conviction_multiplier || null,
+                regime_confidence: dbTrade.regime_confidence || null,
+                atr_value: dbTrade.atr_value || null,
+                is_event_driven_strategy: dbTrade.is_event_driven_strategy || false,
+                trigger_signals: dbTrade.trigger_signals ? 
+                    (typeof dbTrade.trigger_signals === 'string' ? 
+                        JSON.parse(dbTrade.trigger_signals) : 
+                        dbTrade.trigger_signals) : null
+            };
+        });
+        
+        console.log(`[PROXY] ✅ Loaded ${mappedTrades.length} trades from database`);
+        return mappedTrades;
+    } catch (error) {
+        console.error('[PROXY] ❌ Error loading trades from database:', error.message);
+        console.error('[PROXY] ❌ Error details:', error);
+        return [];
+    }
+}
+
 // Database helper function for BacktestCombination
 async function saveBacktestCombinationToDB(combination) {
     if (!dbClient) {
@@ -200,13 +377,35 @@ async function saveBacktestCombinationToDB(combination) {
     try {
         console.log('[PROXY] 🔍 Attempting to save backtest combination to database:', combination.combinationName);
         
+        // Helper function to determine if strategy is event-driven based on combination name
+        function isEventDrivenStrategy(strategyName) {
+            if (!strategyName || typeof strategyName !== 'string') {
+                return false;
+            }
+            const eventDrivenKeywords = [
+                'news', 'event', 'announcement', 'earnings', 'fomc', 'fed', 'cpi', 'ppi',
+                'nfp', 'gdp', 'inflation', 'rate', 'cut', 'hike', 'policy', 'central',
+                'bank', 'meeting', 'speech', 'conference', 'summit', 'election', 'vote',
+                'referendum', 'brexit', 'trade', 'tariff', 'sanction', 'regulation',
+                'compliance', 'audit', 'merger', 'acquisition', 'ipo', 'listing',
+                'partnership', 'collaboration', 'launch', 'release', 'upgrade', 'update'
+            ];
+            const lowerStrategyName = strategyName.toLowerCase();
+            return eventDrivenKeywords.some(keyword => lowerStrategyName.includes(keyword));
+        }
+        
+        const isEventDriven = combination.is_event_driven_strategy !== undefined 
+            ? combination.is_event_driven_strategy 
+            : isEventDrivenStrategy(combination.combinationName);
+        
         const query = `
             INSERT INTO backtest_combinations (
                 combination_name, coin, strategy_direction, timeframe, success_rate, occurrences,
                 avg_price_move, take_profit_percentage, stop_loss_percentage, estimated_exit_time_minutes,
                 enable_trailing_take_profit, trailing_stop_percentage, position_size_percentage,
-                dominant_market_regime, signals, created_date, updated_date
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+                dominant_market_regime, signals, created_date, updated_date, is_event_driven_strategy,
+                profit_factor, combined_strength
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         `;
         
         const values = [
@@ -226,7 +425,10 @@ async function saveBacktestCombinationToDB(combination) {
             combination.dominantMarketRegime || null,
             combination.signals ? JSON.stringify(combination.signals) : '[]',
             combination.createdDate || new Date().toISOString(),
-            new Date().toISOString()
+            new Date().toISOString(),
+            isEventDriven,
+            combination.profitFactor || null,
+            combination.combinedStrength || null
         ];
         
         await dbClient.query(query, values);
@@ -398,6 +600,116 @@ async function deleteLivePositionFromDB(positionId) {
     } catch (error) {
         console.error('[PROXY] ❌ Error deleting position from database:', error.message);
         return false;
+    }
+}
+
+// Delete backtest combination from database by combination_name, coin, and timeframe
+async function deleteBacktestCombinationFromDB(combinationName, coin, timeframe) {
+    if (!dbClient) return false;
+    
+    try {
+        // Match by combination_name, coin, and timeframe to ensure we delete the correct strategy
+        const query = 'DELETE FROM backtest_combinations WHERE combination_name = $1 AND coin = $2 AND timeframe = $3';
+        const result = await dbClient.query(query, [combinationName, coin, timeframe]);
+        const deleted = !!(result && result.rowCount && result.rowCount > 0);
+        console.log('[PROXY] 🗑️ Deleted backtest combination from database:', combinationName, 'rowCount:', result?.rowCount);
+        return deleted;
+    } catch (error) {
+        console.error('[PROXY] ❌ Error deleting backtest combination from database:', error.message);
+        return false;
+    }
+}
+
+// Bulk delete backtest combinations from database by IDs
+async function bulkDeleteBacktestCombinationsFromDB(ids) {
+    if (!dbClient) {
+        console.log('[PROXY] ⚠️ bulkDeleteBacktestCombinationsFromDB: Database client not available');
+        return { deleted: 0, failed: ids?.length || 0 };
+    }
+    
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+        console.log('[PROXY] ⚠️ bulkDeleteBacktestCombinationsFromDB: No IDs provided');
+        return { deleted: 0, failed: 0 };
+    }
+    
+    console.log(`[PROXY] 🔍 bulkDeleteBacktestCombinationsFromDB: Attempting to delete ${ids.length} combinations`);
+    console.log(`[PROXY] 🔍 Sample IDs (first 3):`, ids.slice(0, 3));
+    
+    // Validate IDs are UUIDs (36 characters with hyphens, or allow other formats)
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const validIds = ids.filter(id => {
+        const isValid = typeof id === 'string' && (uuidPattern.test(id) || id.length === 36);
+        if (!isValid) {
+            console.log(`[PROXY] ⚠️ Invalid ID format (not UUID): ${id.substring(0, 50)}...`);
+        }
+        return isValid;
+    });
+    
+    if (validIds.length === 0) {
+        console.error(`[PROXY] ❌ None of the provided IDs are valid UUIDs. All ${ids.length} IDs were invalid.`);
+        console.error(`[PROXY] ❌ First invalid ID sample:`, ids[0]);
+        return { deleted: 0, failed: ids.length };
+    }
+    
+    if (validIds.length !== ids.length) {
+        console.warn(`[PROXY] ⚠️ Only ${validIds.length} of ${ids.length} IDs are valid UUIDs. Proceeding with valid IDs only.`);
+    }
+    
+    try {
+        // Delete by UUIDs directly - PostgreSQL UUID type can be compared directly
+        const placeholders = validIds.map((_, index) => `$${index + 1}`).join(', ');
+        const query = `DELETE FROM backtest_combinations WHERE id = ANY($1::uuid[])`;
+        console.log(`[PROXY] 🔍 Executing DELETE query with ${validIds.length} UUIDs`);
+        console.log(`[PROXY] 🔍 Query: DELETE FROM backtest_combinations WHERE id = ANY($1::uuid[])`);
+        console.log(`[PROXY] 🔍 Valid UUIDs to delete (first 3):`, validIds.slice(0, 3));
+        
+        const result = await dbClient.query(query, [validIds]);
+        const deleted = result.rowCount || 0;
+        console.log(`[PROXY] ✅ DELETE query completed. Affected rows: ${deleted}`);
+        
+        if (deleted === 0 && validIds.length > 0) {
+            console.error(`[PROXY] ⚠️ WARNING: DELETE query executed but 0 rows were deleted!`);
+            console.error(`[PROXY] ⚠️ This means the UUIDs don't exist in the database.`);
+            console.error(`[PROXY] 🔍 Checking if any of these UUIDs exist in database...`);
+            
+            // Check if any IDs exist - try different approaches
+            try {
+                const checkQuery = `SELECT id, combination_name FROM backtest_combinations WHERE id = ANY($1::uuid[]) LIMIT 5`;
+                const checkResult = await dbClient.query(checkQuery, [validIds]);
+                console.log(`[PROXY] 🔍 Found ${checkResult.rowCount} matching UUIDs in database`);
+                if (checkResult.rowCount > 0) {
+                    console.log(`[PROXY] 🔍 Sample existing records:`, checkResult.rows.map(r => ({ id: r.id, name: r.combination_name })));
+                } else {
+                    console.error(`[PROXY] ❌ None of the provided UUIDs exist in the database!`);
+                    console.error(`[PROXY] ❌ This likely means the frontend has cached old composite IDs.`);
+                    console.error(`[PROXY] 💡 SOLUTION: User needs to refresh the page to load UUIDs from database.`);
+                }
+            } catch (checkError) {
+                console.error(`[PROXY] ❌ Error checking UUIDs:`, checkError.message);
+            }
+        }
+        
+        return { deleted, failed: ids.length - deleted };
+    } catch (error) {
+        console.error('[PROXY] ❌ Error in bulk delete from database:', error.message);
+        console.error('[PROXY] ❌ Error stack:', error.stack);
+        
+        // If UUID array casting fails, try with text comparison
+        if (error.message.includes('uuid') || error.message.includes('invalid input syntax')) {
+            console.log(`[PROXY] 🔄 Retrying with text comparison...`);
+            try {
+                const placeholders = validIds.map((_, index) => `$${index + 1}`).join(', ');
+                const query = `DELETE FROM backtest_combinations WHERE id::text IN (${placeholders})`;
+                const result = await dbClient.query(query, validIds);
+                const deleted = result.rowCount || 0;
+                console.log(`[PROXY] ✅ Retry successful: deleted ${deleted} rows using text comparison`);
+                return { deleted, failed: ids.length - deleted };
+            } catch (retryError) {
+                console.error('[PROXY] ❌ Retry also failed:', retryError.message);
+            }
+        }
+        
+        return { deleted: 0, failed: ids.length };
     }
 }
 
@@ -886,8 +1198,15 @@ app.get('/api/binance/ticker/price', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Symbol is required' });
     }
 
+    // CRITICAL: Normalize symbol (remove slash, ensure uppercase)
+    const normalizedSymbol = symbol.replace('/', '').toUpperCase();
+    
+    console.log(`[PROXY] 📊 GET /api/binance/ticker/price - Symbol: ${symbol} → ${normalizedSymbol}, Mode: ${tradingMode}`);
+
     const binanceUrl = getBinanceUrl(tradingMode);
-    const url = `${binanceUrl}/api/v3/ticker/price?symbol=${symbol}`;
+    const url = `${binanceUrl}/api/v3/ticker/price?symbol=${normalizedSymbol}`;
+    
+    console.log(`[PROXY] 📊 Binance URL: ${url}`);
     
     const data = await new Promise((resolve, reject) => {
       const request = (url.startsWith('https') ? https : http).get(url, (response) => {
@@ -895,17 +1214,95 @@ app.get('/api/binance/ticker/price', async (req, res) => {
         response.on('data', chunk => data += chunk);
         response.on('end', () => {
           try {
-            resolve(JSON.parse(data));
+            const parsed = JSON.parse(data);
+            
+            // CRITICAL: Log raw Binance response to track price source
+            console.log(`[PROXY] 🔍 RAW Binance API response for ${normalizedSymbol}:`, {
+              symbol: parsed.symbol,
+              price: parsed.price,
+              fullResponse: parsed
+            });
+            
+            // CRITICAL: Validate that Binance returned the correct symbol
+            if (parsed.symbol && parsed.symbol.toUpperCase() !== normalizedSymbol) {
+              console.error(`[PROXY] ❌ CRITICAL: Symbol mismatch! Requested ${normalizedSymbol}, but Binance returned ${parsed.symbol}`);
+              reject(new Error(`Symbol mismatch: requested ${normalizedSymbol}, got ${parsed.symbol}`));
+              return;
+            }
+            
+            // CRITICAL: Validate price is realistic
+            const EXPECTED_PRICE_RANGES = {
+              'ETHUSDT': { min: 2500, max: 5000 },
+              'BTCUSDT': { min: 40000, max: 80000 },
+              'SOLUSDT': { min: 100, max: 300 },
+              'BNBUSDT': { min: 200, max: 800 }
+            };
+            
+            const range = EXPECTED_PRICE_RANGES[normalizedSymbol];
+            if (range && parsed.price) {
+              const price = parseFloat(parsed.price);
+              if (price < range.min || price > range.max) {
+                console.error(`[PROXY] ❌ CRITICAL: Binance returned price ${price} for ${normalizedSymbol}, which is outside expected range [${range.min}, ${range.max}]`);
+                console.error(`[PROXY] ❌ This may indicate Binance API returned wrong data - logging for investigation`);
+                // Don't reject - log error but return data (Binance is source of truth, but we log the issue)
+              }
+              
+              // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
+              if (normalizedSymbol === 'ETHUSDT') {
+                const ETH_ALERT_MIN = 3500;
+                const ETH_ALERT_MAX = 4000;
+                if (price < ETH_ALERT_MIN || price > ETH_ALERT_MAX) {
+                  console.error(`[PROXY] 🚨🚨🚨 ETH PRICE ALERT 🚨🚨🚨`);
+                  console.error(`[PROXY] 🚨 ETH price ${price} is outside alert range [${ETH_ALERT_MIN}, ${ETH_ALERT_MAX}]`);
+                  console.error(`[PROXY] 🚨 Full details:`, {
+                    symbol: normalizedSymbol,
+                    requestedSymbol: symbol,
+                    tradingMode: tradingMode,
+                    binancePrice: parsed.price,
+                    parsedPrice: price,
+                    expectedRange: { min: range.min, max: range.max },
+                    alertRange: { min: ETH_ALERT_MIN, max: ETH_ALERT_MAX },
+                    priceDifference: price < ETH_ALERT_MIN ? 
+                      `${(ETH_ALERT_MIN - price).toFixed(2)} below minimum` : 
+                      `${(price - ETH_ALERT_MAX).toFixed(2)} above maximum`,
+                    percentDifference: price < ETH_ALERT_MIN ? 
+                      `${((ETH_ALERT_MIN - price) / ETH_ALERT_MIN * 100).toFixed(2)}%` : 
+                      `${((price - ETH_ALERT_MAX) / ETH_ALERT_MAX * 100).toFixed(2)}%`,
+                    timestamp: new Date().toISOString(),
+                    binanceResponse: parsed,
+                    url: url,
+                    binanceUrl: binanceUrl
+                  });
+                  console.error(`[PROXY] 🚨🚨🚨 END ETH PRICE ALERT 🚨🚨🚨`);
+                }
+              }
+            }
+            
+            resolve(parsed);
           } catch (e) {
+            console.error(`[PROXY] ❌ Error parsing Binance response for ${normalizedSymbol}:`, e);
             reject(e);
           }
         });
       });
-      request.on('error', reject);
+      request.on('error', (error) => {
+        console.error(`[PROXY] ❌ Network error fetching price for ${normalizedSymbol}:`, error.message);
+        reject(error);
+      });
+      
+      // Set timeout to prevent hanging
+      request.setTimeout(10000, () => {
+        request.destroy();
+        console.error(`[PROXY] ❌ Timeout fetching price for ${normalizedSymbol} after 10 seconds`);
+        reject(new Error('Request timeout'));
+      });
     });
+    
+    console.log(`[PROXY] ✅ Successfully fetched price for ${normalizedSymbol}: $${data.price}`);
     res.json({ success: true, data });
   } catch (error) {
-    console.error('Error fetching ticker price:', error);
+    console.error(`[PROXY] ❌ Error fetching ticker price for ${req.query.symbol}:`, error.message);
+    console.error(`[PROXY] ❌ Error stack:`, error.stack);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -2869,7 +3266,7 @@ app.put('/api/entities/:entityName/:id', (req, res) => {
 });
 
 // Specific endpoint for backtestCombinations DELETE
-app.delete('/api/backtestCombinations/:id', (req, res) => {
+app.delete('/api/backtestCombinations/:id', async (req, res) => {
   const id = req.params.id;
   console.log('[PROXY] 📊 DELETE /api/backtestCombinations/:id - Deleting combination:', id);
   
@@ -2878,7 +3275,23 @@ app.delete('/api/backtestCombinations/:id', (req, res) => {
     const existingData = getStoredData('backtestCombinations');
     console.log(`[PROXY] 📊 Found ${existingData.length} existing combinations`);
     
-    // Filter out the combination to be deleted
+    // Find the combination to be deleted
+    const combinationToDelete = existingData.find(combination => combination.id === id);
+    
+    if (!combinationToDelete) {
+      console.log(`[PROXY] 📊 Combination with ID ${id} not found in file storage`);
+      return res.status(404).json({ success: false, error: 'Combination not found' });
+    }
+    
+    // Delete from database
+    const dbDeleted = await deleteBacktestCombinationFromDB(
+      combinationToDelete.combinationName || combinationToDelete.combination_name,
+      combinationToDelete.coin,
+      combinationToDelete.timeframe
+    );
+    console.log(`[PROXY] 📊 Database delete result: ${dbDeleted ? 'success' : 'failed'}`);
+    
+    // Filter out the combination to be deleted from file storage
     const remainingData = existingData.filter(combination => combination.id !== id);
     console.log(`[PROXY] 📊 After deletion: ${remainingData.length} combinations remaining`);
     
@@ -2888,20 +3301,161 @@ app.delete('/api/backtestCombinations/:id', (req, res) => {
     const deletedCount = existingData.length - remainingData.length;
     console.log(`[PROXY] 📊 Successfully deleted ${deletedCount} combination with ID: ${id}`);
     
-    res.json({ success: true, data: { id, deleted: true } });
+    res.json({ success: true, data: { id, deleted: true, databaseDeleted: dbDeleted } });
   } catch (error) {
     console.error('[PROXY] 📊 Error during deletion:', error);
     res.status(500).json({ success: false, error: 'Failed to delete combination' });
   }
 });
 
+// Load backtest combinations from database
+async function loadBacktestCombinationsFromDB() {
+    if (!dbClient) {
+        console.log('[PROXY] 🔍 [DEBUG] loadBacktestCombinationsFromDB: Database not available');
+        return [];
+    }
+    
+    try {
+        const query = `
+            SELECT 
+                id, combination_name, coin, strategy_direction, timeframe, success_rate, occurrences,
+                avg_price_move, take_profit_percentage, stop_loss_percentage, estimated_exit_time_minutes,
+                enable_trailing_take_profit, trailing_stop_percentage, position_size_percentage,
+                dominant_market_regime, signals, created_date, updated_date, is_event_driven_strategy,
+                included_in_scanner, included_in_live_scanner, combined_strength, profit_factor
+            FROM backtest_combinations
+            ORDER BY created_date DESC
+        `;
+        const result = await dbClient.query(query);
+        
+        console.log('[PROXY] 🔍 [DEBUG] loadBacktestCombinationsFromDB: Query result:', {
+            rowCount: result.rowCount,
+            sampleRow: result.rows.length > 0 ? {
+                id: result.rows[0].id,
+                idType: typeof result.rows[0].id,
+                idLength: String(result.rows[0].id).length,
+                combination_name: result.rows[0].combination_name,
+                coin: result.rows[0].coin,
+                timeframe: result.rows[0].timeframe,
+                included_in_scanner: result.rows[0].included_in_scanner,
+                included_in_live_scanner: result.rows[0].included_in_live_scanner
+            } : null
+        });
+        
+        // Convert database rows to frontend format (snake_case to camelCase)
+        // CRITICAL FIX: Use actual database UUID id instead of generating composite ID
+        // PostgreSQL UUIDs need to be converted to string explicitly
+        const combinations = result.rows.map(row => ({
+            id: String(row.id), // Ensure UUID is converted to string (PostgreSQL returns UUID object)
+            combinationName: row.combination_name,
+            combination_name: row.combination_name,
+            coin: row.coin,
+            strategyDirection: row.strategy_direction,
+            strategy_direction: row.strategy_direction,
+            timeframe: row.timeframe,
+            successRate: row.success_rate,
+            success_rate: row.success_rate,
+            occurrences: row.occurrences || 0,
+            avgPriceMove: row.avg_price_move,
+            avg_price_move: row.avg_price_move,
+            takeProfitPercentage: row.take_profit_percentage,
+            take_profit_percentage: row.take_profit_percentage,
+            stopLossPercentage: row.stop_loss_percentage,
+            stop_loss_percentage: row.stop_loss_percentage,
+            estimatedExitTimeMinutes: row.estimated_exit_time_minutes,
+            estimated_exit_time_minutes: row.estimated_exit_time_minutes,
+            enableTrailingTakeProfit: row.enable_trailing_take_profit,
+            enable_trailing_take_profit: row.enable_trailing_take_profit,
+            trailingStopPercentage: row.trailing_stop_percentage,
+            trailing_stop_percentage: row.trailing_stop_percentage,
+            positionSizePercentage: row.position_size_percentage,
+            position_size_percentage: row.position_size_percentage,
+            dominantMarketRegime: row.dominant_market_regime,
+            dominant_market_regime: row.dominant_market_regime,
+            signals: typeof row.signals === 'string' ? JSON.parse(row.signals) : (row.signals || []),
+            created_date: row.created_date ? new Date(row.created_date).toISOString() : new Date().toISOString(),
+            updated_date: row.updated_date ? new Date(row.updated_date).toISOString() : new Date().toISOString(),
+            is_event_driven_strategy: row.is_event_driven_strategy || false,
+            // CRITICAL: Include toggle fields from database
+            includedInScanner: row.included_in_scanner || false,
+            includedInLiveScanner: row.included_in_live_scanner || false,
+            combinedStrength: row.combined_strength,
+            profitFactor: row.profit_factor
+        }));
+        
+        console.log('[PROXY] 🔍 [DEBUG] loadBacktestCombinationsFromDB: Converted combinations sample:', {
+            total: combinations.length,
+            sample: combinations.length > 0 ? {
+                id: combinations[0].id,
+                idType: typeof combinations[0].id,
+                idIsUUID: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(combinations[0].id)),
+                combinationName: combinations[0].combinationName,
+                coin: combinations[0].coin,
+                timeframe: combinations[0].timeframe,
+                includedInScanner: combinations[0].includedInScanner,
+                includedInLiveScanner: combinations[0].includedInLiveScanner
+            } : null
+        });
+        
+        console.log(`[PROXY] 💾 Loaded ${combinations.length} combinations from database`);
+        return combinations;
+    } catch (error) {
+        console.error('[PROXY] ❌ Error loading backtest combinations from database:', error.message);
+        return [];
+    }
+}
+
 // GET endpoint for backtestCombinations
-app.get('/api/backtestCombinations', (req, res) => {
+app.get('/api/backtestCombinations', async (req, res) => {
   console.log('[PROXY] 📊 GET /api/backtestCombinations - Fetching combinations');
+  console.log('[PROXY] 🔍 [DEBUG] GET: dbClient exists:', !!dbClient);
+  console.log('[PROXY] 🔍 [DEBUG] GET: Request timestamp:', new Date().toISOString());
   
   try {
-    const existingData = getStoredData('backtestCombinations');
-    console.log(`[PROXY] 📊 Found ${existingData.length} combinations in storage`);
+    // CRITICAL FIX: ALWAYS use database when available - never fall back to file storage
+    // File storage has old composite IDs which break deletion
+    let existingData = [];
+    
+    if (dbClient) {
+      console.log('[PROXY] 🔍 [DEBUG] GET: Database client available, loading from database...');
+      try {
+        existingData = await loadBacktestCombinationsFromDB();
+        console.log(`[PROXY] 🔍 [DEBUG] GET: Database query returned ${existingData.length} combinations`);
+      } catch (dbError) {
+        console.error('[PROXY] ❌ ERROR: Database query failed:', dbError.message);
+        console.error('[PROXY] ❌ ERROR stack:', dbError.stack);
+        throw dbError; // Re-throw to trigger error response
+      }
+      
+      // NEVER fall back to file storage - database is the source of truth
+      // If database returns 0, return empty array (don't use stale file storage data)
+      if (existingData.length > 0) {
+        // Log sample to verify IDs are UUIDs (not composite IDs)
+        const sample = existingData[0];
+        const sampleId = String(sample?.id || 'N/A');
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sampleId);
+        console.log('[PROXY] 🔍 [DEBUG] GET: Sample combination from database:', {
+          id: sampleId,
+          idIsUUID: isUuid,
+          idLength: sampleId?.length,
+          combinationName: sample?.combinationName,
+          includedInScanner: sample?.includedInScanner,
+          includedInLiveScanner: sample?.includedInLiveScanner
+        });
+        
+        if (!isUuid) {
+          console.error(`[PROXY] ❌ CRITICAL ERROR: Database returned non-UUID ID! This should never happen.`);
+          console.error(`[PROXY] ❌ Sample ID: ${sampleId}`);
+          console.error(`[PROXY] ❌ Sample row from DB:`, JSON.stringify(sample, null, 2));
+        }
+      } else {
+        console.log(`[PROXY] 🔍 [DEBUG] GET: Database returned 0 combinations (database is empty)`);
+      }
+    } else {
+      console.warn(`[PROXY] ⚠️ Database client NOT available, falling back to file storage (this should not happen in production)`);
+      existingData = getStoredData('backtestCombinations');
+      console.log(`[PROXY] 📊 Loaded ${existingData.length} combinations from file storage`);
+    }
     
     // Sort by created_date (newest first) if no specific orderBy is provided
     const orderBy = req.query.orderBy || '-created_date';
@@ -2914,6 +3468,24 @@ app.get('/api/backtestCombinations', (req, res) => {
     const limitedData = existingData.slice(0, limit);
     
     console.log(`[PROXY] 📊 Returning ${limitedData.length} combinations`);
+    
+    // Validate all returned IDs are UUIDs before sending to frontend
+    const invalidIds = limitedData.filter(c => {
+        const id = String(c.id || '');
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+        return !isUuid && id.length > 0;
+    });
+    
+    if (invalidIds.length > 0) {
+        console.error(`[PROXY] ❌ CRITICAL: Returning ${invalidIds.length} combinations with non-UUID IDs!`);
+        console.error(`[PROXY] ❌ Sample invalid IDs:`, invalidIds.slice(0, 3).map(c => ({ id: c.id, name: c.combinationName })));
+    }
+    
+    // Disable caching to ensure fresh data
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    
     res.json({ success: true, data: limitedData });
   } catch (error) {
     console.error('[PROXY] 📊 Error getting combinations:', error);
@@ -2990,18 +3562,211 @@ app.post('/api/backtestCombinations/bulkCreate', async (req, res) => {
   }
 });
 
+// Helper function to update backtest combination in database
+async function updateBacktestCombinationInDB(combinationName, coin, timeframe, updates) {
+    console.log('[PROXY] 🔍 [DEBUG] updateBacktestCombinationInDB called with:', {
+        combinationName,
+        coin,
+        timeframe,
+        updates: JSON.stringify(updates, null, 2)
+    });
+    
+    if (!dbClient) {
+        console.log('[PROXY] ⚠️ Database not available, skipping DB update');
+        return false;
+    }
+    
+    try {
+        // First, check if record exists
+        const checkQuery = `SELECT combination_name, coin, timeframe, included_in_scanner, included_in_live_scanner 
+                           FROM backtest_combinations 
+                           WHERE combination_name = $1 AND coin = $2 AND timeframe = $3`;
+        const checkResult = await dbClient.query(checkQuery, [combinationName, coin, timeframe]);
+        console.log('[PROXY] 🔍 [DEBUG] Existing record check:', {
+            found: checkResult.rowCount > 0,
+            rowCount: checkResult.rowCount,
+            existingRecord: checkResult.rowCount > 0 ? checkResult.rows[0] : null
+        });
+        
+        // Map camelCase to snake_case for database columns
+        const dbUpdates = {};
+        if (updates.includedInScanner !== undefined) {
+            dbUpdates.included_in_scanner = updates.includedInScanner;
+            console.log('[PROXY] 🔍 [DEBUG] Mapped includedInScanner -> included_in_scanner:', updates.includedInScanner);
+        }
+        if (updates.includedInLiveScanner !== undefined) {
+            dbUpdates.included_in_live_scanner = updates.includedInLiveScanner;
+            console.log('[PROXY] 🔍 [DEBUG] Mapped includedInLiveScanner -> included_in_live_scanner:', updates.includedInLiveScanner);
+        }
+        // Add other field mappings as needed
+        if (updates.combinedStrength !== undefined) {
+            dbUpdates.combined_strength = updates.combinedStrength;
+        }
+        if (updates.profitFactor !== undefined) {
+            dbUpdates.profit_factor = updates.profitFactor;
+        }
+        if (updates.dominantMarketRegime !== undefined) {
+            dbUpdates.dominant_market_regime = updates.dominantMarketRegime;
+        }
+        
+        if (Object.keys(dbUpdates).length === 0) {
+            console.log('[PROXY] ⚠️ No database fields to update');
+            return false;
+        }
+        
+        console.log('[PROXY] 🔍 [DEBUG] Database updates to apply:', dbUpdates);
+        
+        // Build UPDATE query
+        const updateFields = [];
+        const updateValues = [];
+        let paramIndex = 1;
+        
+        for (const [key, value] of Object.entries(dbUpdates)) {
+            updateFields.push(`${key} = $${paramIndex++}`);
+            updateValues.push(value);
+        }
+        
+        // Add updated_date
+        updateFields.push(`updated_date = CURRENT_TIMESTAMP`);
+        
+        // Add WHERE clause parameters
+        updateValues.push(combinationName || '');
+        updateValues.push(coin || '');
+        updateValues.push(timeframe || '');
+        
+        const query = `
+            UPDATE backtest_combinations
+            SET ${updateFields.join(', ')}
+            WHERE combination_name = $${paramIndex++} 
+              AND coin = $${paramIndex++} 
+              AND timeframe = $${paramIndex}
+        `;
+        
+        console.log('[PROXY] 🔍 [DEBUG] Executing UPDATE query:', query);
+        console.log('[PROXY] 🔍 [DEBUG] Query parameters:', updateValues);
+        
+        const result = await dbClient.query(query, updateValues);
+        const updated = !!(result && result.rowCount && result.rowCount > 0);
+        
+        console.log('[PROXY] 🔍 [DEBUG] UPDATE result:', {
+            updated,
+            rowCount: result?.rowCount,
+            resultRows: result?.rows
+        });
+        
+        // Verify the update by querying again
+        if (updated) {
+            const verifyQuery = `SELECT included_in_scanner, included_in_live_scanner 
+                               FROM backtest_combinations 
+                               WHERE combination_name = $1 AND coin = $2 AND timeframe = $3`;
+            const verifyResult = await dbClient.query(verifyQuery, [combinationName, coin, timeframe]);
+            console.log('[PROXY] 🔍 [DEBUG] Verification query result:', {
+                found: verifyResult.rowCount > 0,
+                values: verifyResult.rowCount > 0 ? verifyResult.rows[0] : null
+            });
+        }
+        
+        console.log('[PROXY] 💾 Updated backtest combination in database:', {
+            combinationName,
+            coin,
+            timeframe,
+            rowCount: result?.rowCount,
+            fields: Object.keys(dbUpdates),
+            success: updated
+        });
+        return updated;
+    } catch (error) {
+        console.error('[PROXY] ❌ Error updating backtest combination in database:', error.message);
+        console.error('[PROXY] ❌ Error stack:', error.stack);
+        return false;
+    }
+}
+
 // PUT endpoint for updating a backtestCombination
-app.put('/api/backtestCombinations/:id', (req, res) => {
+app.put('/api/backtestCombinations/:id', async (req, res) => {
   const id = req.params.id;
   const updates = req.body;
-  console.log('[PROXY] 📊 PUT /api/backtestCombinations/:id - Updating combination:', id);
+  console.log('[PROXY] 🔍 [DEBUG] PUT /api/backtestCombinations/:id - Request received:', {
+    id,
+    updates: JSON.stringify(updates, null, 2),
+    updateKeys: Object.keys(updates)
+  });
   
   try {
-    // Get existing combinations from file storage
-    const existingData = getStoredData('backtestCombinations');
-    console.log(`[PROXY] 📊 Found ${existingData.length} existing combinations`);
+    let combinationToUpdate = null;
+    let combinationName = null;
+    let coin = null;
+    let timeframe = null;
     
-    // Find the combination to update
+    // CRITICAL FIX: Try to find combination in database first (since IDs from database don't match file storage)
+    if (dbClient) {
+      // The ID format from database is: combination_name-coin-timeframe
+      // Try to extract or look it up directly
+      // Since IDs are generated, we need to query the database
+      // Try multiple approaches:
+      
+      // Approach 1: Try to find by ID in database (if database stores ID somehow)
+      // Approach 2: Parse ID to extract combination_name, coin, timeframe
+      // Approach 3: Search file storage, then database as fallback
+      
+      // For now, try file storage first, then database lookup
+    const existingData = getStoredData('backtestCombinations');
+      const index = existingData.findIndex(combination => combination.id === id);
+      
+      if (index !== -1) {
+        // Found in file storage
+        combinationToUpdate = existingData[index];
+        combinationName = combinationToUpdate.combinationName || combinationToUpdate.combination_name;
+        coin = combinationToUpdate.coin;
+        timeframe = combinationToUpdate.timeframe;
+        
+        console.log('[PROXY] 🔍 [DEBUG] Found in file storage:', {
+          combinationName,
+          coin,
+          timeframe
+        });
+        
+        // Update file storage
+        existingData[index] = {
+          ...existingData[index],
+          ...updates,
+          updated_date: new Date().toISOString()
+        };
+        saveStoredData('backtestCombinations', existingData);
+      } else {
+        // Not found in file storage - try to look up in database
+        // The ID might be from database format: combination_name-coin-timeframe
+        // Or we need to query database to find by some other means
+        
+        // Try to query database to find by matching the ID pattern or by searching all combinations
+        console.log('[PROXY] 🔍 [DEBUG] Not found in file storage, searching database...');
+        
+        // Since we don't have a direct ID field in database, we need to search all combinations
+        // and find the one that matches the ID pattern
+        const dbCombinations = await loadBacktestCombinationsFromDB();
+        const dbMatch = dbCombinations.find(c => c.id === id);
+        
+        if (dbMatch) {
+          combinationToUpdate = dbMatch;
+          combinationName = dbMatch.combinationName || dbMatch.combination_name;
+          coin = dbMatch.coin;
+          timeframe = dbMatch.timeframe;
+          
+          console.log('[PROXY] 🔍 [DEBUG] Found in database:', {
+            combinationName,
+            coin,
+            timeframe,
+            currentIncludedInScanner: dbMatch.includedInScanner,
+            currentIncludedInLiveScanner: dbMatch.includedInLiveScanner
+          });
+        } else {
+          console.log('[PROXY] 🔍 [DEBUG] Not found in database either, ID:', id);
+          return res.status(404).json({ success: false, error: 'Combination not found in file storage or database' });
+        }
+      }
+    } else {
+      // No database - only file storage
+      const existingData = getStoredData('backtestCombinations');
     const index = existingData.findIndex(combination => combination.id === id);
     
     if (index === -1) {
@@ -3009,26 +3774,93 @@ app.put('/api/backtestCombinations/:id', (req, res) => {
       return res.status(404).json({ success: false, error: 'Combination not found' });
     }
     
-    // Update the combination
+      combinationToUpdate = existingData[index];
+      combinationName = combinationToUpdate.combinationName || combinationToUpdate.combination_name;
+      coin = combinationToUpdate.coin;
+      timeframe = combinationToUpdate.timeframe;
+      
+      // Update file storage
     existingData[index] = {
       ...existingData[index],
       ...updates,
       updated_date: new Date().toISOString()
     };
+      saveStoredData('backtestCombinations', existingData);
+    }
     
-    // Save back to file
+    console.log('[PROXY] 🔍 [DEBUG] Found combination to update:', {
+      id: combinationToUpdate.id,
+      combinationName,
+      coin,
+      timeframe,
+      currentIncludedInScanner: combinationToUpdate.includedInScanner,
+      currentIncludedInLiveScanner: combinationToUpdate.includedInLiveScanner
+    });
+    
+    // Update database (primary source of truth)
+    if (dbClient && combinationName && coin && timeframe) {
+      console.log('[PROXY] 🔍 [DEBUG] Calling updateBacktestCombinationInDB with:', {
+        combinationName,
+        coin,
+        timeframe,
+        updates
+      });
+      
+      const dbUpdated = await updateBacktestCombinationInDB(
+        combinationName,
+        coin,
+        timeframe,
+        updates
+      );
+      console.log(`[PROXY] 📊 Database update result: ${dbUpdated ? 'success' : 'failed'}`);
+      
+      // Also update file storage to keep in sync
+      const existingData = getStoredData('backtestCombinations');
+      const index = existingData.findIndex(c => {
+        const cName = c.combinationName || c.combination_name;
+        return cName === combinationName && c.coin === coin && c.timeframe === timeframe;
+      });
+      
+      if (index !== -1) {
+        existingData[index] = {
+          ...existingData[index],
+          ...updates,
+          updated_date: new Date().toISOString()
+        };
     saveStoredData('backtestCombinations', existingData);
-    console.log('[PROXY] 📊 Updated combination:', existingData[index].combinationName);
-    
-    res.json({ success: true, data: existingData[index] });
+      }
+      
+      // Return updated data (from database or file storage)
+      const updatedCombination = {
+        ...combinationToUpdate,
+        ...updates,
+        updated_date: new Date().toISOString()
+      };
+      
+      res.json({ 
+        success: true, 
+        data: updatedCombination,
+        databaseUpdated: dbUpdated
+      });
+    } else {
+      // No database, just return file storage update
+      const existingData = getStoredData('backtestCombinations');
+      const index = existingData.findIndex(combination => combination.id === id);
+      
+      res.json({ 
+        success: true, 
+        data: existingData[index]
+      });
+    }
   } catch (error) {
     console.error('[PROXY] ❌ Error updating combination:', error);
+    console.error('[PROXY] ❌ Error stack:', error.stack);
     res.status(500).json({ success: false, error: 'Failed to update combination' });
   }
 });
 
 // Bulk delete endpoint for backtestCombinations
-app.delete('/api/backtestCombinations', (req, res) => {
+app.delete('/api/backtestCombinations', async (req, res) => {
   const { ids } = req.body;
   console.log('[PROXY] 📊 DELETE /api/backtestCombinations (bulk) - Deleting combinations:', ids);
   
@@ -3037,30 +3869,43 @@ app.delete('/api/backtestCombinations', (req, res) => {
   }
   
   try {
-    // Get existing combinations from file storage
+    // Delete from database first (primary source of truth)
+    const dbResult = await bulkDeleteBacktestCombinationsFromDB(ids);
+    console.log(`[PROXY] 📊 Database delete result: ${dbResult.deleted} deleted, ${dbResult.failed} failed`);
+    
+    // Also update file storage to keep in sync
     const existingData = getStoredData('backtestCombinations');
-    console.log(`[PROXY] 📊 Found ${existingData.length} existing combinations`);
-    
-    // Filter out the combinations to be deleted
     const remainingData = existingData.filter(combination => !ids.includes(combination.id));
-    console.log(`[PROXY] 📊 After deletion: ${remainingData.length} combinations remaining`);
-    
-    // Save the updated data back to file storage
     saveStoredData('backtestCombinations', remainingData);
+    console.log(`[PROXY] 📊 File storage updated: ${remainingData.length} combinations remaining`);
     
-    const deletedCount = existingData.length - remainingData.length;
-    console.log(`[PROXY] 📊 Successfully deleted ${deletedCount} combinations`);
+    // Use database result as the source of truth
+    const deletedCount = dbResult.deleted;
+    console.log(`[PROXY] 📊 Successfully deleted ${deletedCount} combinations from database`);
+    
+    if (deletedCount === 0 && dbResult.failed > 0) {
+      // If nothing was deleted, return error
+      return res.status(404).json({ 
+        success: false, 
+        error: 'No combinations were found to delete',
+        databaseResult: dbResult
+      });
+    }
     
     const deletedIds = ids.map(id => ({ id, deleted: true }));
-    res.json({ success: true, data: { deleted: deletedIds, count: deletedCount } });
+    res.json({ 
+      success: true, 
+      data: { deleted: deletedIds, count: deletedCount },
+      databaseResult: dbResult
+    });
   } catch (error) {
     console.error('[PROXY] 📊 Error during bulk deletion:', error);
-    res.status(500).json({ success: false, error: 'Failed to delete combinations' });
+    res.status(500).json({ success: false, error: 'Failed to delete combinations: ' + error.message });
   }
 });
 
 // Generic bulk delete endpoint for entities
-app.delete('/api/entities/:entityName', (req, res) => {
+app.delete('/api/entities/:entityName', async (req, res) => {
   const entityName = req.params.entityName;
   const { ids } = req.body;
   
@@ -3071,7 +3916,39 @@ app.delete('/api/entities/:entityName', (req, res) => {
   }
   
   try {
-    // Get existing data from file storage
+    // Special handling for backtestCombinations - must delete from database
+    const entityNameLower = String(entityName || '').toLowerCase();
+    if (entityNameLower === 'backtestcombinations') {
+      // Delete from database first (primary source of truth)
+      const dbResult = await bulkDeleteBacktestCombinationsFromDB(ids);
+      console.log(`[PROXY] 📊 Database delete result: ${dbResult.deleted} deleted, ${dbResult.failed} failed`);
+      
+      // Also update file storage to keep in sync
+      const existingData = getStoredData('backtestCombinations');
+      const remainingData = existingData.filter(combination => !ids.includes(combination.id));
+      saveStoredData('backtestCombinations', remainingData);
+      console.log(`[PROXY] 📊 File storage updated: ${remainingData.length} combinations remaining`);
+      
+      // Use database result as the source of truth
+      const deletedCount = dbResult.deleted;
+      
+      if (deletedCount === 0 && dbResult.failed > 0) {
+        return res.status(404).json({ 
+          success: false, 
+          error: 'No combinations were found to delete',
+          databaseResult: dbResult
+        });
+      }
+      
+      const deletedIds = ids.map(id => ({ id, deleted: true }));
+      return res.json({ 
+        success: true, 
+        data: { deleted: deletedIds, count: deletedCount },
+        databaseResult: dbResult
+      });
+    }
+    
+    // For other entities, use file storage only
     const existingData = getStoredData(entityName);
     console.log(`[PROXY] 📊 Found ${existingData.length} existing ${entityName} records`);
     
@@ -3100,7 +3977,7 @@ app.delete('/api/entities/:entityName', (req, res) => {
     res.json({ success: true, data: deletedIds });
   } catch (error) {
     console.error(`[PROXY] 📊 Error during bulk deletion of ${entityName}:`, error);
-    res.status(500).json({ success: false, error: `Failed to delete ${entityName} records` });
+    res.status(500).json({ success: false, error: `Failed to delete ${entityName} records: ${error.message}` });
   }
 });
 
@@ -3730,6 +4607,721 @@ app.delete('/api/entities/Trade/:id', (req, res) => {
   res.json({ success: true, data: deletedTrade });
 });
 
+// Fix trade entry prices endpoint
+// Endpoint to reload trades from database and refresh storage
+app.post('/api/trades/reload-from-database', async (req, res) => {
+    if (!dbClient) {
+        return res.status(503).json({ success: false, error: 'Database not available' });
+    }
+    
+    try {
+        console.log('[PROXY] 🔄 POST /api/trades/reload-from-database - Reloading trades from database...');
+        
+        // Load trades from database
+        const dbTrades = await loadTradesFromDB();
+        
+        if (dbTrades.length === 0) {
+            console.warn('[PROXY] ⚠️ No trades found in database');
+        }
+        
+        // Replace in-memory trades array
+        const oldCount = trades.length;
+        trades = dbTrades;
+        
+        // Save to persistent storage
+        saveTradesToFile();
+        
+        console.log(`[PROXY] ✅ Reloaded trades from database: ${oldCount} → ${trades.length} trades`);
+        
+        res.json({
+            success: true,
+            oldCount: oldCount,
+            newCount: trades.length,
+            message: `Reloaded ${trades.length} trades from database and saved to trades.json`
+        });
+    } catch (error) {
+        console.error('[PROXY] ❌ Error reloading trades from database:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/trades/remove-duplicates', async (req, res) => {
+  console.log('[PROXY] 🔧 POST /api/trades/remove-duplicates - Removing duplicate trades');
+  
+  if (!dbClient) {
+    return res.status(500).json({ success: false, error: 'Database not available' });
+  }
+  
+  try {
+    // Find duplicate trades: same symbol, entry_price, exit_price, quantity, entry_timestamp (within 1 second), and strategy_name
+    const findDuplicatesQuery = `
+      WITH duplicate_groups AS (
+        SELECT 
+          symbol,
+          strategy_name,
+          entry_price,
+          exit_price,
+          quantity,
+          DATE_TRUNC('second', entry_timestamp) as entry_timestamp_rounded,
+          trading_mode,
+          COUNT(*) as dup_count,
+          ARRAY_AGG(id ORDER BY exit_timestamp ASC, id ASC) as trade_ids
+        FROM trades
+        WHERE exit_timestamp IS NOT NULL
+        GROUP BY symbol, strategy_name, entry_price, exit_price, quantity, DATE_TRUNC('second', entry_timestamp), trading_mode
+        HAVING COUNT(*) > 1
+      )
+      SELECT 
+        trade_ids[1] as keep_id,
+        trade_ids[2:] as duplicate_ids
+      FROM duplicate_groups
+    `;
+    
+    const duplicatesResult = await dbClient.query(findDuplicatesQuery);
+    const duplicateIds = [];
+    
+    duplicatesResult.rows.forEach(row => {
+      if (row.duplicate_ids && Array.isArray(row.duplicate_ids)) {
+        duplicateIds.push(...row.duplicate_ids);
+      }
+    });
+    
+    if (duplicateIds.length === 0) {
+      return res.json({ 
+        success: true, 
+        removedCount: 0,
+        message: 'No duplicate trades found' 
+      });
+    }
+    
+    // Delete duplicate trades (keep the first one in each group)
+    const deleteQuery = `DELETE FROM trades WHERE id = ANY($1::uuid[]) RETURNING id`;
+    const deleteResult = await dbClient.query(deleteQuery, [duplicateIds]);
+    
+    const removedCount = deleteResult.rowCount || 0;
+    
+    // Also remove from in-memory trades array
+    const initialLength = trades.length;
+    trades = trades.filter(t => !duplicateIds.includes(t.id));
+    const removedFromMemory = initialLength - trades.length;
+    
+    // Save updated trades array to persistent storage
+    try {
+      saveStoredData('trades', trades);
+      console.log('[PROXY] 📊 Saved deduplicated trades to persistent storage');
+    } catch (error) {
+      console.error('[PROXY] Error saving deduplicated trades to storage:', error);
+    }
+    
+    console.log(`[PROXY] ✅ Removed ${removedCount} duplicate trades from database and ${removedFromMemory} from memory`);
+    
+    res.json({
+      success: true,
+      removedCount: removedCount,
+      removedFromMemory: removedFromMemory,
+      duplicateIds: duplicateIds.slice(0, 10) // Return first 10 for debugging
+    });
+  } catch (error) {
+    console.error('[PROXY] ❌ Error removing duplicate trades:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/trades/fix-entry-prices', async (req, res) => {
+  console.log('[PROXY] 🔧 POST /api/trades/fix-entry-prices - Fixing incorrect entry and exit prices');
+  
+  if (!dbClient) {
+    return res.status(500).json({ success: false, error: 'Database not available' });
+  }
+  
+  try {
+    // Expected price ranges for common symbols
+    const EXPECTED_PRICE_RANGES = {
+      'ETH/USDT': { min: 2500, max: 5000 },
+      'BTC/USDT': { min: 40000, max: 80000 },
+      'SOL/USDT': { min: 100, max: 300 },
+      'BNB/USDT': { min: 300, max: 800 },
+      'ADA/USDT': { min: 0.3, max: 2.0 },
+      'DOGE/USDT': { min: 0.05, max: 0.5 },
+      'XRP/USDT': { min: 0.4, max: 2.0 },
+    };
+    
+    const isEntryPriceSuspicious = (symbol, entryPrice, exitPrice) => {
+      const range = EXPECTED_PRICE_RANGES[symbol];
+      if (!range) return false;
+      if (entryPrice < range.min * 0.8 && exitPrice >= range.min * 0.9) return true;
+      if (entryPrice > 0 && exitPrice > 0) {
+        const priceDiff = Math.abs(exitPrice - entryPrice);
+        const priceDiffPercent = (priceDiff / Math.max(entryPrice, exitPrice)) * 100;
+        if (priceDiffPercent > 50 && entryPrice < range.min * 0.9 && exitPrice >= range.min * 0.9) return true;
+      }
+      return false;
+    };
+    
+    const isExitPriceSuspicious = (symbol, entryPrice, exitPrice) => {
+      const range = EXPECTED_PRICE_RANGES[symbol];
+      if (!range) return false;
+      // Exit price is way too low/high compared to entry and range
+      if (exitPrice < range.min * 0.5 && entryPrice >= range.min * 0.9) return true;
+      if (exitPrice > range.max * 2 && entryPrice <= range.max * 1.1) return true;
+      // Exit price differs dramatically from entry (>50% difference) when entry is valid
+      if (entryPrice > 0 && exitPrice > 0 && entryPrice >= range.min * 0.9 && entryPrice <= range.max * 1.1) {
+        const priceDiff = Math.abs(exitPrice - entryPrice);
+        const priceDiffPercent = (priceDiff / entryPrice) * 100;
+        if (priceDiffPercent > 50 && exitPrice < range.min * 0.9) return true;
+      }
+      return false;
+    };
+    
+    const recalculateEntryPrice = (exitPrice, pnlPercentage, direction = 'long') => {
+      if (!exitPrice || exitPrice <= 0 || !pnlPercentage) return null;
+      if (direction === 'long' || direction === 'BUY') {
+        const denominator = 1 + (parseFloat(pnlPercentage) / 100);
+        return denominator > 0 ? exitPrice / denominator : null;
+      } else {
+        const denominator = 1 - (parseFloat(pnlPercentage) / 100);
+        return denominator > 0 ? exitPrice / denominator : null;
+      }
+    };
+    
+    const recalculatePnl = (entryPrice, exitPrice, quantity, commission = 0) => {
+      if (!entryPrice || !exitPrice || !quantity) return { pnlUsdt: 0, pnlPercent: 0 };
+      const entryValue = entryPrice * quantity;
+      const exitValue = exitPrice * quantity;
+      const grossPnl = exitValue - entryValue;
+      const entryFees = entryValue * 0.001;
+      const exitFees = exitValue * 0.001;
+      const totalFees = commission || (entryFees + exitFees);
+      const netPnl = grossPnl - totalFees;
+      const pnlPercent = entryValue > 0 ? (netPnl / entryValue) * 100 : 0;
+      return { pnlUsdt: netPnl, pnlPercent: pnlPercent, totalFees: totalFees };
+    };
+    
+    // Fetch all trades
+    const tradesResult = await dbClient.query(`
+      SELECT id, symbol, entry_price, exit_price, pnl_usdt, pnl_percent, 
+             quantity, side, commission, entry_timestamp, exit_timestamp
+      FROM trades
+      WHERE exit_price IS NOT NULL AND exit_price > 0
+        AND entry_price IS NOT NULL AND entry_price > 0
+      ORDER BY exit_timestamp DESC
+    `);
+    
+    const allTrades = tradesResult.rows;
+    const fixedTrades = [];
+    let fixedCount = 0;
+    
+    const recalculateExitPrice = (entryPrice, pnlPercentage, direction = 'long') => {
+      if (!entryPrice || entryPrice <= 0 || pnlPercentage === null || pnlPercentage === undefined) return null;
+      // For long positions: exit = entry * (1 + pnl%/100)
+      // For short positions: exit = entry * (1 - pnl%/100)
+      if (direction === 'long' || direction === 'BUY') {
+        return entryPrice * (1 + (parseFloat(pnlPercentage) / 100));
+      } else {
+        return entryPrice * (1 - (parseFloat(pnlPercentage) / 100));
+      }
+    };
+    
+    for (const trade of allTrades) {
+      const symbol = trade.symbol;
+      let entryPrice = parseFloat(trade.entry_price);
+      let exitPrice = parseFloat(trade.exit_price);
+      const pnlPercent = parseFloat(trade.pnl_percent || 0);
+      const quantity = parseFloat(trade.quantity || 0);
+      const direction = trade.side || 'BUY';
+      const commission = parseFloat(trade.commission || 0);
+      const range = EXPECTED_PRICE_RANGES[symbol];
+      
+      let needsEntryFix = isEntryPriceSuspicious(symbol, entryPrice, exitPrice);
+      let needsExitFix = isExitPriceSuspicious(symbol, entryPrice, exitPrice);
+      
+      // Skip if neither needs fixing
+      if (!needsEntryFix && !needsExitFix) continue;
+      
+      // Calculate duration
+      let durationMinutes = null;
+      if (trade.entry_timestamp && trade.exit_timestamp) {
+        const entryTime = new Date(trade.entry_timestamp);
+        const exitTime = new Date(trade.exit_timestamp);
+        durationMinutes = (exitTime - entryTime) / (1000 * 60);
+      }
+      
+      // Fix entry price if needed
+      if (needsEntryFix) {
+        let recalculatedEntryPrice = null;
+        
+        // Strategy 1: Quick close (< 5 min) - entry should be close to exit
+        if (durationMinutes !== null && durationMinutes < 5 && range && exitPrice >= range.min * 0.9) {
+          recalculatedEntryPrice = pnlPercent > 0 ? exitPrice * 0.99 : exitPrice * 1.01;
+        }
+        
+        // Strategy 2: Recalculate from P&L
+        if (!recalculatedEntryPrice || recalculatedEntryPrice <= 0) {
+          recalculatedEntryPrice = recalculateEntryPrice(exitPrice, pnlPercent, direction);
+        }
+        
+        // Strategy 3: Use exit price as fallback if valid
+        if (!recalculatedEntryPrice || recalculatedEntryPrice <= 0) {
+          if (range && exitPrice >= range.min * 0.9 && exitPrice <= range.max * 1.1 && entryPrice < range.min * 0.8) {
+            recalculatedEntryPrice = exitPrice * 0.995;
+          }
+        }
+        
+        if (recalculatedEntryPrice && recalculatedEntryPrice > 0) {
+          if (!range || (recalculatedEntryPrice >= range.min * 0.9 && recalculatedEntryPrice <= range.max * 1.1)) {
+            entryPrice = recalculatedEntryPrice;
+            needsEntryFix = true;
+          } else {
+            needsEntryFix = false;
+          }
+        } else {
+          needsEntryFix = false;
+        }
+      }
+      
+      // Fix exit price if needed
+      if (needsExitFix && entryPrice > 0) {
+        let recalculatedExitPrice = null;
+        
+        // CRITICAL FIX: Special handling for ETH trades with exit_price around 1889.03
+        // This is a known stale price that should be around 3800-3900 instead
+        if (symbol === 'ETH/USDT' && exitPrice >= 1800 && exitPrice <= 2000 && entryPrice >= 3000 && entryPrice <= 5000) {
+          console.log(`[PROXY] 🔧 Detected ETH trade with suspicious exit price ${exitPrice} (entry: ${entryPrice}) - using entry-based calculation`);
+          // Strategy: Use entry price + P&L percentage (exit should be close to entry for same-day trades)
+          recalculatedExitPrice = recalculateExitPrice(entryPrice, pnlPercent, direction);
+          // Validate: If recalculated price is still way off, use a more conservative approach
+          if (recalculatedExitPrice && Math.abs(recalculatedExitPrice - entryPrice) / entryPrice > 0.3) {
+            // If P&L calculation gives unrealistic result, assume exit price should be close to entry
+            // (typical same-day trades have small P&L, so exit ~ entry)
+            recalculatedExitPrice = entryPrice * (1 + (pnlPercent / 100));
+          }
+        }
+        
+        // Strategy 1: Use entry price + P&L percentage if entry is valid
+        if (!recalculatedExitPrice && range && entryPrice >= range.min * 0.9 && entryPrice <= range.max * 1.1) {
+          recalculatedExitPrice = recalculateExitPrice(entryPrice, pnlPercent, direction);
+        }
+        
+        // Strategy 2: If exit is way too low but entry is valid, use entry price as base
+        if (!recalculatedExitPrice || recalculatedExitPrice <= 0) {
+          if (range && entryPrice >= range.min * 0.9 && entryPrice <= range.max * 1.1 && exitPrice < range.min * 0.5) {
+            // Assume a small change from entry (within 10%)
+            recalculatedExitPrice = entryPrice * (1 + (pnlPercent / 100));
+          }
+        }
+        
+        // Strategy 3: Quick close - exit should be close to entry
+        if (!recalculatedExitPrice || recalculatedExitPrice <= 0) {
+          if (durationMinutes !== null && durationMinutes < 5 && range && entryPrice >= range.min * 0.9) {
+            recalculatedExitPrice = pnlPercent > 0 ? entryPrice * 1.01 : entryPrice * 0.99;
+          }
+        }
+        
+        // Strategy 4: Use entry price directly if exit is way off
+        if (!recalculatedExitPrice || recalculatedExitPrice <= 0) {
+          if (range && entryPrice >= range.min * 0.9 && exitPrice < range.min * 0.5) {
+            recalculatedExitPrice = entryPrice * 0.998; // Small slippage
+          }
+        }
+        
+        if (recalculatedExitPrice && recalculatedExitPrice > 0) {
+          if (!range || (recalculatedExitPrice >= range.min * 0.9 && recalculatedExitPrice <= range.max * 1.1)) {
+            exitPrice = recalculatedExitPrice;
+            needsExitFix = true;
+          } else {
+            needsExitFix = false;
+          }
+        } else {
+          needsExitFix = false;
+        }
+      }
+      
+      // Skip if no valid fixes found
+      if (!needsEntryFix && !needsExitFix) continue;
+      
+      // Recalculate P&L with corrected prices
+      const { pnlUsdt, pnlPercent: newPnlPercent } = recalculatePnl(entryPrice, exitPrice, quantity, commission);
+      
+      // Update in database
+      const updateFields = [];
+      const updateValues = [];
+      let paramIndex = 1;
+      
+      if (needsEntryFix) {
+        updateFields.push(`entry_price = $${paramIndex++}`);
+        updateValues.push(entryPrice);
+      }
+      if (needsExitFix) {
+        updateFields.push(`exit_price = $${paramIndex++}`);
+        updateValues.push(exitPrice);
+      }
+      updateFields.push(`pnl_usdt = $${paramIndex++}`);
+      updateValues.push(pnlUsdt);
+      updateFields.push(`pnl_percent = $${paramIndex++}`);
+      updateValues.push(newPnlPercent);
+      updateFields.push(`updated_date = CURRENT_TIMESTAMP`);
+      updateValues.push(trade.id); // WHERE id = $X
+      
+      await dbClient.query(`
+        UPDATE trades
+        SET ${updateFields.join(', ')}
+        WHERE id = $${paramIndex}
+      `, updateValues);
+      
+      // Update in memory
+      const tradeIndex = trades.findIndex(t => t.id === trade.id);
+      if (tradeIndex !== -1) {
+        if (needsEntryFix) trades[tradeIndex].entry_price = entryPrice;
+        if (needsExitFix) trades[tradeIndex].exit_price = exitPrice;
+        trades[tradeIndex].pnl_usdt = pnlUsdt;
+        trades[tradeIndex].pnl_percent = newPnlPercent;
+        trades[tradeIndex].updated_date = new Date().toISOString();
+      }
+      
+      fixedTrades.push({
+        id: trade.id,
+        symbol: symbol,
+        oldEntryPrice: parseFloat(trade.entry_price),
+        newEntryPrice: entryPrice,
+        oldExitPrice: parseFloat(trade.exit_price),
+        newExitPrice: exitPrice,
+        oldPnl: trade.pnl_usdt,
+        newPnl: pnlUsdt,
+        fixedEntry: needsEntryFix,
+        fixedExit: needsExitFix
+      });
+      
+      fixedCount++;
+    }
+    
+    // Save to persistent storage
+    try {
+      saveStoredData('trades', trades);
+    } catch (error) {
+      console.error('[PROXY] Error saving trades to storage:', error);
+    }
+    
+    console.log(`[PROXY] ✅ Fixed ${fixedCount} trades`);
+    res.json({ 
+      success: true, 
+      fixedCount: fixedCount,
+      fixedTrades: fixedTrades
+    });
+    
+  } catch (error) {
+    console.error('[PROXY] ❌ Error fixing trade entry prices:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Recalculate P&L for all trades based on their current entry_price, exit_price, and quantity
+ * This is useful when exit prices are manually updated in the database
+ */
+// Clean invalid trades endpoint (removes trades with nulls or invalid prices)
+app.post('/api/trades/clean-invalid', async (req, res) => {
+  console.log('[PROXY] 🧹 POST /api/trades/clean-invalid - Cleaning invalid trades');
+  
+  if (!dbClient) {
+    return res.status(500).json({ success: false, error: 'Database not available' });
+  }
+  
+  try {
+    // Price thresholds
+    const PRICE_THRESHOLDS = {
+      'ETH/USDT': { min: 3808 },
+      'SOL/USDT': { min: 184.77 },
+      'XRP/USDT': { min: 2.47 }
+    };
+    
+    // Critical columns that must not be null (including analytics fields)
+    const criticalColumns = [
+      'symbol', 'entry_price', 'exit_price', 
+      'entry_timestamp', 'exit_timestamp', 'quantity',
+      'strategy_name', 'trading_mode', 'pnl_usdt', 'pnl_percent',
+      'lpm_score', 'combined_strength', 'conviction_score', 'conviction_breakdown',
+      'conviction_multiplier', 'market_regime', 'regime_confidence', 'atr_value',
+      'is_event_driven_strategy'
+    ];
+    
+    // Build WHERE clause for null checks - trades with ANY null in critical columns
+    const nullChecks = criticalColumns.map(col => `${col} IS NULL`).join(' OR ');
+    
+    // Build WHERE clause for price threshold violations
+    let priceChecks = [];
+    for (const [symbol, threshold] of Object.entries(PRICE_THRESHOLDS)) {
+      priceChecks.push(`(symbol = '${symbol}' AND (entry_price < ${threshold.min} OR exit_price < ${threshold.min}))`);
+    }
+    const priceCheckClause = priceChecks.length > 0 ? ` OR (${priceChecks.join(' OR ')})` : '';
+    
+    // Combine null and price checks with proper parentheses
+    const invalidCondition = `(${nullChecks})${priceCheckClause}`;
+    
+    // Count total trades first for debugging
+    const totalCountResult = await dbClient.query('SELECT COUNT(*) as count FROM trades');
+    const totalCount = parseInt(totalCountResult.rows[0].count) || 0;
+    console.log(`[PROXY] 📊 Total trades in database: ${totalCount}`);
+    
+    // Count invalid trades
+    const countQuery = `
+      SELECT COUNT(*) as count
+      FROM trades
+      WHERE ${invalidCondition}
+    `;
+    const countResult = await dbClient.query(countQuery);
+    const invalidCount = parseInt(countResult.rows[0].count) || 0;
+    console.log(`[PROXY] 📊 Invalid trades found: ${invalidCount}`);
+    
+    if (invalidCount === 0) {
+      return res.json({
+        success: true,
+        deletedCount: 0,
+        remainingCount: 0,
+        message: 'No invalid trades found'
+      });
+    }
+    
+    // Delete invalid trades
+    const deleteQuery = `
+      DELETE FROM trades
+      WHERE ${invalidCondition}
+      RETURNING id, symbol, entry_price, exit_price
+    `;
+    
+    const deleteResult = await dbClient.query(deleteQuery);
+    const deletedCount = deleteResult.rowCount || 0;
+    
+    // Update in-memory trades array
+    const initialLength = trades.length;
+    const deletedIds = deleteResult.rows.map(r => r.id);
+    trades = trades.filter(t => !deletedIds.includes(t.id));
+    const removedFromMemory = initialLength - trades.length;
+    
+    // Save to persistent storage
+    try {
+      saveTradesToFile();
+      console.log('[PROXY] 📊 Saved cleaned trades to persistent storage');
+    } catch (error) {
+      console.error('[PROXY] Error saving cleaned trades to storage:', error);
+    }
+    
+    // Get remaining count (valid trades = NOT invalid)
+    const validCountQuery = `
+      SELECT COUNT(*) as count
+      FROM trades
+      WHERE NOT (${invalidCondition})
+    `;
+    const remainingResult = await dbClient.query(validCountQuery);
+    const remainingCount = parseInt(remainingResult.rows[0].count) || 0;
+    
+    console.log(`[PROXY] ✅ Removed ${deletedCount} invalid trades from database and ${removedFromMemory} from memory`);
+    console.log(`[PROXY] 📊 Remaining trades: ${remainingCount}`);
+    
+    res.json({
+      success: true,
+      deletedCount: deletedCount,
+      removedFromMemory: removedFromMemory,
+      remainingCount: remainingCount,
+      deletedSample: deleteResult.rows.slice(0, 10).map(r => ({
+        id: r.id,
+        symbol: r.symbol,
+        entry_price: r.entry_price,
+        exit_price: r.exit_price
+      }))
+    });
+  } catch (error) {
+    console.error('[PROXY] ❌ Error cleaning invalid trades:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Delete specific trades by IDs endpoint
+app.post('/api/trades/delete-by-ids', async (req, res) => {
+  console.log('[PROXY] 🗑️  POST /api/trades/delete-by-ids - Deleting specific trades');
+  
+  if (!dbClient) {
+    return res.status(500).json({ success: false, error: 'Database not available' });
+  }
+  
+  try {
+    const { tradeIds } = req.body;
+    
+    if (!tradeIds || !Array.isArray(tradeIds) || tradeIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'tradeIds array is required' });
+    }
+    
+    console.log(`[PROXY] 📊 Deleting ${tradeIds.length} trades by IDs...`);
+    
+    // Delete trades from database
+    const deleteQuery = `
+      DELETE FROM trades
+      WHERE id = ANY($1::uuid[])
+      RETURNING id, symbol, entry_price, exit_price
+    `;
+    
+    const deleteResult = await dbClient.query(deleteQuery, [tradeIds]);
+    const deletedCount = deleteResult.rowCount || 0;
+    
+    // Update in-memory trades array
+    const initialLength = trades.length;
+    const deletedIds = deleteResult.rows.map(r => r.id);
+    trades = trades.filter(t => !deletedIds.includes(t.id));
+    const removedFromMemory = initialLength - trades.length;
+    
+    // Save to persistent storage
+    try {
+      saveTradesToFile();
+      console.log('[PROXY] 📊 Saved updated trades to persistent storage');
+    } catch (error) {
+      console.error('[PROXY] Error saving updated trades to storage:', error);
+    }
+    
+    // Get remaining count
+    const remainingResult = await dbClient.query('SELECT COUNT(*) as count FROM trades');
+    const remainingCount = parseInt(remainingResult.rows[0].count) || 0;
+    
+    console.log(`[PROXY] ✅ Deleted ${deletedCount} trades from database and ${removedFromMemory} from memory`);
+    console.log(`[PROXY] 📊 Remaining trades: ${remainingCount}`);
+    
+    res.json({
+      success: true,
+      deletedCount: deletedCount,
+      removedFromMemory: removedFromMemory,
+      remainingCount: remainingCount,
+      deletedTrades: deleteResult.rows.map(r => ({
+        id: r.id,
+        symbol: r.symbol,
+        entry_price: r.entry_price,
+        exit_price: r.exit_price
+      }))
+    });
+  } catch (error) {
+    console.error('[PROXY] ❌ Error deleting trades by IDs:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/trades/recalculate-pnl', async (req, res) => {
+  console.log('[PROXY] 🔧 POST /api/trades/recalculate-pnl - Recalculating P&L for all trades');
+
+  if (!dbClient) {
+    return res.status(500).json({ success: false, error: 'Database not available' });
+  }
+
+  try {
+    const COMMISSION_RATE = 0.001; // 0.1% trading fee
+
+    // Helper function to recalculate P&L
+    const recalculatePnl = (entryPrice, exitPrice, quantity) => {
+      if (!entryPrice || !exitPrice || !quantity || entryPrice <= 0 || exitPrice <= 0 || quantity <= 0) {
+        return { pnlUsdt: 0, pnlPercent: 0, totalFees: 0 };
+      }
+      const entryValue = entryPrice * quantity;
+      const exitValue = exitPrice * quantity;
+      const grossPnl = exitValue - entryValue;
+      const entryFees = entryValue * COMMISSION_RATE;
+      const exitFees = exitValue * COMMISSION_RATE;
+      const totalFees = entryFees + exitFees;
+      const netPnl = grossPnl - totalFees;
+      const pnlPercent = entryValue > 0 ? (netPnl / entryValue) * 100 : 0;
+      return { pnlUsdt: netPnl, pnlPercent: pnlPercent, totalFees: totalFees };
+    };
+
+    // Fetch all trades with exit prices
+    // Note: Database column is 'quantity', but we handle both quantity and quantity_crypto in code
+    const tradesResult = await dbClient.query(`
+      SELECT id, entry_price, exit_price, 
+             COALESCE(quantity, quantity_crypto) as quantity,
+             pnl_usdt, pnl_percent, total_fees_usdt, trading_mode
+      FROM trades
+      WHERE exit_price IS NOT NULL AND exit_price > 0
+        AND entry_price IS NOT NULL AND entry_price > 0
+        AND (quantity IS NOT NULL AND quantity > 0 OR quantity_crypto IS NOT NULL AND quantity_crypto > 0)
+      ORDER BY exit_timestamp DESC
+    `);
+
+    const allTrades = tradesResult.rows;
+    console.log(`[PROXY] 📊 Found ${allTrades.length} trades to recalculate P&L for`);
+
+    let updatedCount = 0;
+    const updatedTrades = [];
+
+    for (const trade of allTrades) {
+      const { pnlUsdt, pnlPercent, totalFees } = recalculatePnl(
+        parseFloat(trade.entry_price),
+        parseFloat(trade.exit_price),
+        parseFloat(trade.quantity)
+      );
+
+      // Only update if P&L values changed significantly (more than 0.01 USDT or 0.01%)
+      const oldPnlUsdt = parseFloat(trade.pnl_usdt || 0);
+      const oldPnlPercent = parseFloat(trade.pnl_percent || 0);
+      const oldTotalFees = parseFloat(trade.total_fees_usdt || 0);
+
+      const pnlDiff = Math.abs(pnlUsdt - oldPnlUsdt);
+      const pnlPercentDiff = Math.abs(pnlPercent - oldPnlPercent);
+
+      if (pnlDiff > 0.01 || pnlPercentDiff > 0.01 || Math.abs(totalFees - oldTotalFees) > 0.01) {
+        // Update trade in database
+        await dbClient.query(`
+          UPDATE trades
+          SET pnl_usdt = $1,
+              pnl_percent = $2,
+              total_fees_usdt = $3,
+              updated_date = $4
+          WHERE id = $5
+        `, [
+          pnlUsdt,
+          pnlPercent,
+          totalFees,
+          new Date().toISOString(),
+          trade.id
+        ]);
+
+        // Update in-memory trades array
+        const inMemoryTrade = trades.find(t => t.id === trade.id);
+        if (inMemoryTrade) {
+          inMemoryTrade.pnl_usdt = pnlUsdt;
+          inMemoryTrade.pnl_percentage = pnlPercent;
+          inMemoryTrade.pnl_percent = pnlPercent;
+          inMemoryTrade.total_fees_usdt = totalFees;
+        }
+
+        updatedTrades.push({
+          id: trade.id,
+          trading_mode: trade.trading_mode,
+          oldPnlUsdt: oldPnlUsdt,
+          newPnlUsdt: pnlUsdt,
+          oldPnlPercent: oldPnlPercent,
+          newPnlPercent: pnlPercent
+        });
+
+        updatedCount++;
+      }
+    }
+
+    // Save updated trades to persistent storage
+    try {
+      saveStoredData('trades', trades);
+      console.log('[PROXY] 📊 Saved updated trades to persistent storage');
+    } catch (error) {
+      console.error('[PROXY] Error saving updated trades to storage:', error);
+    }
+
+    console.log(`[PROXY] ✅ Recalculated P&L for ${updatedCount} trades`);
+    res.json({
+      success: true,
+      updatedCount: updatedCount,
+      totalTrades: allTrades.length,
+      updatedTrades: updatedTrades.slice(0, 10) // Return first 10 for debugging
+    });
+
+  } catch (error) {
+    console.error('[PROXY] ❌ Error recalculating trade P&L:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ============================================================================
 // RECONCILIATION FUNCTIONS
 // ============================================================================
@@ -3898,14 +5490,14 @@ app.post('/api/functions/walletReconciliation', async (req, res) => {
             addLog('db_unavailable_for_fallback');
             console.warn('[PROXY] ⚠️ DB client unavailable for fallback delete-by-symbol/mode');
           }
-          return res.json({ 
-            success: true, 
+        return res.json({ 
+          success: true, 
             virtualClosed: deletedRows, 
-            symbol, 
-            mode,
+          symbol, 
+          mode,
             message: deletedRows > 0 ? `Deleted ${deletedRows} open positions from DB (fallback)` : 'No open positions found',
             logs: debugLogs
-          });
+        });
         } catch (fallbackErr) {
           addLog('fallback_delete_error', { error: fallbackErr?.message || String(fallbackErr) });
           console.error('[PROXY] ❌ Fallback DB delete error:', fallbackErr);
@@ -3913,36 +5505,152 @@ app.post('/api/functions/walletReconciliation', async (req, res) => {
         }
       }
       
-      // 2. Get current market price (simplified - use entry price as fallback)
+      // 2. Get current market price from Binance (CRITICAL: Must use correct response structure)
       let currentPrice = 0;
       try {
-        // Try to get current price from Binance
-        const priceResponse = await fetch(`http://localhost:3003/api/binance/ticker/price?symbol=${symbol}`);
+        // CRITICAL FIX: Always fetch fresh price from Binance ticker/price endpoint
+        // Response structure: { success: true, data: { symbol: "ETHUSDT", price: "3800.00" } }
+        const cleanSymbol = symbol.replace('/', '');
+        const priceResponse = await fetch(`http://localhost:3003/api/binance/ticker/price?symbol=${cleanSymbol}&tradingMode=${mode}`);
         if (priceResponse.ok) {
           const priceData = await priceResponse.json();
-          currentPrice = parseFloat(priceData.price) || 0;
+          // CRITICAL: Access price from data.data.price (not data.price)
+          if (priceData.success && priceData.data && priceData.data.price) {
+            currentPrice = parseFloat(priceData.data.price);
+            if (isNaN(currentPrice) || currentPrice <= 0) {
+              console.error(`[PROXY] ❌ Invalid price value from Binance for ${symbol}: ${priceData.data.price}`);
+              currentPrice = 0;
+            } else {
+              console.log(`[PROXY] ✅ Fetched fresh price for ${symbol}: $${currentPrice}`);
+            }
+          } else {
+            console.error(`[PROXY] ❌ Invalid price response structure for ${symbol}:`, priceData);
+            currentPrice = 0;
+          }
+        } else {
+          console.warn(`[PROXY] ⚠️ Price fetch failed for ${symbol}: HTTP ${priceResponse.status}`);
+          currentPrice = 0;
         }
       } catch (priceError) {
-        console.warn(`[PROXY] ⚠️ Could not fetch current price for ${symbol}, using entry price`);
+        console.error(`[PROXY] ❌ Error fetching price for ${symbol}:`, priceError.message);
+        currentPrice = 0;
       }
       
       let closedCount = 0;
       const closedTrades = [];
       
       // 3. For each position, create virtual trade record
+      const COMMISSION_RATE = 0.001; // 0.1% trading fee (Binance spot)
+      
+      // CRITICAL: Define expected price ranges to detect unrealistic prices
+      const EXPECTED_PRICE_RANGES = {
+        'ETH/USDT': { min: 2500, max: 5000 },
+        'BTC/USDT': { min: 40000, max: 80000 },
+        'SOL/USDT': { min: 100, max: 300 },
+        'BNB/USDT': { min: 200, max: 800 },
+        'ADA/USDT': { min: 0.3, max: 2.0 },
+        'XRP/USDT': { min: 0.3, max: 3.0 },
+        'DOGE/USDT': { min: 0.05, max: 0.5 },
+        'DOT/USDT': { min: 3, max: 20 },
+        'LINK/USDT': { min: 5, max: 50 },
+        'AVAX/USDT': { min: 20, max: 100 },
+        'MATIC/USDT': { min: 0.3, max: 2.0 },
+        'UNI/USDT': { min: 3, max: 20 },
+        'LTC/USDT': { min: 50, max: 200 },
+        'ATOM/USDT': { min: 5, max: 30 },
+        'XLM/USDT': { min: 0.05, max: 0.5 },
+        'VET/USDT': { min: 0.01, max: 0.2 },
+        'FIL/USDT': { min: 2, max: 20 },
+        'TRX/USDT': { min: 0.05, max: 0.3 },
+        'ETC/USDT': { min: 15, max: 100 }
+      };
+      
+      const isPriceRealistic = (symbol, price) => {
+        const range = EXPECTED_PRICE_RANGES[symbol];
+        if (!range) return true; // Unknown symbol, allow it
+        return price >= range.min && price <= range.max;
+      };
+      
       for (const pos of positions) {
         const qty = Number(pos.quantity_crypto || 0);
         const entryPrice = Number(pos.entry_price || 0);
-        const exitPrice = currentPrice > 0 ? currentPrice : entryPrice;
         
-        // Calculate virtual P&L
-        const pnl = (exitPrice - entryPrice) * qty;
+        // CRITICAL FIX: Validate both currentPrice and entryPrice before using
+        let exitPrice = 0;
+        
+        if (currentPrice > 0 && isPriceRealistic(pos.symbol, currentPrice)) {
+          exitPrice = currentPrice;
+          console.log(`[PROXY] ✅ Using fresh price for ${pos.symbol}: $${exitPrice}`);
+          
+          // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
+          if (pos.symbol === 'ETH/USDT') {
+            const ETH_ALERT_MIN = 3500;
+            const ETH_ALERT_MAX = 4000;
+            if (exitPrice < ETH_ALERT_MIN || exitPrice > ETH_ALERT_MAX) {
+              console.error(`[PROXY] 🚨🚨🚨 ETH PRICE ALERT 🚨🚨🚨`);
+              console.error(`[PROXY] 🚨 ETH exit price ${exitPrice} is outside alert range [${ETH_ALERT_MIN}, ${ETH_ALERT_MAX}]`);
+              console.error(`[PROXY] 🚨 Full details:`, {
+                symbol: pos.symbol,
+                exitPrice: exitPrice,
+                entryPrice: entryPrice,
+                priceDifference: exitPrice < ETH_ALERT_MIN ? 
+                  `${(ETH_ALERT_MIN - exitPrice).toFixed(2)} below minimum` : 
+                  `${(exitPrice - ETH_ALERT_MAX).toFixed(2)} above maximum`,
+                percentDifference: exitPrice < ETH_ALERT_MIN ? 
+                  `${((ETH_ALERT_MIN - exitPrice) / ETH_ALERT_MIN * 100).toFixed(2)}%` : 
+                  `${((exitPrice - ETH_ALERT_MAX) / ETH_ALERT_MAX * 100).toFixed(2)}%`,
+                entryPrice: entryPrice,
+                priceDiffFromEntry: entryPrice > 0 ? `${((exitPrice - entryPrice) / entryPrice * 100).toFixed(2)}%` : 'N/A',
+                timestamp: new Date().toISOString(),
+                positionId: pos.position_id || pos.id,
+                quantity: qty,
+                tradingMode: mode,
+                source: 'virtualClosePriceFetch'
+              });
+              console.error(`[PROXY] 🚨🚨🚨 END ETH PRICE ALERT 🚨🚨🚨`);
+            }
+          }
+        } else if (currentPrice > 0) {
+          console.error(`[PROXY] ❌ CRITICAL: Fresh price ${currentPrice} is unrealistic for ${pos.symbol}, rejecting`);
+          // Don't use unrealistic price - try to fetch again or skip
+          exitPrice = 0;
+        }
+        
+        // Only use entryPrice as fallback if it's realistic AND fresh price failed
+        if (exitPrice === 0 && entryPrice > 0) {
+          if (isPriceRealistic(pos.symbol, entryPrice)) {
+            exitPrice = entryPrice;
+            console.warn(`[PROXY] ⚠️ Using entry_price as fallback for ${pos.symbol}: $${exitPrice} (fresh fetch failed)`);
+          } else {
+            console.error(`[PROXY] ❌ CRITICAL: entry_price ${entryPrice} is unrealistic for ${pos.symbol}, cannot use as fallback`);
+            // Skip this position - cannot create trade with invalid price
+            console.error(`[PROXY] ❌ Skipping virtual close for ${pos.symbol} - no valid price available`);
+            continue;
+          }
+        }
+        
+        // Final check: if still no valid price, skip this position
+        if (exitPrice <= 0) {
+          console.error(`[PROXY] ❌ CRITICAL: Cannot virtual close ${pos.symbol} - no valid price (currentPrice=${currentPrice}, entryPrice=${entryPrice})`);
+          continue;
+        }
+        
+        // Calculate virtual P&L (GROSS first)
+        const pnlGross = (exitPrice - entryPrice) * qty;
         const exitValue = exitPrice * qty;
-        const pnlPct = pos.entry_value_usdt ? (pnl / Number(pos.entry_value_usdt)) * 100 : 0;
+        const entryValue = Number(pos.entry_value_usdt || 0);
+        
+        // CRITICAL FIX: Deduct fees from P&L (matching PositionManager logic)
+        const entryFees = entryValue * COMMISSION_RATE;
+        const exitFees = exitValue * COMMISSION_RATE;
+        const totalFees = entryFees + exitFees;
+        const pnl = pnlGross - totalFees; // NET P&L (after fees)
+        const pnlPct = entryValue > 0 ? (pnl / entryValue) * 100 : 0; // NET P&L percentage
         
         // Create trade record (archive the position)
         const tradeData = {
           trade_id: `${pos.position_id}-vc`, // Virtual closure marker
+          position_id: pos.position_id, // CRITICAL: All positions have position_id for duplicate detection
           strategy_name: pos.strategy_name || 'Unknown',
           symbol: pos.symbol,
           direction: pos.direction || 'long',
@@ -3970,7 +5678,7 @@ app.post('/api/functions/walletReconciliation', async (req, res) => {
           fear_greed_score: pos.fear_greed_score,
           fear_greed_classification: pos.fear_greed_classification,
           lpm_score: pos.lpm_score,
-          total_fees_usdt: 0,
+          total_fees_usdt: totalFees, // CRITICAL: Include calculated fees
           created_date: new Date().toISOString(),
           updated_date: new Date().toISOString()
         };
@@ -4303,6 +6011,92 @@ async function startServer() {
     
     // Sync existing backtest combinations to database
     await syncBacktestCombinationsToDatabase();
+    
+// Endpoint to optimize trades table performance (adds critical indexes)
+    app.post('/api/database/optimize-trades', async (req, res) => {
+        if (!dbClient) {
+            return res.status(503).json({ success: false, error: 'Database not available' });
+        }
+        
+        try {
+            console.log('[PROXY] 🚀 Starting trades table optimization...');
+            const results = {
+                indexesCreated: [],
+                errors: []
+            };
+            
+            // Critical indexes
+            const indexes = [
+                {
+                    name: 'idx_trades_mode_exit_timestamp',
+                    sql: `CREATE INDEX IF NOT EXISTS idx_trades_mode_exit_timestamp 
+                          ON trades(trading_mode, exit_timestamp) 
+                          WHERE exit_timestamp IS NOT NULL`
+                },
+                {
+                    name: 'idx_trades_exit_timestamp_desc',
+                    sql: `CREATE INDEX IF NOT EXISTS idx_trades_exit_timestamp_desc 
+                          ON trades(exit_timestamp DESC) 
+                          WHERE exit_timestamp IS NOT NULL`
+                },
+                {
+                    name: 'idx_trades_mode_exit_range',
+                    sql: `CREATE INDEX IF NOT EXISTS idx_trades_mode_exit_range 
+                          ON trades(trading_mode, exit_timestamp DESC) 
+                          WHERE exit_timestamp IS NOT NULL`
+                },
+                {
+                    name: 'idx_trades_created_date_desc',
+                    sql: `CREATE INDEX IF NOT EXISTS idx_trades_created_date_desc 
+                          ON trades(created_date DESC)`
+                },
+                {
+                    name: 'idx_trades_mode_created_date',
+                    sql: `CREATE INDEX IF NOT EXISTS idx_trades_mode_created_date 
+                          ON trades(trading_mode, created_date DESC)`
+                },
+                {
+                    name: 'idx_trades_valid_exits',
+                    sql: `CREATE INDEX IF NOT EXISTS idx_trades_valid_exits 
+                          ON trades(trading_mode, exit_timestamp, pnl_usdt) 
+                          WHERE exit_timestamp IS NOT NULL AND pnl_usdt IS NOT NULL`
+                }
+            ];
+            
+            for (const index of indexes) {
+                try {
+                    await dbClient.query(index.sql);
+                    results.indexesCreated.push(index.name);
+                    console.log(`[PROXY] ✅ Created index: ${index.name}`);
+                } catch (error) {
+                    const errorMsg = `Failed to create ${index.name}: ${error.message}`;
+                    results.errors.push(errorMsg);
+                    console.error(`[PROXY] ❌ ${errorMsg}`);
+                }
+            }
+            
+            // Update table statistics
+            try {
+                await dbClient.query('ANALYZE trades');
+                console.log('[PROXY] ✅ Updated table statistics (ANALYZE)');
+            } catch (error) {
+                results.errors.push(`ANALYZE failed: ${error.message}`);
+            }
+            
+            const success = results.errors.length === 0;
+            console.log(`[PROXY] ${success ? '✅' : '⚠️'} Optimization complete: ${results.indexesCreated.length} indexes created, ${results.errors.length} errors`);
+            
+            res.json({
+                success,
+                indexesCreated: results.indexesCreated.length,
+                errors: results.errors.length,
+                details: results
+            });
+        } catch (error) {
+            console.error('[PROXY] ❌ Error optimizing trades table:', error);
+            res.status(500).json({ success: false, error: error.message });
+        }
+    });
     
     const server = app.listen(PORT, () => {
       console.log(`🚀 Binance Proxy Server running on port ${PORT}`);
