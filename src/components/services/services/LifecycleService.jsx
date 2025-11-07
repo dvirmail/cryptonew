@@ -42,16 +42,46 @@ export class LifecycleService {
         try {
             // OPTIMIZATION: Load configuration, exchange info, and strategies in parallel
             console.log('[AutoScannerService] ⚡ Loading core components in parallel...');
-            const [configResult, exchangeInfo, strategies] = await Promise.all([
+            
+            // ✅ RATE LIMIT HANDLING: Try to load exchange info, but allow initialization to continue if rate limited
+            let exchangeInfo = null;
+            let exchangeInfoLoadError = null;
+            try {
+                exchangeInfo = await this._loadExchangeInfo();
+                if (exchangeInfo && Object.keys(exchangeInfo).length > 0) {
+                    this.scannerService.state.exchangeInfo = exchangeInfo;
+                }
+            } catch (error) {
+                exchangeInfoLoadError = error;
+                if (error.isRateLimit) {
+                    // Rate limit error - start background retry but allow initialization to continue
+                    console.error(`[AutoScannerService] ⚠️ Exchange info rate limited during initialization. Scanner will continue in degraded mode.`);
+                    console.error(`[AutoScannerService] 🔄 Background retry process has been started and will automatically load exchange info when ban expires.`);
+                    // Don't set exchangeInfo - it will be null, but scanner can still initialize
+                    // The background retry will update it when available
+                } else {
+                    // Other errors - still block initialization
+                    throw error;
+                }
+            }
+            
+            const [configResult, strategies] = await Promise.all([
                 this.scannerService.configurationService.loadConfiguration(),
-                this._loadExchangeInfo(),
                 this.scannerService.scanEngineService._loadStrategies().catch(err => {
                     console.warn('[AutoScannerService] ⚠️ Strategy loading failed (non-critical):', err.message);
                     return [];
                 })
             ]);
-            this.scannerService.state.exchangeInfo = exchangeInfo;
+            
             console.log(`[AutoScannerService] ✅ Core components loaded in ${Date.now() - initStartTime}ms`);
+            
+            // ✅ Warn if exchange info is not available
+            if (!exchangeInfo || Object.keys(exchangeInfo).length === 0) {
+                console.warn(`[AutoScannerService] ⚠️ Scanner initializing WITHOUT exchange info. Some features may be limited.`);
+                if (exchangeInfoLoadError?.isRateLimit) {
+                    console.warn(`[AutoScannerService] 🔄 Background retry will continue attempting to load exchange info.`);
+                }
+            }
 
             // OPTIMIZATION: Initialize wallet in parallel with position loading
             console.log(`[AutoScannerService] 🔄 Syncing ${this.scannerService.state.tradingMode.toUpperCase()} wallet with Binance API...`);
@@ -296,65 +326,29 @@ export class LifecycleService {
      * Starts the scan loop by executing the first scan cycle.
      */
     async _startScanLoop() {
-        console.log('[LifecycleService] 🔍 ===== _START_SCAN_LOOP ENTRY =====');
-        console.log('[LifecycleService] 🔍 Scanner state before initial scan:', {
-            isRunning: this.scannerService.state.isRunning,
-            isScanning: this.scannerService.state.isScanning,
-            isHardResetting: this.scannerService.isHardResetting
-        });
-        
         try {
             await this.scannerService.scanEngineService.scanCycle();
-            console.log('[LifecycleService] ✅ Initial scan completed successfully');
         } catch (e) {
             console.error(`[LifecycleService] ❌ Initial scan failed: ${e.message}`, e);
             console.error('[LifecycleService] ❌ Full error details:', e);
         }
-        
-        console.log('[LifecycleService] 🔍 Scanner state after initial scan:', {
-            isRunning: this.scannerService.state.isRunning,
-            isScanning: this.scannerService.state.isScanning,
-            isHardResetting: this.scannerService.isHardResetting
-        });
     }
 
     /**
      * Starts the countdown timer for the next scan cycle.
      */
     _startCountdown() {
-        console.log('[LifecycleService] 🔍 ===== _START_COUNTDOWN ENTRY =====');
-        console.log('[LifecycleService] 🔍 Scanner state before countdown:', {
-            isRunning: this.scannerService.state.isRunning,
-            isScanning: this.scannerService.state.isScanning,
-            isHardResetting: this.scannerService.isHardResetting,
-            hasExistingInterval: !!this.countdownInterval
-        });
-        
         if (this.countdownInterval) {
-            console.log('[LifecycleService] 🔍 Clearing existing countdown interval');
             clearInterval(this.countdownInterval);
             this.countdownInterval = null;
         }
 
         if (!this.scannerService.state.isRunning || this.scannerService.state.isScanning) {
-            console.log('[LifecycleService] ⏸️ Countdown not started:', {
-                reason: !this.scannerService.state.isRunning ? 'Scanner not running' : 'Scanner is scanning',
-                isRunning: this.scannerService.state.isRunning,
-                isScanning: this.scannerService.state.isScanning
-            });
             return;
         }
 
         const scanFrequency = this.scannerService.state.settings?.scanFrequency || 60000;
         this.scannerService.state.nextScanTime = Date.now() + scanFrequency;
-
-        console.log(`[LifecycleService] ⏰ Next scan in ${Math.round(scanFrequency / 1000)} seconds...`);
-        console.log(`[LifecycleService] ⏰ Countdown details:`, {
-            scanFrequency: scanFrequency,
-            nextScanTime: this.scannerService.state.nextScanTime,
-            currentTime: Date.now(),
-            timeUntilScan: this.scannerService.state.nextScanTime - Date.now()
-        });
 
         this.scannerService.notifySubscribers();
 
@@ -382,10 +376,6 @@ export class LifecycleService {
             }
 
             if (this.scannerService.state.nextScanTime && Date.now() >= this.scannerService.state.nextScanTime) {
-                console.log('[LifecycleService] 🚀 ===== COUNTDOWN EXPIRED - TRIGGERING SCAN CYCLE =====');
-                console.log('[LifecycleService] 🚀 Countdown expired at:', new Date().toISOString());
-                console.log('[LifecycleService] 🚀 nextScanTime was:', this.scannerService.state.nextScanTime);
-                console.log('[LifecycleService] 🚀 Current time is:', Date.now());
                 
                 clearInterval(this.countdownInterval);
                 this.countdownInterval = null;

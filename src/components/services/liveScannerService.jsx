@@ -47,6 +47,7 @@ class TradeManager {
             const currentPrice = evaluationResult.currentPrice; // Assuming evaluationResult provides this
             if (!currentPrice) {
                  this.addLog(`Could not determine current price for ${strategy.coin}. Skipping trade.`, 'error', 2);
+                 console.error(`Could not determine current price for ${strategy.coin}. Skipping trade.`, 'error', 2);                    
                  return;
             }
             const quantity = tradeSizeUSDT / currentPrice;

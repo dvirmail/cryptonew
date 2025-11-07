@@ -15,6 +15,7 @@ import FearGreedWidget from '@/components/layout/FearGreedWidget';
 import PerformanceMomentumWidget from "@/components/layout/PerformanceMomentumWidget";
 import BalanceRiskWidget from '@/components/layout/BalanceRiskWidget'; // NEW: Import BalanceRiskWidget
 import { initNetworkDebug } from "@/components/utils/networkDebug";
+// Phase 1 test helpers loaded on-demand via dynamic import
 
 // Icons
 import {

@@ -44,8 +44,9 @@ export const purgeTradeData = base44.functions.purgeTradeData;
 export const archiveOldTrades = base44.functions.archiveOldTrades;
 
 // Use local implementation instead of base44 version
-import { updatePerformanceSnapshot as localUpdatePerformanceSnapshot } from './updatePerformanceSnapshot';
+import { updatePerformanceSnapshot as localUpdatePerformanceSnapshot, backfillHistoricalSnapshots as localBackfillHistoricalSnapshots } from './updatePerformanceSnapshot';
 export const updatePerformanceSnapshot = localUpdatePerformanceSnapshot;
+export const backfillHistoricalSnapshots = localBackfillHistoricalSnapshots;
 
 export const investigateTradeData = base44.functions.investigateTradeData;
 

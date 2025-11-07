@@ -129,4 +129,4 @@ rules:
         Do you want me to proceed with this change?"
     severity: critical
     action: >
-      ALWAYS ask for user confirmation before making any changes to proxy-server.cjs file.
+      when making changes to proxy-server.cjs file always restart it afterwards

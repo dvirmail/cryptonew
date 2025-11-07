@@ -46,7 +46,15 @@ export default function RecentTrades({ trades = [] }) {
       <div className="p-2 space-y-1 text-xs">
         <div><strong>Entry:</strong> {formatDate(trade.entry_timestamp)}</div>
         <div><strong>Exit:</strong> {formatDate(trade.exit_timestamp)}</div>
-        <div><strong>Duration:</strong> {trade.duration_seconds ? `${Math.floor((trade.duration_seconds || 0) / 60)} min` : 'N/A'}</div>
+        <div><strong>Duration:</strong> {
+          (() => {
+            const durationHours = trade.duration_hours !== undefined && trade.duration_hours !== null ? trade.duration_hours : (trade.duration_seconds ? trade.duration_seconds / 3600 : null);
+            if (!durationHours) return 'N/A';
+            const minutes = Math.floor(durationHours * 60);
+            if (minutes >= 60) return `${Math.floor(durationHours)}h ${minutes % 60}m`;
+            return `${minutes}m`;
+          })()
+        }</div>
         <div><strong>Strategy:</strong> {trade.strategy_name || 'N/A'}</div>
       </div>
     );

@@ -12,6 +12,7 @@
 
 import SignalCorrelationDetector from './SignalCorrelationDetector.jsx';
 import RegimeContextWeighting from './RegimeContextWeighting.jsx';
+import { SIGNAL_WEIGHTS } from '@/components/utils/signalSettings';
 
 export class SignalWeightCalculator {
   constructor() {
@@ -162,8 +163,9 @@ export class SignalWeightCalculator {
     const baseStrength = signal.strength || 0;
     const signalType = signal.type.toLowerCase();
     
-    // Get base signal weight
-    const baseWeight = this.signalWeights[signalType] || this.signalWeights.default;
+    // Get base signal weight from SIGNAL_WEIGHTS (consistent with unified calculator)
+    // This ensures alignment with autoscanner and backtest
+    const baseWeight = SIGNAL_WEIGHTS[signalType] || 1.0;
     
     // Get regime-specific weight using RegimeContextWeighting
     const regimeAdjustedWeight = this.regimeContextWeighting.calculateRegimeAdjustedWeight(

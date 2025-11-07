@@ -12,9 +12,9 @@ import { liveTradingAPI } from '@/api/functions';
 class RobustReconcileService {
     constructor() {
         this.lastReconcileTime = 0;
-        this.reconcileThrottleMs = 30000; // 30 seconds minimum between reconciles
+        this.reconcileThrottleMs = 300000; // 5 minutes minimum between reconciles (increased from 30s)
         this.ghostDetectionThreshold = 0.95; // 95% threshold for ghost detection
-        this.maxReconcileAttempts = 10;
+        this.maxReconcileAttempts = 20; // Increased from 10 to allow more attempts over longer period
         this.reconcileAttempts = new Map(); // Track attempts per wallet
     }
 
@@ -45,7 +45,6 @@ class RobustReconcileService {
         this.reconcileAttempts.set(walletKey, attempts + 1);
 
         try {
-            console.log(`[RobustReconcile] 🔄 Starting reconciliation for ${tradingMode} wallet ${walletId}`);
             
             // Step 1: Get Binance account info
             const binanceData = await this._fetchBinanceAccountInfo(tradingMode);
@@ -66,9 +65,8 @@ class RobustReconcileService {
             const cleanupResult = await this._cleanGhostPositions(analysis.ghostPositions);
             
             // Step 5: Update reconciliation attempts
-            if (cleanupResult.cleanedCount > 0) {
-                this.reconcileAttempts.set(walletKey, 0); // Reset on successful cleanup
-            }
+            // Reset attempts on successful reconciliation (even if no ghosts cleaned, it was successful)
+            this.reconcileAttempts.set(walletKey, 0);
 
             const result = {
                 success: true,
@@ -86,15 +84,22 @@ class RobustReconcileService {
                 }
             };
 
-            console.log(`[RobustReconcile] ✅ Reconciliation complete:`, result.summary);
             return result;
 
         } catch (error) {
             console.error(`[RobustReconcile] ❌ Reconciliation failed:`, error);
+            
+            const currentAttempts = this.reconcileAttempts.get(walletKey) || 0;
+            
+            // If we're getting close to max attempts, auto-reset after a delay to prevent permanent lockout
+            if (currentAttempts >= this.maxReconcileAttempts - 2) {
+                console.log(`[RobustReconcile] ⚠️ High attempt count (${currentAttempts}/${this.maxReconcileAttempts}). Will auto-reset after cooldown.`);
+            }
+            
             return {
                 success: false,
                 error: error.message,
-                attempts: this.reconcileAttempts.get(walletKey) || 0
+                attempts: currentAttempts
             };
         }
     }
@@ -196,7 +201,6 @@ class RobustReconcileService {
             }
         }
 
-        console.log(`[RobustReconcile] 📊 Analysis complete: ${ghostPositions.length} ghosts, ${legitimatePositions.length} legitimate`);
         
         return {
             ghostPositions,
@@ -453,8 +457,35 @@ class RobustReconcileService {
      */
     resetAttempts(tradingMode, walletId) {
         const walletKey = `${tradingMode}_${walletId}`;
+        const oldAttempts = this.reconcileAttempts.get(walletKey) || 0;
         this.reconcileAttempts.delete(walletKey);
-        console.log(`[RobustReconcile] 🔄 Reset attempts for wallet ${walletKey}`);
+        console.log(`[RobustReconcile] 🔄 Reset attempts for wallet ${walletKey} (was ${oldAttempts}/${this.maxReconcileAttempts})`);
+    }
+    
+    /**
+     * Auto-reset attempts for all wallets that have exceeded a threshold
+     * Call this periodically to prevent permanent lockouts
+     */
+    autoResetStaleAttempts() {
+        const resetThreshold = Math.floor(this.maxReconcileAttempts * 0.8); // Reset at 80% of max
+        let resetCount = 0;
+        
+        for (const [walletKey, attempts] of this.reconcileAttempts.entries()) {
+            if (attempts >= resetThreshold) {
+                // Only reset if it's been more than 10 minutes since last reconcile
+                // This prevents resetting too aggressively
+                const timeSinceLastReconcile = Date.now() - this.lastReconcileTime;
+                if (timeSinceLastReconcile > 600000) { // 10 minutes
+                    this.reconcileAttempts.delete(walletKey);
+                    resetCount++;
+                    console.log(`[RobustReconcile] 🔄 Auto-reset stale attempts for wallet ${walletKey} (was ${attempts}/${this.maxReconcileAttempts})`);
+                }
+            }
+        }
+        
+        if (resetCount > 0) {
+            console.log(`[RobustReconcile] 🔄 Auto-reset ${resetCount} stale wallet(s)`);
+        }
     }
 
     /**

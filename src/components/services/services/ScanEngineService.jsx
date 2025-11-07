@@ -9,6 +9,8 @@
 import { SCANNER_DEFAULTS } from '../constants/scannerDefaults';
 import { queueFunctionCall } from '@/components/utils/apiQueue';
 import { reconcileWalletState, purgeGhostPositions } from '@/api/functions';
+import { getKlineData } from '@/api/functions';
+import { calculateAllIndicators } from '@/components/utils/indicatorManager';
 
 export class ScanEngineService {
     constructor(scannerService) {
@@ -28,7 +30,10 @@ export class ScanEngineService {
 
     // Helper: get current wallet state (CentralWalletStateManager first, fallback to old system)
     _getCurrentWalletState() {
-        return this.scannerService.walletManagerService?.getCurrentWalletState() || this._getCurrentWalletState();
+        // Get from wallet manager service, or fallback to scanner service's wallet state
+        return this.scannerService.walletManagerService?.getCurrentWalletState() || 
+               this.scannerService._getCurrentWalletState?.() || 
+               {};
     }
 
     /**
@@ -91,16 +96,16 @@ export class ScanEngineService {
         
         this.scannerService.state.newPositionsCount = 0; // Reset new positions count for this cycle
 
-        console.log(`[AutoScannerService] [SCAN_CYCLE] 🔄 Starting scan cycle #${this.scannerService.state.stats.totalScanCycles + 1}`);
-        console.log(`[AutoScannerService] [SCAN_CYCLE] 🔍 Scanner state:`, {
-            isRunning: this.scannerService.state.isRunning,
-            isScanning: this.scannerService.state.isScanning,
-            availableBalance: this.scannerService.state.walletSummary?.availableBalance,
-            balanceInTrades: this.scannerService.state.walletSummary?.balanceInTrades,
-            positionsCount: this.scannerService.positionManager.positions.length
-        });
+        // console.log(`[AutoScannerService] [SCAN_CYCLE] 🔄 Starting scan cycle #${this.scannerService.state.stats.totalScanCycles + 1}`);
+        // console.log(`[AutoScannerService] [SCAN_CYCLE] 🔍 Scanner state:`, {
+        //     isRunning: this.scannerService.state.isRunning,
+        //     isScanning: this.scannerService.state.isScanning,
+        //     availableBalance: this.scannerService.state.walletSummary?.availableBalance,
+        //     balanceInTrades: this.scannerService.state.walletSummary?.balanceInTrades,
+        //     positionsCount: this.scannerService.positionManager.positions.length
+        // });
 
-        console.log(`[AutoScannerService] 🔄 Starting new scan cycle #${this.scannerService.state.stats.totalScanCycles + 1}...`);
+        // console.log(`[AutoScannerService] 🔄 Starting new scan cycle #${this.scannerService.state.stats.totalScanCycles + 1}...`);
         // OPTIMIZATION: Removed redundant notifySubscribers() call
 
         
@@ -117,9 +122,12 @@ export class ScanEngineService {
         };
 
         try {
+            // console.log('[ScanEngineService] 🔍 [PHASE] Starting pre-scan checks...');
             // NEW: Pre-scan leadership check
             if (this.scannerService.state.isRunning) {
+                // console.log('[ScanEngineService] 🔍 [PHASE] Checking leadership...');
                 const hasLeadership = await this.scannerService.sessionManager.verifyLeadership();
+                // console.log('[ScanEngineService] 🔍 [PHASE] Leadership check complete, hasLeadership:', hasLeadership);
                 if (!hasLeadership) {
                     console.warn('[AutoScannerService] ⚠️ Lost leadership during scan - another tab is now active. Stopping scanner.');
                     this.scannerService.stop();
@@ -127,13 +135,17 @@ export class ScanEngineService {
                 }
             }
 
+            // console.log('[ScanEngineService] 🔍 [PHASE] Waiting for wallet save...');
             await this.scannerService.positionManager.waitForWalletSave(60000);
+            // console.log('[ScanEngineService] 🔍 [PHASE] Wallet save wait complete');
 
             // PHASE 1: Market Regime Detection & F&G Index
+            // console.log('[ScanEngineService] 🔍 [PHASE 1] Starting market regime detection...');
             const regimeStartTime = Date.now();
-            console.log('[AutoScannerService] 🌡️ Detecting market regime and fetching F&G Index...');
+            // console.log('[AutoScannerService] 🌡️ Detecting market regime and fetching F&G Index...');
             const regimeData = await this.scannerService.marketRegimeService._detectMarketRegime();
             phaseTimings.regimeDetection = Date.now() - regimeStartTime;
+            // console.log('[ScanEngineService] 🔍 [PHASE 1] Market regime detection complete, took', phaseTimings.regimeDetection, 'ms');
 
             if (!regimeData) {
                 console.error('[AutoScannerService] ❌ Failed to detect market regime, skipping cycle.');
@@ -143,69 +155,163 @@ export class ScanEngineService {
             }
 
             const { regime, confidence } = regimeData;
-            console.log(`[AutoScannerService] 📊 Market Regime: ${regime.toUpperCase()} (${confidence.toFixed(1)}% confidence)`);
+            // console.log(`[AutoScannerService] 📊 Market Regime: ${regime.toUpperCase()} (${confidence.toFixed(1)}% confidence)`);
             
             cycleStats.marketRegime = this.scannerService.state.marketRegime ? { ...this.scannerService.state.marketRegime } : null;
 
             
             if (confidence < this.scannerService.state.settings.minimumRegimeConfidence) {
                 console.warn(`[ScanEngineService] ⚠️ Regime confidence ${confidence.toFixed(1)}% below threshold (${this.scannerService.state.settings.minimumRegimeConfidence}%). Skipping strategy evaluation.`);
-                console.log('[ScanEngineService] 🔍 EARLY RETURN: Regime confidence too low, skipping entire scan cycle');
+                // console.log('[ScanEngineService] 🔍 EARLY RETURN: Regime confidence too low, skipping entire scan cycle');
                 this.scannerService.state.isScanning = false;
                 this.scannerService.notifySubscribers();
                 return;
             }
-            
-            console.log('[ScanEngineService] 🔍 Regime confidence check passed, continuing with scan cycle...');
 
             // PHASE 2: Price Fetching
+            // console.log('[ScanEngineService] 🔍 [PHASE 2] Starting price consolidation...');
             const priceStartTime = Date.now();
-            console.log('[ScanEngineService] 🔍 ===== PRICE_FETCHING_PHASE =====');
-            console.log('[AutoScannerService] 💰 Fetching current prices for strategies and positions...');
-            console.log('[ScanEngineService] 🔍 About to call _consolidatePrices...');
             await this.scannerService.priceManagerService._consolidatePrices();
-            console.log('[ScanEngineService] 🔍 _consolidatePrices completed');
             phaseTimings.priceFetching = Date.now() - priceStartTime;
-            console.log('[ScanEngineService] 🔍 Price fetching phase completed, moving to position monitoring...');
+            // console.log('[ScanEngineService] 🔍 [PHASE 2] Price consolidation complete, took', phaseTimings.priceFetching, 'ms');
 
             // PHASE 3: Position Monitoring and Reconciliation
+            // console.log('[ScanEngineService] 🔍 [PHASE 3] Starting position monitoring...');
             const monitoringStartTime = Date.now();
-            console.log('[ScanEngineService] 🔍 ===== POSITION_MONITORING_PHASE =====');
-            console.log('[ScanEngineService] 🔍 About to call _monitorPositions...');
-            console.log('[ScanEngineService] 🔍 Current prices object:', this.scannerService.priceManagerService.currentPrices);
-            console.log('[ScanEngineService] 🔍 Price keys count:', Object.keys(this.scannerService.priceManagerService.currentPrices || {}).length);
-            console.log('[ScanEngineService] 🔍 PositionManager exists:', !!this.scannerService.positionManager);
-            console.log('[ScanEngineService] 🔍 Positions array exists:', !!this.scannerService.positionManager?.positions);
-            console.log('[ScanEngineService] 🔍 Positions count:', this.scannerService.positionManager?.positions?.length || 0);
-            console.log('[AutoScannerService] 👀 Monitoring open positions and reconciling...');
             
             try {
-                console.log('[ScanEngineService] 🔍 CALLING _monitorPositions NOW...');
-                await this._monitorPositions(cycleStats);
-                console.log('[ScanEngineService] 🔍 _monitorPositions completed successfully');
+                // console.log('[ScanEngineService] 🔍 [PHASE 3] About to call _monitorPositions...');
+                // console.log('[ScanEngineService] 🔍 [PHASE 3] _monitorPositions function exists:', typeof this._monitorPositions);
+                // console.log('[ScanEngineService] 🔍 [PHASE 3] cycleStats:', !!cycleStats);
+                // console.log('[ScanEngineService] 🔍 [PHASE 3] Calling _monitorPositions now...');
+                
+                // Wrap in immediate try-catch to catch synchronous errors
+                let monitorPromise;
+                const phase3StartTime = Date.now();
+                // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] STARTING _monitorPositions CALL (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                
+                // Track promise state (moved outside try block so timeout can access it)
+                let promiseResolved = false;
+                let promiseRejected = false;
+                let promiseResult = null;
+                let promiseError = null;
+                
+                try {
+                    // Test: Log the function itself
+                    // console.log('[ScanEngineService] 🔍 [PHASE 3] _monitorPositions function:', this._monitorPositions);
+                    // console.log('[ScanEngineService] 🔍 [PHASE 3] _monitorPositions.toString():', this._monitorPositions.toString().substring(0, 200));
+                    
+                    // Force immediate execution test
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] CALLING _monitorPositions NOW (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    const testResult = this._monitorPositions(cycleStats);
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] FUNCTION CALL RETURNED (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    // console.log('[ScanEngineService] 🔍 [PHASE 3] Function call returned:', typeof testResult);
+                    monitorPromise = testResult;
+                    // console.log('[ScanEngineService] 🔍 [PHASE 3] _monitorPositions promise created, type:', typeof monitorPromise);
+                    // console.log('[ScanEngineService] 🔍 [PHASE 3] Promise is Promise:', monitorPromise instanceof Promise);
+                    
+                    // Track promise state
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] PROMISE CREATED, ADDING THEN/CATCH HANDLERS (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    
+                    monitorPromise.then(result => {
+                        promiseResolved = true;
+                        promiseResult = result;
+                        // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] ✅ PROMISE RESOLVED (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                        // console.log('[ScanEngineService] 🔍 [PHASE 3] Promise resolved with result:', result);
+                    }).catch(error => {
+                        promiseRejected = true;
+                        promiseError = error;
+                        // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] ❌ PROMISE REJECTED (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                        console.error('[ScanEngineService] 🔍 [PHASE 3] Promise rejected with error:', error);
+                    });
+                    
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] THEN/CATCH HANDLERS ADDED (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    
+                } catch (syncError) {
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] ❌ SYNCHRONOUS ERROR (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    console.error('[ScanEngineService] ❌ SYNCHRONOUS ERROR calling _monitorPositions:', syncError);
+                    console.error('[ScanEngineService] ❌ Sync error stack:', syncError.stack);
+                    throw syncError;
+                }
+                
+                // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] ABOUT TO AWAIT PROMISE (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                // console.log('[ScanEngineService] 🔍 [PHASE 3] About to await promise...');
+                
+                // Add timeout wrapper to detect if promise never resolves
+                // CRITICAL: This timeout must be LONGER than monitorAndClosePositions timeout (300s)
+                // monitorAndClosePositions can take up to 300s (position loop 120s + batch close 60s + overhead)
+                // Set to 360s (6 minutes) to allow monitorAndClosePositions to complete + safety margin
+                let timeoutId;
+                const awaitTimeout = new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => {
+                        const elapsed = Date.now() - phase3StartTime;
+                        console.warn(`[ScanEngineService] 🔍 [PHASE 3] ⏱️ WARNING: _monitorPositions taking longer than 360 seconds (${(elapsed/1000).toFixed(1)}s elapsed)`);
+                        console.warn(`[ScanEngineService] 🔍 [PHASE 3] Promise state - resolved: ${promiseResolved}, rejected: ${promiseRejected}`);
+                        console.warn(`[ScanEngineService] 🔍 [PHASE 3] This may indicate a hang in monitorAndClosePositions or kline data fetching`);
+                        reject(new Error(`_monitorPositions promise timeout after ${(elapsed/1000).toFixed(1)}s - function may be hanging`));
+                    }, 360000); // 360 seconds = 6 minutes
+                });
+                
+                try {
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] ENTERING Promise.race (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    const raceResult = await Promise.race([monitorPromise, awaitTimeout]);
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] Promise.race COMPLETED (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    
+                    // Clear timeout if promise resolved before timeout
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                        // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] TIMEOUT CLEARED (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    }
+                    // console.log('[ScanEngineService] 🔍 [PHASE 3] Position monitoring complete');
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] ✅✅✅ COMPLETE (${Date.now() - phase3StartTime}ms) ✅✅✅`);
+                } catch (timeoutError) {
+                    // console.error(`[ScanEngineService] 🔴🔴🔴 [PHASE 3] ❌ CATCH BLOCK ENTERED (${Date.now() - phase3StartTime}ms) 🔴🔴🔴`);
+                    // Clear timeout on error
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                    }
+                    if (timeoutError.message.includes('timeout')) {
+                        const elapsed = Date.now() - phase3StartTime;
+                        console.error(`[ScanEngineService] 🔍 [PHASE 3] ❌ Promise timeout after ${(elapsed/1000).toFixed(1)}s - _monitorPositions may be hanging`);
+                        console.error(`[ScanEngineService] 🔍 [PHASE 3] Promise state at timeout - resolved: ${promiseResolved}, rejected: ${promiseRejected}`);
+                        console.error(`[ScanEngineService] 🔍 [PHASE 3] If promiseResolved=false, the function is likely hanging inside monitorAndClosePositions`);
+                        console.error(`[ScanEngineService] 🔍 [PHASE 3] Check PositionManager logs for position loop timeout or kline data fetch issues`);
+                        // Continue anyway to see if it eventually resolves (but log that we're waiting)
+                        console.warn(`[ScanEngineService] 🔍 [PHASE 3] Continuing to wait for promise to complete...`);
+                        try {
+                            await monitorPromise;
+                            console.warn(`[ScanEngineService] 🔍 [PHASE 3] ✅ Promise eventually resolved after ${((Date.now() - phase3StartTime)/1000).toFixed(1)}s`);
+                        } catch (finalError) {
+                            console.error(`[ScanEngineService] 🔍 [PHASE 3] ❌ Promise failed after timeout (${((Date.now() - phase3StartTime)/1000).toFixed(1)}s):`, finalError);
+                            throw finalError;
+                        }
+                    } else {
+                        throw timeoutError;
+                    }
+                }
             } catch (monitorError) {
                 console.error('[ScanEngineService] ❌ ERROR in _monitorPositions:', monitorError);
-                console.error('[ScanEngineService] ❌ Error stack:', monitorError.stack);
+                console.error('[ScanEngineService] ❌ ERROR stack:', monitorError.stack);
                 throw monitorError;
             }
             
             phaseTimings.positionMonitoring = Date.now() - monitoringStartTime;
-
-            console.log('[ScanEngineService] 🔍 Position monitoring phase completed, checking for hard reset...');
+            // Commented out to reduce console flooding
+            // console.log('[ScanEngineService] 🔍 [PHASE 3] Position monitoring took', phaseTimings.positionMonitoring, 'ms');
             
             if (this.scannerService.isHardResetting) {
-                console.warn('[ScanEngineService] 🔍 Cycle aborted after position monitoring due to hard reset.');
                 this.scannerService.state.isScanning = false;
                 // OPTIMIZATION: Only notify at critical state changes
                 this.scannerService.notifySubscribers();
                 return;
             }
-            
-            console.log('[ScanEngineService] 🔍 No hard reset detected, continuing with scan cycle...');
 
             // NEW: Single summary check to avoid strategy evaluation when funds below minimum
+            // Commented out to reduce console flooding
+            // console.log('[ScanEngineService] 🔍 [PHASE] Checking available funds...');
             const availableUsdt = this.scannerService._getAvailableUsdt();
             const minTrade = this.scannerService.state?.settings?.minimumTradeValue || 10;
+            // console.log('[ScanEngineService] 🔍 [PHASE] Available USDT:', availableUsdt, 'Min trade:', minTrade);
 
             if (availableUsdt < minTrade) {
                 const formattedAvailableUsdt = this.scannerService._formatCurrency(availableUsdt);
@@ -233,58 +339,65 @@ export class ScanEngineService {
             // NEW: Check max invest cap but don't block entire scan cycle
             const capUsdt = Number(this.scannerService.state?.settings?.maxBalanceInvestCapUSDT || 0);
             let maxCapReached = false;
-            console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Starting max cap check...');
-            console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Cap USDT:', capUsdt);
             
             if (capUsdt > 0) {
                 const allocatedNow = this.scannerService._getBalanceAllocatedInTrades();
-                console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Allocated now:', allocatedNow);
-                console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Comparison:', allocatedNow, '>=', capUsdt);
                 
                 if (allocatedNow >= capUsdt) {
-                    console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - MAX CAP REACHED!');
                     this.addLog(
                         `[FUNDS] Max invest cap reached: allocated ${this.scannerService._formatCurrency(allocatedNow)} ≥ cap ${this.scannerService._formatCurrency(capUsdt)}. Will skip opening new positions but continue monitoring existing positions.`,
                         'warning'
                     );
                     maxCapReached = true;
-                } else {
-                    console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - Cap not reached, continuing normally');
                 }
-            } else {
-                console.log('[ScanEngineService] 🔍 MAX_CAP_CHECK - No cap set, continuing normally');
             }
 
             // PHASE 4: Strategy Loading
+            // Commented out to reduce console flooding
+            // console.log('[ScanEngineService] 🔍 [PHASE 4] Starting strategy loading...');
             const strategyLoadStartTime = Date.now();
-            console.log('[AutoScannerService] 📋 Loading active strategies...');
-            const strategies = await this._loadStrategies();
-            console.log(`[AutoScannerService] ✅ Loaded ${strategies.length} strategies`);
+            // console.log('[AutoScannerService] 📋 Loading active strategies...');
+            let strategies = await this._loadStrategies() || [];
             phaseTimings.strategyLoading = Date.now() - strategyLoadStartTime;
+            // console.log(`[ScanEngineService] 🔍 [PHASE 4] Strategy loading complete: ${strategies.length} strategies loaded in ${phaseTimings.strategyLoading}ms`);
+            // console.log(`[AutoScannerService] ✅ Loaded ${strategies.length} strategies`);
 
             if (!strategies || strategies.length === 0) {
-                console.warn('[AutoScannerService] ⚠️ No active strategies found');
-                this.scannerService.state.isScanning = false;
-                this.scannerService.notifySubscribers();
-                return;
+                console.warn('[AutoScannerService] ⚠️ No active strategies found - continuing cycle for position monitoring only');
+                this.addLog('⚠️ No active strategies found. Skipping strategy evaluation but continuing position monitoring.', 'warning');
+                // Continue with empty strategies array - position monitoring will still run
+                strategies = [];
+            } else {
+                console.log(`[AutoScannerService] ✅ Loaded ${strategies.length} active strategies`);
             }
-            console.log(`[AutoScannerService] ✅ Loaded ${strategies.length} active strategies`);
 
             // PHASE 5: Strategy Evaluation & Signal Detection - OPTIMIZED
+            // Commented out to reduce console flooding
+            // console.log('[ScanEngineService] 🔍 [PHASE 5] Starting strategy evaluation...');
             const evaluationStartTime = Date.now();
-            console.log('[AutoScannerService] 🔍 Evaluating strategies and detecting signals...');
-            console.log('[AutoScannerService] 🔍 Evaluation inputs:', {
-                strategiesCount: strategies.length,
-                maxCapReached: maxCapReached,
-                availableBalance: this._getCurrentWalletState().availableBalance,
-                currentPricesCount: Object.keys(this.scannerService.priceManagerService.currentPrices).length
-            });
+            // console.log('[AutoScannerService] 🔍 Evaluating strategies and detecting signals...');
+            // console.log('[AutoScannerService] 🔍 Evaluation inputs:', {
+            //     strategiesCount: strategies.length,
+            //     maxCapReached: maxCapReached,
+            //     availableBalance: this._getCurrentWalletState().availableBalance,
+            //     currentPricesCount: Object.keys(this.scannerService.priceManagerService.currentPrices).length
+            // });
+            // console.log('[ScanEngineService] 🔍 [PHASE 5] About to enter requestIdleCallback wrapper...');
             
             // OPTIMIZATION: Use requestIdleCallback for heavy computations to prevent UI blocking
+            // FIX: Add timeout fallback to prevent hanging
             const scanResult = await new Promise((resolve) => {
+                let resolved = false;
                 const performEvaluation = async () => {
+                    if (resolved) {
+                        // Commented out to reduce console flooding
+                        // console.log('[ScanEngineService] 🔍 [PHASE 5] performEvaluation called but already resolved, skipping...');
+                        return;
+                    }
                     try {
-                        console.log('[AutoScannerService] 🔍 Starting strategy evaluation...');
+                        // Commented out to reduce console flooding
+                        // console.log('[ScanEngineService] 🔍 [PHASE 5] performEvaluation executing...');
+                        // console.log('[AutoScannerService] 🔍 Starting strategy evaluation...');
                         const result = await this._evaluateStrategies(
                             strategies,
                             this._getCurrentWalletState(),
@@ -295,18 +408,44 @@ export class ScanEngineService {
                             maxCapReached
                         );
                         console.log('[AutoScannerService] 🔍 Strategy evaluation result:', result);
+                        if (!resolved) {
+                            resolved = true;
                         resolve(result);
+                        }
                     } catch (error) {
                         console.error('[AutoScannerService] ❌ Strategy evaluation failed:', error);
+                        if (!resolved) {
+                            resolved = true;
                         resolve({ signalsFound: 0, tradesExecuted: 0, combinationsEvaluated: 0 });
+                        }
                     }
                 };
 
+                // FIX: Add timeout fallback - if requestIdleCallback doesn't fire within 2 seconds, execute anyway
+                // Commented out to reduce console flooding
+                // console.log('[ScanEngineService] 🔍 [PHASE 5] Setting up requestIdleCallback with 2s timeout fallback...');
+                const timeoutId = setTimeout(() => {
+                    if (!resolved) {
+                        console.log('[AutoScannerService] ⚠️ requestIdleCallback timeout - executing evaluation immediately');
+                        performEvaluation();
+                    }
+                }, 2000);
+
                 // Use requestIdleCallback if available, otherwise execute immediately
                 if (typeof requestIdleCallback !== 'undefined') {
-                    requestIdleCallback(performEvaluation, { timeout: 1000 });
+                    // Commented out to reduce console flooding
+                    // console.log('[ScanEngineService] 🔍 [PHASE 5] Using requestIdleCallback...');
+                    requestIdleCallback(() => {
+                        // Commented out to reduce console flooding
+                        // console.log('[ScanEngineService] 🔍 [PHASE 5] requestIdleCallback fired, clearing timeout and executing...');
+                        clearTimeout(timeoutId);
+                        performEvaluation();
+                    }, { timeout: 1000 });
                 } else {
+                    // Commented out to reduce console flooding
+                    // console.log('[ScanEngineService] 🔍 [PHASE 5] requestIdleCallback not available, using setTimeout fallback...');
                     // Fallback for browsers without requestIdleCallback
+                    clearTimeout(timeoutId);
                     setTimeout(performEvaluation, 0);
                 }
             });
@@ -398,15 +537,8 @@ export class ScanEngineService {
                 }
             }
 
-            console.log('[ScanEngineService] 🔍 ===== CHECKING IF SHOULD START COUNTDOWN =====');
-            console.log('[ScanEngineService] 🔍 isRunning:', this.scannerService.state.isRunning);
-            console.log('[ScanEngineService] 🔍 isHardResetting:', this.scannerService.isHardResetting);
-            console.log('[ScanEngineService] 🔍 Should start countdown:', this.scannerService.state.isRunning && !this.scannerService.isHardResetting);
-            
             if (this.scannerService.state.isRunning && !this.scannerService.isHardResetting) {
-                console.log('[ScanEngineService] 🔍 CALLING _startCountdown() NOW...');
-                this.scannerService._startCountdown();
-                console.log('[ScanEngineService] 🔍 _startCountdown() completed');
+                this.scannerService.lifecycleService._startCountdown();
             } else {
                 console.log('[ScanEngineService] ⏸️ Not starting new countdown as scanner is stopped or resetting.');
                 console.log('[ScanEngineService] ⏸️ Reason:', !this.scannerService.state.isRunning ? 'Scanner not running' : 'Scanner is hard resetting');
@@ -425,12 +557,18 @@ export class ScanEngineService {
      * @returns {Array} List of active strategies.
      */
     async _loadStrategies() {
-        console.log('[AutoScannerService] 📋 Loading strategies...');
+        // Commented out to reduce console flooding
+        // console.log('[ScanEngineService] 🔍 [_loadStrategies] Starting strategy load...');
+        // console.log('[AutoScannerService] 📋 Loading strategies...');
 
+        try {
+            // console.log('[ScanEngineService] 🔍 [_loadStrategies] Calling strategyManager._loadAndFilterStrategiesInternal...');
         // OPTIMIZATION: Use internal method to avoid duplicate database calls
         const strategies = await this.scannerService.strategyManager._loadAndFilterStrategiesInternal();
+            // console.log('[ScanEngineService] 🔍 [_loadStrategies] Strategy load complete, got', strategies?.length || 0, 'strategies');
 
         // CRITICAL FIX: Build activeStrategies map for PositionManager lookups
+            // console.log('[ScanEngineService] 🔍 [_loadStrategies] Building activeStrategies map...');
         const activeStrategiesMap = new Map();
         strategies.forEach(strategy => {
             if (strategy.combinationName) {
@@ -453,6 +591,10 @@ export class ScanEngineService {
         console.log(`[AutoScannerService] ✅ Loaded ${strategies.length} strategies`);
 
         return strategies;
+        } catch (error) {
+            console.error('[ScanEngineService] 🔍 [_loadStrategies] ERROR loading strategies:', error);
+            throw error;
+        }
     }
 
     /**
@@ -460,58 +602,286 @@ export class ScanEngineService {
      * @param {object} cycleStats - Statistics object for the current scan cycle.
      */
     async _monitorPositions(cycleStats) {
-        console.log('[ScanEngineService] [MONITOR] 🔍 ===== _MONITOR_POSITIONS ENTRY =====');
-        console.log('[ScanEngineService] [MONITOR] 🔍 _monitorPositions called with cycleStats:', !!cycleStats);
-        console.log('[ScanEngineService] [MONITOR] 🔍 isHardResetting:', this.scannerService.isHardResetting);
-        console.log('[ScanEngineService] [MONITOR] 🔍 scannerService exists:', !!this.scannerService);
-        console.log('[ScanEngineService] [MONITOR] 🔍 About to check isHardResetting condition...');
+        const _monitorStartTime = Date.now();
+        const functionId = `_monitor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        console.log(`[ScanEngineService] [MONITOR] 🚀 [${functionId}] Starting _monitorPositions (0ms)`);
         
-        // TEMPORARY FIX: Force reset isHardResetting if it's stuck
-        if (this.scannerService.isHardResetting) {
-            console.log('[ScanEngineService] [MONITOR] 🔍 isHardResetting is true, but forcing it to false to allow position monitoring...');
-            this.scannerService.isHardResetting = false;
-            console.log('[ScanEngineService] [MONITOR] 🔍 isHardResetting reset to false, continuing with position monitoring...');
-        }
-        
-        console.log('[ScanEngineService] [MONITOR] 🔍 About to call monitorAndClosePositions...');
-        console.log('[ScanEngineService] [MONITOR] 🔍 Current prices available:', Object.keys(this.scannerService.priceManagerService.currentPrices || {}).length);
-        console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager available:', !!this.scannerService.positionManager);
-        console.log('[ScanEngineService] [MONITOR] 🔍 Positions in memory:', this.scannerService.positionManager?.positions?.length || 0);
-        
-        console.log('[ScanEngineService] [MONITOR] 🔍 isHardResetting check passed, continuing with position monitoring...');
-
-        console.log('[AutoScannerService] [MONITOR] 🔍 Monitoring open positions...');
-        console.log('[AutoScannerService] [MONITOR] 🔍 Scanner state:', {
-            isRunning: this.scannerService.state.isRunning,
-            isScanning: this.scannerService.state.isScanning,
-            positionsCount: this.scannerService.positionManager.positions.length
+        // CRITICAL: Force async continuation to ensure promise resolves
+        await new Promise(resolve => {
+            // Use setTimeout with 0 delay to force async continuation
+            setTimeout(() => {
+                resolve();
+            }, 0);
         });
-
-        console.log('[ScanEngineService] [MONITOR] 🔍 About to call monitorAndClosePositions...');
-        console.log('[ScanEngineService] [MONITOR] 🔍 Current prices available:', Object.keys(this.scannerService.priceManagerService.currentPrices || {}).length);
-        console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager available:', !!this.scannerService.positionManager);
-        console.log('[ScanEngineService] [MONITOR] 🔍 Positions in memory:', this.scannerService.positionManager?.positions?.length || 0);
-        console.log('[ScanEngineService] [MONITOR] 🔍 About to call positionManager.monitorAndClosePositions...');
-        console.log('[ScanEngineService] [MONITOR] 🔍 Function exists:', typeof this.scannerService.positionManager.monitorAndClosePositions);
         
-        let monitorResult;
+        // CRITICAL: Wrap entire function in try-catch to catch any synchronous errors
+        let tryBlockEntered = false;
         try {
-            //console.log('[ScanEngineService] [MONITOR] 🔍 CALLING monitorAndClosePositions NOW...');
-            //console.log('[ScanEngineService] [MONITOR] 🔍 Function exists:', typeof this.scannerService.positionManager.monitorAndClosePositions);
-            //console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager object:', !!this.scannerService.positionManager);
-            //console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager constructor:', this.scannerService.positionManager?.constructor?.name);
-            //console.log('[ScanEngineService] [MONITOR] 🔍 About to call the function...');
-            //console.log('[ScanEngineService] 🔍 [EXECUTION_TRACE] step_1: About to call monitorAndClosePositions');
+            tryBlockEntered = true;
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Try block entered (${Date.now() - _monitorStartTime}ms)`);
             
-            // Add a timeout to catch if the function hangs - increased to 90 seconds to allow executeBatchClose (60s) + buffer
-            const timeoutPromise = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('monitorAndClosePositions timeout after 90 seconds')), 90000);
-            });
-            
-            const monitorPromise = this.scannerService.positionManager.monitorAndClosePositions(this.scannerService.priceManagerService.currentPrices);
+            const _step1_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 1: Accessing scannerService (${Date.now() - _monitorStartTime}ms)`);
+            const scannerService = this.scannerService;
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 1 complete: scannerService accessed (${Date.now() - _step1_start}ms)`);
             
             const _step2_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 2: Accessing positionManager (${Date.now() - _monitorStartTime}ms)`);
+            const positionManager = scannerService.positionManager;
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 2 complete: positionManager accessed (${Date.now() - _step2_start}ms)`);
+            
+            const _step3_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 3: Accessing priceManagerService (${Date.now() - _monitorStartTime}ms)`);
+            const priceManagerService = scannerService.priceManagerService;
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 3 complete: priceManagerService accessed (${Date.now() - _step3_start}ms)`);
+            
+            const _step4_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 4: Validating services (${Date.now() - _monitorStartTime}ms)`);
+            if (!scannerService || !positionManager || !priceManagerService) {
+                console.error('[ScanEngineService] [MONITOR] ❌ CRITICAL: Required services not available');
+                throw new Error('Required services not available for position monitoring');
+            }
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 4 complete: Services validated (${Date.now() - _step4_start}ms)`);
+            
+            const _step5_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 5: Checking isHardResetting (${Date.now() - _monitorStartTime}ms)`);
+            // Check if hard reset is in progress
+            if (scannerService.isHardResetting) {
+                console.log('[ScanEngineService] [MONITOR] ⏸️ Scanner is hard resetting, skipping position monitoring');
+                return { signalsFound: 0, tradesExecuted: 0, combinationsEvaluated: 0 };
+            }
+            console.log(`[ScanEngineService] [MONITOR] [${functionId}] Step 5 complete: isHardResetting check passed (${Date.now() - _step5_start}ms)`);
+        
+        // FIX: Preload indicators for symbols with open positions that aren't being scanned
+        // This ensures ATR is available for position monitoring even if no strategies are active for that symbol
+            const _step6_start = Date.now();
+            // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO LOG Step 6 (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+            // console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6: Starting indicator preload check (${Date.now() - _monitorStartTime}ms since start)`);
+            // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO ENTER Step 6 TRY BLOCK (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+        try {
+                const _step6a_start = Date.now();
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] INSIDE Step 6 TRY BLOCK (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6a: Getting open positions (${Date.now() - _monitorStartTime}ms since start)`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO ACCESS positionManager.positions (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                const openPositions = positionManager.positions.filter(pos => pos.status === 'open' || pos.status === 'trailing');
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] positionManager.positions.filter COMPLETE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] openPositions.length: ${openPositions.length} (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO LOG Step 6a complete (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6a complete: Found ${openPositions.length} open positions (${Date.now() - _step6a_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER Step 6a complete log (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO CHECK openPositions.length > 0 (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+            
+            if (openPositions.length > 0) {
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] openPositions.length > 0 is TRUE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] INSIDE if BLOCK, BEFORE FIRST console.log (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    // console.log('[ScanEngineService] [MONITOR] 🔍 Has open positions, checking indicators...');
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER FIRST console.log (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // Initialize indicators object if it doesn't exist
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] BEFORE SECOND console.log (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    // console.log('[ScanEngineService] [MONITOR] 🔍 Checking indicators state...');
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER SECOND console.log, BEFORE ACCESSING scannerService.state (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO ACCESS scannerService.state (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                const stateAccess = scannerService.state;
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] scannerService.state ACCESSED (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO ACCESS scannerService.state.indicators (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    if (!scannerService.state.indicators) {
+                        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] INSIDE if (!indicators) - indicators is falsy (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        // console.log('[ScanEngineService] [MONITOR] 🔍 Initializing indicators object...');
+                        scannerService.state.indicators = {};
+                        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER ASSIGNING indicators = {} (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    } else {
+                        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] INSIDE if (!indicators) - indicators EXISTS (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    }
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER if (!indicators) BLOCK (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    // console.log('[ScanEngineService] [MONITOR] 🔍 Indicators state ready');
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER 'Indicators state ready' LOG (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO BUILD symbolsNeedingIndicators Map (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // Get symbols that need indicators (use Map to avoid duplicates by symbol)
+                const symbolsNeedingIndicators = new Map();
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] symbolsNeedingIndicators Map CREATED, ABOUT TO ITERATE openPositions (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] openPositions.length: ${openPositions.length} (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                
+                let positionIterationCount = 0;
+                openPositions.forEach(pos => {
+                    positionIterationCount++;
+                    // if (positionIterationCount <= 5 || positionIterationCount % 10 === 0) {
+                    //     console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] Processing position ${positionIterationCount}/${openPositions.length}: ${pos.symbol} (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    // }
+                    if (pos.symbol) {
+                        const symbolNoSlash = pos.symbol.replace('/', '');
+                        // Check if indicators already exist
+                            if (!scannerService.state.indicators[symbolNoSlash] || 
+                                !scannerService.state.indicators[symbolNoSlash].atr ||
+                                (Array.isArray(scannerService.state.indicators[symbolNoSlash].atr) && 
+                                 scannerService.state.indicators[symbolNoSlash].atr.length === 0)) {
+                            // Use symbol as key to avoid duplicates, store timeframe
+                            symbolsNeedingIndicators.set(symbolNoSlash, pos.timeframe || '15m');
+                        }
+                    }
+                });
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER forEach, symbolsNeedingIndicators.size: ${symbolsNeedingIndicators.size} (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO CHECK symbolsNeedingIndicators.size > 0 (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                if (symbolsNeedingIndicators.size > 0) {
+                    // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] symbolsNeedingIndicators.size > 0 is TRUE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        const _step6b_start = Date.now();
+                        console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6b: Calculating indicators for ${symbolsNeedingIndicators.size} symbols (${Date.now() - _monitorStartTime}ms since start)`);
+                        console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] Symbols:`, Array.from(symbolsNeedingIndicators.keys()));
+                    
+                    // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO CREATE preloadPromises (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    const preloadPromises = Array.from(symbolsNeedingIndicators.entries()).map(([symbolNoSlash, timeframe], index) => {
+                            const _promiseStartTime = Date.now();
+                            const _promiseId = `${functionId}_promise_${index}_${symbolNoSlash}`;
+                            // console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] [PROXY] Starting API call for ${symbolNoSlash} (${timeframe})...`);
+                        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${_promiseId}] CREATING PROMISE for ${symbolNoSlash} (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${_promiseId}] CALLING getKlineData for ${symbolNoSlash} (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        
+                        // Wrap getKlineData with a timeout to prevent hanging (30 seconds per symbol)
+                        // Use priority=1 for position monitoring (high priority)
+                        const klineDataPromise = getKlineData({
+                            symbols: [symbolNoSlash],
+                            interval: timeframe,
+                            limit: 100,
+                            priority: 1 // High priority for position monitoring
+                        });
+                        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${_promiseId}] getKlineData PROMISE CREATED (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        
+                        const timeoutPromise = new Promise((_, reject) => {
+                            setTimeout(() => {
+                                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${_promiseId}] ⏱️ TIMEOUT for getKlineData(${symbolNoSlash}) after 30s (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                                reject(new Error(`getKlineData timeout for ${symbolNoSlash} after 30 seconds`));
+                            }, 30000);
+                        });
+                        
+                        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${_promiseId}] CREATING Promise.race (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        return Promise.race([klineDataPromise, timeoutPromise])
+                        .then(response => {
+                            // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${_promiseId}] Promise.race RESOLVED for ${symbolNoSlash} (${Date.now() - _monitorStartTime}ms, promise took ${Date.now() - _promiseStartTime}ms) 🔴🔴🔴`);
+                            if (response?.success && response?.data?.[symbolNoSlash]?.success && response?.data?.[symbolNoSlash]?.data) {
+                                const klineData = response.data[symbolNoSlash].data.map(kline => ({
+                                    timestamp: Array.isArray(kline) ? kline[0] : kline.timestamp || kline.time,
+                                    open: parseFloat(Array.isArray(kline) ? kline[1] : kline.open),
+                                    high: parseFloat(Array.isArray(kline) ? kline[2] : kline.high),
+                                    low: parseFloat(Array.isArray(kline) ? kline[3] : kline.low),
+                                    close: parseFloat(Array.isArray(kline) ? kline[4] : kline.close),
+                                    volume: parseFloat(Array.isArray(kline) ? kline[5] : kline.volume)
+                                }));
+
+                                if (klineData.length >= 50) {
+                                    const indicatorSettings = {
+                                        atr: { enabled: true, period: 14 },
+                                        volume_sma: { enabled: true, period: 20 },
+                                        obv: { enabled: true }
+                                    };
+
+                                        const allIndicators = calculateAllIndicators(klineData, indicatorSettings, scannerService.addLog.bind(scannerService));
+                                    
+                                        scannerService.state.indicators[symbolNoSlash] = allIndicators;
+                                    
+                                    console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] ✅ Calculated and stored indicators for ${symbolNoSlash} (${timeframe})`);
+                                    return { symbol: symbolNoSlash, success: true };
+                                }
+                            }
+                            return { symbol: symbolNoSlash, success: false, error: 'Insufficient kline data' };
+                        })
+                        .catch(error => {
+                            // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${_promiseId}] Promise.race REJECTED for ${symbolNoSlash} (${Date.now() - _monitorStartTime}ms, promise took ${Date.now() - _promiseStartTime}ms) - ${error.message} 🔴🔴🔴`);
+                            console.warn(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] ⚠️ Failed to preload indicators for ${symbolNoSlash}: ${error.message}`);
+                            return { symbol: symbolNoSlash, success: false, error: error.message };
+                        });
+                    });
+                    
+                    // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ALL ${preloadPromises.length} PROMISES CREATED (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        const _step6c_start = Date.now();
+                        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO AWAIT Promise.allSettled (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        // console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6c: Waiting for ${preloadPromises.length} preload promises (${Date.now() - _monitorStartTime}ms since start)`);
+                    const preloadResults = await Promise.allSettled(preloadPromises);
+                    // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] Promise.allSettled COMPLETE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                        console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6c complete: Preload promises settled (${Date.now() - _step6c_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
+                    const successful = preloadResults.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+                    const failed = preloadResults.length - successful;
+                    
+                    if (successful > 0) {
+                        console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] ✅ Successfully preloaded indicators for ${successful} symbol${successful !== 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}`);
+                    }
+                        console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6b complete: Indicator preload finished (${Date.now() - _step6b_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
+                    } else {
+                    // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] symbolsNeedingIndicators.size > 0 is FALSE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                    // console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] No symbols need indicator preloading`);
+                }
+            } else {
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] openPositions.length > 0 is FALSE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] No open positions, skipping indicator preload`);
+            }
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO LOG Step 6 complete (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+                // console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6 complete: Indicator preload check finished (${Date.now() - _step6_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
+                // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER Step 6 complete log (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+        } catch (preloadError) {
+            // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] CATCH BLOCK IN Step 6 (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+            console.warn(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] ⚠️ Error during indicator preloading: ${preloadError.message}`);
+                console.error(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] ⚠️ Preload error stack:`, preloadError.stack);
+            // Continue with monitoring even if preload fails
+        }
+        
+        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER Step 6 TRY-CATCH BLOCK (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] BEFORE Step 7 (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+        const _step7_start = Date.now();
+        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO LOG Step 7 (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+        // console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7: About to call monitorAndClosePositions (${Date.now() - _monitorStartTime}ms since start)`);
+        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER Step 7 LOG (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+        let monitorResult;
+        try {
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7a: CALLING monitorAndClosePositions NOW (${Date.now() - _monitorStartTime}ms since start)`);
+                console.log('[ScanEngineService] [MONITOR] 🔍 Function exists:', typeof positionManager.monitorAndClosePositions);
+                console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager object:', !!positionManager);
+                console.log('[ScanEngineService] [MONITOR] 🔍 About to call the function...');
+            
+            // Add a timeout to catch if the function hangs
+            // Timeout breakdown:
+            // - Position loop: up to 120 seconds
+            // - executeBatchClose: up to 60 seconds
+            // - Reconciliation and other operations: buffer
+            // - Safety margin for network delays, processing overhead
+            // Total: 300 seconds (5 minutes) to be safe
+                console.log('[ScanEngineService] [MONITOR] 🔍 Setting up 300s timeout for monitorAndClosePositions...');
+            let timeoutId;
+            const timeoutPromise = new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => {
+                        console.error('[ScanEngineService] [MONITOR] ⏱️ TIMEOUT: monitorAndClosePositions exceeded 300 seconds!');
+                        console.error('[ScanEngineService] [MONITOR] ⏱️ This indicates the function is taking longer than expected. Check logs for bottlenecks.');
+                        reject(new Error('monitorAndClosePositions timeout after 300 seconds'));
+                    }, 300000);
+                });
+                
+                const _step7b_start = Date.now();
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7b: Getting current prices (${Date.now() - _monitorStartTime}ms since start)`);
+                const currentPrices = priceManagerService.currentPrices;
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7b complete: Current prices retrieved (${Date.now() - _step7b_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
+                
+                const _step7c_start = Date.now();
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7c: Calling monitorAndClosePositions (${Date.now() - _monitorStartTime}ms since start)`);
+                const monitorPromise = positionManager.monitorAndClosePositions(currentPrices);
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7c complete: monitorAndClosePositions promise created (${Date.now() - _step7c_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
+                
+                const _step7d_start = Date.now();
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7d: Awaiting monitorAndClosePositions (${Date.now() - _monitorStartTime}ms since start)`);
+            try {
             monitorResult = await Promise.race([monitorPromise, timeoutPromise]);
+                // Clear timeout if promise resolved before timeout
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                    console.log(`[ScanEngineService] [MONITOR] ✅ Timeout cleared - monitorAndClosePositions completed successfully (${Date.now() - _step7d_start}ms)`);
+                }
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7d complete: monitorAndClosePositions completed (${Date.now() - _step7d_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
+            } catch (raceError) {
+                // Clear timeout on error
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                    console.error(`[ScanEngineService] [MONITOR] ⚠️ Timeout cleared after error - monitorAndClosePositions failed (${Date.now() - _step7d_start}ms)`);
+                }
+                throw raceError;
+            }
             
             //console.log('[ScanEngineService] [MONITOR] 🔍 [EXECUTION_TRACE] step_2: monitorAndClosePositions completed successfully');
             //console.log('[ScanEngineService] [MONITOR] 🔍 monitorAndClosePositions result:', monitorResult);
@@ -523,9 +893,9 @@ export class ScanEngineService {
             console.error('[ScanEngineService] [MONITOR] ❌ Error message:', monitorError?.message);
             console.error('[ScanEngineService] [MONITOR] ❌ Error stack:', monitorError.stack);
             console.error('[ScanEngineService] [MONITOR] ❌ PositionManager state:', {
-                exists: !!this.scannerService.positionManager,
-                positions: this.scannerService.positionManager?.positions?.length || 0,
-                isMonitoring: this.scannerService.positionManager?.isMonitoring
+                    exists: !!scannerService.positionManager,
+                    positions: scannerService.positionManager?.positions?.length || 0,
+                    isMonitoring: scannerService.positionManager?.isMonitoring
             });
             throw monitorError;
         } finally {
@@ -543,45 +913,55 @@ export class ScanEngineService {
         const tradesWereClosed = (monitorResult?.tradesToCreate.length > 0);
 
         if (tradesWereClosed) {
-            console.log('[AutoScannerService] [MONITOR] 🔄 Refreshing wallet state after trade execution...');
+                const _step8_start = Date.now();
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8: Refreshing wallet state (${Date.now() - _monitorStartTime}ms since start)`);
 
-            try {
-                // Step 1: Sync with Binance to get latest balances
-                await this.scannerService.walletManagerService.initializeLiveWallet();
+                try {
+                    const _step8a_start = Date.now();
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8a: initializeLiveWallet (${Date.now() - _monitorStartTime}ms since start)`);
+                    await scannerService.walletManagerService.initializeLiveWallet();
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8a complete (${Date.now() - _step8a_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
 
-                // Step 2: Recalculate wallet summary with fresh data
-                await this.scannerService.walletManagerService.updateWalletSummary(
+                    const _step8b_start = Date.now();
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8b: updateWalletSummary (${Date.now() - _monitorStartTime}ms since start)`);
+                    await scannerService.walletManagerService.updateWalletSummary(
                     this._getCurrentWalletState(),
-                    this.scannerService.priceManagerService.currentPrices
-                );
+                        scannerService.priceManagerService.currentPrices
+                    );
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8b complete (${Date.now() - _step8b_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
 
-                // Step 3: Persist to localStorage for immediate UI access
-                await this.scannerService._persistLatestWalletSummary();
+                    const _step8c_start = Date.now();
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8c: _persistLatestWalletSummary (${Date.now() - _monitorStartTime}ms since start)`);
+                    await scannerService._persistLatestWalletSummary();
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8c complete (${Date.now() - _step8c_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
 
-                // Step 4: Notifying UI components
-                this.scannerService.notifyWalletSubscribers();
+                    const _step8d_start = Date.now();
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8d: notifyWalletSubscribers (${Date.now() - _monitorStartTime}ms since start)`);
+                    scannerService.notifyWalletSubscribers();
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8d complete (${Date.now() - _step8d_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
 
-                console.log('[AutoScannerService] [MONITOR] ✅ Wallet state refreshed successfully');
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8 complete: Wallet state refreshed (${Date.now() - _step8_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
             } catch (refreshError) {
                 console.error('[AutoScannerService] ❌ Failed to refresh wallet after trades:', refreshError);
                 console.warn(`[AutoScannerService] [MONITOR] ⚠️ Wallet refresh warning: ${refreshError.message}`);
             }
         }
 
-        const currentWalletState = this.scannerService.walletManagerService?.getCurrentWalletState() || this._getCurrentWalletState();
+            const currentWalletState = scannerService.walletManagerService?.getCurrentWalletState() || this._getCurrentWalletState();
         const usdtBalanceObject = (currentWalletState?.balances || []).find(b => b.asset === 'USDT');
         const availableUsdt = parseFloat(usdtBalanceObject?.free || '0');
         const lockedUsdt = parseFloat(usdtBalanceObject?.locked || '0');
         // CRITICAL FIX: Get actual open positions count from PositionManager's internal cache
-        const walletPositionsCount = this.scannerService.positionManager.positions.length;
+            const walletPositionsCount = scannerService.positionManager.positions.length;
 
-        console.log(`[AutoScannerService] 💰 Using ${this.scannerService.state.tradingMode.toUpperCase()} wallet state. USDT Balance: ${this.scannerService._formatCurrency(availableUsdt)} | Positions: ${walletPositionsCount}`);
+            console.log(`[AutoScannerService] 💰 Using ${scannerService.state.tradingMode.toUpperCase()} wallet state. USDT Balance: ${scannerService._formatCurrency(availableUsdt)} | Positions: ${walletPositionsCount}`);
 
         // Run full reconciliation every 5 scans
-        if (this.scannerService.state.stats.totalScans % 5 === 0 && this.scannerService.state.stats.totalScans > 0) {
-            console.log('[AutoScannerService] [RECONCILE] 🔄 Performing periodic reconciliation with Binance...');
+        if (scannerService.state.stats.totalScans % 5 === 0 && scannerService.state.stats.totalScans > 0) {
+            const _step9_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 9: Performing periodic reconciliation (${Date.now() - _monitorStartTime}ms since start)`);
             try {
-                const reconcileResult = await this.scannerService.positionManager.reconcileWithBinance();
+                const reconcileResult = await scannerService.positionManager.reconcileWithBinance();
                 if (reconcileResult.success && reconcileResult.summary) {
                     const s = reconcileResult.summary;
                     console.log(`[AutoScannerService] [RECONCILE] ✅ Sync complete: ${s.positionsRemaining} positions, ${s.ghostPositionsCleaned} ghosts cleaned, ${s.externalOrders || 0} external orders`);
@@ -590,33 +970,39 @@ export class ScanEngineService {
                 } else {
                     console.log('[AutoScannerService] [RECONCILE] ℹ️ Reconciliation completed with no specific summary (likely no changes)');
                 }
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 9 complete: Reconciliation finished (${Date.now() - _step9_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
             } catch (reconcileError) {
                 console.warn(`[AutoScannerService] [RECONCILE] ⚠️ Reconciliation error: ${reconcileError.message}`);
             }
         }
 
-        if (this.scannerService.state.stats.totalScans % 10 === 0 && this.scannerService.state.stats.totalScans > 0) {
-            //this.addLog('[RECONCILE] 🔄 Performing position data reconciliation...', 'system');
-            const reconcileResult = await this.scannerService.positionManager.reconcilePositionData();
+        if (scannerService.state.stats.totalScans % 10 === 0 && scannerService.state.stats.totalScans > 0) {
+            const _step10_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 10: Performing position data reconciliation (${Date.now() - _monitorStartTime}ms since start)`);
+            const reconcileResult = await scannerService.positionManager.reconcilePositionData();
             if (reconcileResult.cleaned > 0) {
                 //this.addLog(`[RECONCILE] ✅ Cleaned up ${reconcileResult.cleaned} stale position records.`, 'success');
             }
             if (reconcileResult.errors.length > 0) {
                 console.log(`[AutoScannerService] [RECONCILE] ℹ️ Found ${reconcileResult.errors.length} position data issues`);
             }
+            console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 10 complete: Position data reconciliation finished (${Date.now() - _step10_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
         }
 
         // Run Fear & Greed Index update every 10 scans
-        if (this.scannerService.state.stats.totalScans % 10 === 0 && this.scannerService.state.stats.totalScans > 0) {
+        if (scannerService.state.stats.totalScans % 10 === 0 && scannerService.state.stats.totalScans > 0) {
+            const _step11_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 11: Fetching Fear & Greed Index (${Date.now() - _monitorStartTime}ms since start)`);
             try {
-                await this.scannerService._fetchFearAndGreedIndex();
-                const fngData = this.scannerService.state.fearAndGreedData;
+                await scannerService._fetchFearAndGreedIndex();
+                const fngData = scannerService.state.fearAndGreedData;
                 if (fngData) {
                     console.log(`[AutoScannerService] [F&G_INDEX] ✅ Updated: ${fngData.value} (${fngData.value_classification})`);
                     this.addLog(`[F&G Index] ✅ Updated: ${fngData.value} (${fngData.value_classification})`, 'system');
                 } else {
                     console.warn('[ScanEngineService] [F&G_INDEX] ⚠️ No F&G data after fetch');
                 }
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 11 complete: Fear & Greed Index fetched (${Date.now() - _step11_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
             } catch (fngError) {
                 console.warn(`[AutoScannerService] [F&G_INDEX] ⚠️ Fear & Greed update failed: ${fngError.message}`);
                 console.error('[ScanEngineService] [F&G_INDEX] ❌ Fear & Greed fetch error:', fngError);
@@ -624,12 +1010,14 @@ export class ScanEngineService {
         }
 
         // Run wallet state reconciliation every 20 scans
-        if (this.scannerService.state.stats.totalScans % 20 === 0 && this.scannerService.state.stats.totalScans > 0) {
+        if (scannerService.state.stats.totalScans % 20 === 0 && scannerService.state.stats.totalScans > 0) {
+            const _step12_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 12: Running wallet state reconciliation (${Date.now() - _monitorStartTime}ms since start)`);
             try {
                 const walletReconcileResult = await queueFunctionCall(
                     'reconcileWalletState',
                     reconcileWalletState,
-                    { mode: this.scannerService.state.tradingMode },
+                    { mode: scannerService.state.tradingMode },
                     'normal',
                     null,
                     0,
@@ -647,46 +1035,49 @@ export class ScanEngineService {
                 } else {
                     console.warn(`[AutoScannerService] [WALLET_RECONCILE] ⚠️ Wallet reconciliation failed: ${walletReconcileResult.error || 'Unknown issue'}`);
                 }
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 12 complete: Wallet state reconciliation finished (${Date.now() - _step12_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
             } catch (walletReconcileError) {
                 console.warn(`[AutoScannerService] [WALLET_RECONCILE] ⚠️ Wallet reconciliation error: ${walletReconcileError.message}`);
             }
         }
 
         // Monitor pending orders every 5 scans
-        if (this.scannerService.state.stats.totalScans % 5 === 0 && this.scannerService.state.stats.totalScans > 0) {
-            console.log('[AutoScannerService] [ORDER_MONITOR] 🔍 Checking pending orders...');
+        if (scannerService.state.stats.totalScans % 5 === 0 && scannerService.state.stats.totalScans > 0) {
+            const _step13_start = Date.now();
+            console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 13: Checking pending orders (${Date.now() - _monitorStartTime}ms since start)`);
             try {
                 // Initialize order monitoring if not already done
-                this.scannerService.positionManager.initializeOrderMonitoring();
+                scannerService.positionManager.initializeOrderMonitoring();
                 
-                if (this.scannerService.positionManager.pendingOrderManager) {
-                    const orderStats = this.scannerService.positionManager.pendingOrderManager.getStatistics();
+                if (scannerService.positionManager.pendingOrderManager) {
+                    const orderStats = scannerService.positionManager.pendingOrderManager.getStatistics();
                     if (orderStats.pending.count > 0) {
                         console.log(`[AutoScannerService] [ORDER_MONITOR] 📊 Pending orders: ${orderStats.pending.count}, Failed: ${orderStats.failed.count}`);
                         this.addLog(`[ORDER_MONITOR] 📊 Monitoring ${orderStats.pending.count} pending orders, ${orderStats.failed.count} failed`, 'info');
                     }
                     
                     // Clean up old failed orders
-                    this.scannerService.positionManager.pendingOrderManager.cleanupOldFailedOrders();
+                    scannerService.positionManager.pendingOrderManager.cleanupOldFailedOrders();
                 } else {
                     console.log('[AutoScannerService] [ORDER_MONITOR] ⚠️ PendingOrderManager not initialized yet');
                 }
-                
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 13 complete: Order monitoring finished (${Date.now() - _step13_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
             } catch (orderMonitorError) {
                 console.warn(`[AutoScannerService] [ORDER_MONITOR] ⚠️ Order monitoring error: ${orderMonitorError.message}`);
             }
         }
 
         // Run ghost position purging every 15 scans (DISABLED for testnet to prevent false positives)
-        if (this.scannerService.state.stats.totalScans % 15 === 0 && this.scannerService.state.stats.totalScans > 0) {
-            if (this.scannerService.state.tradingMode === 'mainnet') {
-                console.log('[AutoScannerService] [GHOST_PURGE] 🔄 Performing ghost position purging for mainnet...');
+        if (scannerService.state.stats.totalScans % 15 === 0 && scannerService.state.stats.totalScans > 0) {
+            if (scannerService.state.tradingMode === 'mainnet') {
+                const _step14_start = Date.now();
+                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 14: Performing ghost position purging (${Date.now() - _monitorStartTime}ms since start)`);
                 try {
                     const ghostPurgeResult = await queueFunctionCall(
                         'purgeGhostPositions',
                         purgeGhostPositions,
                         { 
-                            mode: this.scannerService.state.tradingMode,
+                            mode: scannerService.state.tradingMode,
                             walletId: null // Purge all wallets
                         },
                         'normal',
@@ -706,6 +1097,7 @@ export class ScanEngineService {
                     } else {
                         console.warn(`[AutoScannerService] [GHOST_PURGE] ⚠️ Ghost purge failed: ${ghostPurgeResult.error || 'Unknown issue'}`);
                     }
+                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 14 complete: Ghost position purging finished (${Date.now() - _step14_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
                 } catch (ghostPurgeError) {
                     console.warn(`[AutoScannerService] [GHOST_PURGE] ⚠️ Ghost purge error: ${ghostPurgeError.message}`);
                 }
@@ -716,6 +1108,23 @@ export class ScanEngineService {
 
         // NOTE: monitorAndClosePositions is already called above (line 410) and handles executeBatchClose internally
         // No need for duplicate calls here
+        
+        const _totalTime = Date.now() - _monitorStartTime;
+        console.log(`[ScanEngineService] [MONITOR] [${functionId}] ✅ _monitorPositions completed successfully in ${(_totalTime/1000).toFixed(1)}s`);
+        return monitorResult;
+        } catch (functionError) {
+            const errorTime = Date.now() - _monitorStartTime;
+            // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] CATCH BLOCK ENTERED (tryBlockEntered: ${tryBlockEntered}, ${errorTime}ms) 🔴🔴🔴`);
+            console.error('[ScanEngineService] [MONITOR] ❌ CRITICAL ERROR in _monitorPositions function body:', functionError);
+            console.error('[ScanEngineService] [MONITOR] ❌ Error stack:', functionError.stack);
+            console.error('[ScanEngineService] [MONITOR] ❌ Error message:', functionError.message);
+            // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] RETURNING ERROR RESULT (${errorTime}ms) 🔴🔴🔴`);
+            // Return empty result to allow scan cycle to continue
+            return { signalsFound: 0, tradesExecuted: 0, combinationsEvaluated: 0 };
+        } finally {
+            const finallyTime = Date.now() - _monitorStartTime;
+            // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] FINALLY BLOCK ENTERED (${finallyTime}ms) 🔴🔴🔴`);
+        }
     }
 
     /**
@@ -875,7 +1284,7 @@ export class ScanEngineService {
         try {
             if (typeof window !== 'undefined' && !window.__blockedReasonsSampled) {
                 window.__blockedReasonsSampled = true;
-                console.log('[BLOCK_REASONS_SAMPLE]', { blockReasons, combinedStrengthBelow, convictionBelowDynamic, balanceBelowLimit, insufficientRemainingCap, regimeMismatch, otherBlocks });
+                // console.log('[BLOCK_REASONS_SAMPLE]', { blockReasons, combinedStrengthBelow, convictionBelowDynamic, balanceBelowLimit, insufficientRemainingCap, regimeMismatch, otherBlocks });
             }
         } catch(_) {}
         const baseConv = this.scannerService.state?.settings?.minimumConvictionScore ?? 50;
@@ -940,7 +1349,7 @@ export class ScanEngineService {
         this.addLog('🏦 WALLET SUMMARY', 'cycle');
         this.addLog('═══════════════════════════════════════════════════════', 'cycle');
 
-        this._logWalletSummary();
+        await this._logWalletSummary();
 
         const totalBlocked = Object.values(cycleStats.blockReasons || {}).reduce((sum, count) => sum + count, 0);
 
@@ -1009,7 +1418,7 @@ export class ScanEngineService {
     /**
      * Logs wallet summary information.
      */
-    _logWalletSummary() {
+    async _logWalletSummary() {
         let summary = this.scannerService.walletManagerService?.walletSummary;
         if (!summary) {
             // Fallback to central wallet state so the attachment-style lines still show
@@ -1040,31 +1449,104 @@ export class ScanEngineService {
                 unrealizedPnl += pnl;
             }
         }
-        // Realized PnL and trade metrics: prefer summary, then central wallet state
+        // Realized PnL and trade metrics: prefer summary, then central wallet state, then compute from trades
         const ws = this._getCurrentWalletState?.() || {};
-        const realizedPnl = (summary.totalRealizedPnl ?? ws.total_realized_pnl ?? 0);
-
-        const tradesCount = summary.totalTrades ?? ws.total_trades_count ?? ws.total_trades ?? 0;
-        const wins = summary.winningTrades ?? ws.winning_trades_count ?? 0;
-        const losses = summary.losingTrades ?? ws.losing_trades_count ?? 0;
-        const winRateCalc = (wins + losses) > 0 ? (wins / (wins + losses)) * 100 : 0;
-        const profitFactorCalc = (() => {
-            const gp = summary.totalGrossProfit ?? ws.total_gross_profit ?? 0;
-            const gl = summary.total_gross_loss ?? ws.total_gross_loss ?? 0;
-            return gl > 0 ? (gp / gl) : 0;
-        })();
+        
+        // CRITICAL FIX: Always prefer central wallet state for trade statistics (it's the source of truth)
+        // Parse values as numbers to handle string conversions
+        const realizedPnl = Number(summary.totalRealizedPnl ?? ws.total_realized_pnl ?? 0);
+        const tradesCount = Number(summary.totalTrades ?? ws.total_trades_count ?? ws.total_trades ?? 0);
+        const wins = Number(summary.winningTrades ?? ws.winning_trades_count ?? 0);
+        const losses = Number(summary.losingTrades ?? ws.losing_trades_count ?? 0);
+        const totalGrossProfit = Number(summary.totalGrossProfit ?? ws.total_gross_profit ?? 0);
+        const totalGrossLoss = Number(summary.total_gross_loss ?? ws.total_gross_loss ?? 0);
+        
+        // CRITICAL FIX: Always compute win rate and profit factor from trades if wins/losses are missing
+        // OR if we have trades but wins+losses don't match tradesCount (invalid state)
+        let finalTradesCount = tradesCount;
+        let finalWins = wins;
+        let finalLosses = losses;
+        let finalRealizedPnl = realizedPnl;
+        let finalGrossProfit = totalGrossProfit;
+        let finalGrossLoss = totalGrossLoss;
+        
+        // Fetch trades if:
+        // 1. tradesCount is 0/missing/NaN, OR
+        // 2. tradesCount > 0 but (wins + losses) === 0 (impossible - can't have trades with no wins/losses)
+        // 3. tradesCount > 0 but wins/losses sum doesn't match tradesCount (data inconsistency)
+        const hasTradesButNoWinsLosses = tradesCount > 0 && wins === 0 && losses === 0;
+        const winsLossesMismatch = tradesCount > 0 && (wins + losses) !== tradesCount && (wins + losses) > 0;
+        const needsComputation = !tradesCount || tradesCount === 0 || isNaN(tradesCount) || 
+                                hasTradesButNoWinsLosses || winsLossesMismatch;
+        
+        if (needsComputation) {
+            try {
+                const { queueEntityCall } = await import('@/components/utils/apiQueue');
+                const tradingMode = this.scannerService.state?.tradingMode || 'testnet';
+                const allTrades = await queueEntityCall('Trade', 'filter', { trading_mode: tradingMode }, '-exit_timestamp', 10000).catch(() => []);
+                
+                if (allTrades && allTrades.length > 0) {
+                    let computedTrades = 0;
+                    let computedWins = 0;
+                    let computedLosses = 0;
+                    let computedPnl = 0;
+                    let computedProfit = 0;
+                    let computedLoss = 0;
+                    
+                    allTrades.forEach(trade => {
+                        if (trade.exit_timestamp) { // Only count closed trades
+                            computedTrades++;
+                            const pnl = Number(trade.pnl_usdt || 0);
+                            computedPnl += pnl;
+                            
+                            if (pnl > 0) {
+                                computedWins++;
+                                computedProfit += pnl;
+                            } else if (pnl < 0) {
+                                computedLosses++;
+                                computedLoss += Math.abs(pnl);
+                            }
+                        }
+                    });
+                    
+                    // CRITICAL: Always use computed values when we fetch from trades (source of truth)
+                    if (computedTrades > 0) {
+                        finalTradesCount = computedTrades;
+                        finalWins = computedWins;
+                        finalLosses = computedLosses;
+                        finalRealizedPnl = computedPnl; // Keep sign (can be negative)
+                        finalGrossProfit = computedProfit;
+                        finalGrossLoss = computedLoss;
+                    }
+                    
+                    // Trade stats computed
+                }
+            } catch (error) {
+                console.warn('[ScanEngineService] ⚠️ Failed to compute trade stats from trades:', error.message);
+            }
+        }
+        
+        // CRITICAL: Calculate win rate and profit factor from final values
+        const winRateCalc = (finalWins + finalLosses) > 0 ? (finalWins / (finalWins + finalLosses)) * 100 : 0;
+        const profitFactorCalc = finalGrossLoss > 0 ? (finalGrossProfit / finalGrossLoss) : (finalGrossProfit > 0 ? Infinity : 0);
+        
+        // Win rate and profit factor calculated
 
         const fmt = (n) => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         const mode = this.scannerService.state?.tradingMode?.toUpperCase?.() || 'UNKNOWN';
-        const totalEquity = summary.totalEquity || 0;
-        const utilization = totalEquity > 0 ? ((summary.balanceInTrades || 0) / totalEquity) * 100 : 0;
-        const winRate = (summary.winRate ?? winRateCalc ?? 0).toFixed(1);
-        const profitFactor = (summary.profitFactor ?? profitFactorCalc ?? 0).toFixed(2);
+        const totalEquity = Number(summary.totalEquity ?? ws.total_equity ?? 0);
+        const balanceInTrades = Number(summary.balanceInTrades ?? ws.balance_in_trades ?? 0);
+        const utilization = totalEquity > 0 ? ((balanceInTrades / totalEquity) * 100) : 0;
+        
+        // CRITICAL FIX: Always use calculated values (computed from actual trades or wallet state)
+        // These are the source of truth
+        const winRate = Number(winRateCalc || 0).toFixed(1);
+        const profitFactor = profitFactorCalc === Infinity ? '∞' : Number(profitFactorCalc || 0).toFixed(2);
 
         this.addLog(`[WALLET] Mode: ${mode} | Total Equity: ${fmt(totalEquity)}`, 'cycle');
-        this.addLog(`[WALLET] Total Trades: ${tradesCount} | Win Rate: ${winRate}% | Profit Factor: ${profitFactor}`, 'cycle');
+        this.addLog(`[WALLET] Total Trades: ${finalTradesCount} | Win Rate: ${winRate}% | Profit Factor: ${profitFactor}`, 'cycle');
         this.addLog(`[WALLET] Open Positions: ${positions.length} | Portfolio Utilization: ${utilization.toFixed(1)}%`, 'cycle');
-        this.addLog(`[WALLET] Unrealized P&L: ${fmt(unrealizedPnl)} | Realized P&L: ${fmt(realizedPnl)}`, 'cycle');
+        this.addLog(`[WALLET] Unrealized P&L: ${fmt(unrealizedPnl)} | Realized P&L: ${fmt(finalRealizedPnl)}`, 'cycle');
     }
 
     /**

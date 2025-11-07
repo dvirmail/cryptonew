@@ -296,6 +296,83 @@ export const evaluateBollingerCondition = (candle, indicators, index, signalSett
             priority: 7
         });
     }
+    
+    // --- "Lower Band Bounce" signal (Event-based: price touches lower band and bounces) ---
+    const prevCandle = index > 0 ? indicators.data[index - 1] : null;
+    const prevBB = index > 0 ? indicators.bollinger[index - 1] : null;
+    const prevPrice = prevCandle?.close;
+    const prevLower = prevBB?.lower;
+    
+    // Check if price bounced off lower band (was at or below lower, now above)
+    const wasAtLower = prevPrice !== undefined && prevLower !== undefined && prevPrice <= prevLower;
+    const isNowAboveLower = currentPrice > lower;
+    const isLowerBandBounce = wasAtLower && isNowAboveLower;
+    
+    if (isLowerBandBounce) {
+        const bounceStrength = 75; // Event-based signals are stronger
+        const bounceSignal = {
+            type: 'bollinger',
+            value: 'Lower Band Bounce',
+            strength: bounceStrength,
+            isEvent: true,
+            details: `Price bounced from lower band: ${prevPrice?.toFixed(2)} → ${currentPrice.toFixed(2)}`,
+            priority: 8
+        };
+        signals.push(bounceSignal);
+    }
+    
+    // --- "Lower Band Breakdown" signal (Event-based: price crosses below lower band) ---
+    const wasAboveLower = prevPrice !== undefined && prevLower !== undefined && prevPrice > prevLower;
+    const isNowBelowLower = currentPrice <= lower;
+    const isLowerBandBreakdown = wasAboveLower && isNowBelowLower;
+    
+    if (isLowerBandBreakdown) {
+        const breakdownStrength = 75; // Event-based signals are stronger
+        const breakdownSignal = {
+            type: 'bollinger',
+            value: 'Lower Band Breakdown',
+            strength: breakdownStrength,
+            isEvent: true,
+            details: `Price broke down through lower band: ${prevPrice?.toFixed(2)} → ${currentPrice.toFixed(2)}`,
+            priority: 8
+        };
+        signals.push(breakdownSignal);
+    }
+    
+    // --- "Price Above Lower Band" signal (State-based: price is currently above lower band) ---
+    const isAboveLower = currentPrice > lower;
+    
+    if (isAboveLower) {
+        const strengthValue = 60 + Math.min(20, ((currentPrice - lower) / (upper - lower)) * 20);
+        const signalObj = {
+            type: 'bollinger',
+            value: 'Price Above Lower Band',
+            strength: strengthValue,
+            isEvent: false,
+            details: `Price ${currentPrice.toFixed(2)} is above lower band ${lower.toFixed(2)}`,
+            priority: 6
+        };
+        signals.push(signalObj);
+    }
+    
+    // --- "Price Below Lower Band" signal (State-based: price is currently below lower band) ---
+    const isBelowLower = currentPrice < lower;
+    
+    if (isBelowLower) {
+        // Strength scales with how far below (deeper = more bearish = lower strength for bullish strategies, but still valid signal)
+        const distanceBelow = lower - currentPrice;
+        const bandWidth = upper - lower;
+        const strengthValue = 60 + Math.min(20, (distanceBelow / bandWidth) * 20);
+        const signalObj = {
+            type: 'bollinger',
+            value: 'Price Below Lower Band',
+            strength: strengthValue,
+            isEvent: false,
+            details: `Price ${currentPrice.toFixed(2)} is below lower band ${lower.toFixed(2)}`,
+            priority: 6
+        };
+        signals.push(signalObj);
+    }
 
     // Final processing to ensure no duplicate signal values are returned from this function
     const finalSignals = [];
@@ -317,26 +394,173 @@ export const evaluateAtrCondition = (candle, indicators, index, signalSettings, 
     const signals = [];
     const atrSettings = signalSettings.atr || {};
     
-    if (!indicators.atr || !indicators.atrSma || !indicators.atr[index] || !indicators.atrSma[index] || index < 1) {
+    if (debugMode && onLog) {
+        //onLog(`[ATR_EVAL] Starting evaluation at kline index ${index}`, 'debug');
+    }
+    
+    // Check if ATR arrays exist
+    if (!indicators.atr || !indicators.atrSma) {
+        if (debugMode && onLog) {
+            //onLog(`[ATR_EVAL] ❌ ATR arrays missing - atr=${!!indicators.atr}, atrSma=${!!indicators.atrSma}`, 'debug');
+        }
         return signals;
     }
     
-    const currentAtr = indicators.atr[index];
-    const atrSma = indicators.atrSma[index];
-    const prevAtr = indicators.atr[index - 1];
-    const prevAtrSma = indicators.atrSma[index - 1];
+    // CRITICAL: ATR arrays are indexed differently than klines!
+    // ATR calculation starts at kline index (period - 1)
+    // So: atrValues[0] corresponds to kline[period - 1]
+    //     atrValues[i] corresponds to kline[(period - 1) + i]
+    // Therefore: atrIndex = klineIndex - (period - 1)
+    const period = atrSettings.period || 14;
+    const atrStartOffset = period - 1; // First ATR at kline index (period - 1)
+    const atrIndex = index - atrStartOffset;
+    
+    if (debugMode && onLog) {
+        const atrLength = indicators.atr?.length || 0;
+        const atrSmaLength = indicators.atrSma?.length || 0;
+        //onLog(`[ATR_EVAL] Index mapping: klineIndex=${index}, period=${period}, atrStartOffset=${atrStartOffset}, calculatedAtrIndex=${atrIndex}`, 'debug');
+        //onLog(`[ATR_EVAL] Array lengths: atr.length=${atrLength}, atrSma.length=${atrSmaLength}`, 'debug');
+    }
+    
+    // Validate calculated ATR index
+    if (atrIndex < 0 || atrIndex >= indicators.atr.length || atrIndex >= indicators.atrSma.length) {
+        
+        // Fallback: use last valid index
+        const lastValidAtrIndex = Math.min(
+            (indicators.atr.length - 1),
+            (indicators.atrSma.length - 1)
+        );
+        
+        if (lastValidAtrIndex < 1) {
+            if (debugMode && onLog) {
+                //onLog(`[ATR_EVAL] ❌ No valid ATR data available`, 'debug');
+            }
+            return signals;
+        }
+        
+        const fallbackAtrIndex = lastValidAtrIndex;
+        const fallbackKlineIndex = fallbackAtrIndex + atrStartOffset;
+        
+        // Use fallback index
+        const currentAtr = indicators.atr[fallbackAtrIndex];
+        const atrSma = indicators.atrSma[fallbackAtrIndex];
+        const prevAtr = fallbackAtrIndex > 0 ? indicators.atr[fallbackAtrIndex - 1] : null;
+        const prevAtrSma = fallbackAtrIndex > 0 ? indicators.atrSma[fallbackAtrIndex - 1] : null;
+        
+        if (currentAtr === null || currentAtr === undefined || 
+            atrSma === null || atrSma === undefined ||
+            prevAtr === null || prevAtr === undefined ||
+            prevAtrSma === null || prevAtrSma === undefined) {
+            if (debugMode && onLog) {
+                //onLog(`[ATR_EVAL] ❌ Fallback ATR values are null/undefined`, 'debug');
+            }
+            return signals;
+        }
+        
+        // Continue with fallback values (code below will handle them)
+        const multiplier = atrSettings.multiplier || 1.5;
+        
+        if (debugMode && onLog) {
+            //onLog(`[ATR_EVAL] ATR values (FALLBACK): current=${currentAtr.toFixed(4)}, prev=${prevAtr.toFixed(4)}, atrSma=${atrSma.toFixed(4)}, prevAtrSma=${prevAtrSma.toFixed(4)}`, 'debug');
+        }
+        
+        // Check for "ATR Expansion" signal
+        const isExpansion = currentAtr > atrSma * multiplier && prevAtr <= prevAtrSma * multiplier;
+        
+        if (isExpansion) {
+            signals.push({
+                type: 'atr',
+                value: 'ATR Expansion',
+                strength: 75,
+                isEvent: true,
+                details: `ATR spiked to ${currentAtr.toFixed(4)} (${(currentAtr/atrSma).toFixed(1)}x average) [FALLBACK]`,
+                priority: 7
+            });
+        }
+        
+        // Add state-based signals even in fallback mode
+        const atrRatio = currentAtr / atrSma;
+        if (atrRatio > 1.0) {
+            const strength = Math.min(80, 60 + Math.min(20, (atrRatio - 1.0) * 20));
+            signals.push({
+                type: 'atr',
+                value: 'ATR Above Average',
+                strength: strength,
+                isEvent: false,
+                details: `ATR (${currentAtr.toFixed(4)}) is ${atrRatio.toFixed(2)}x above average (${atrSma.toFixed(4)}) [FALLBACK]`,
+                priority: 6,
+                candle
+            });
+        } else {
+            const strength = Math.min(75, 60 + Math.min(15, (1.0 - atrRatio) * 30));
+            signals.push({
+                type: 'atr',
+                value: 'ATR Below Average',
+                strength: strength,
+                isEvent: false,
+                details: `ATR (${currentAtr.toFixed(4)}) is ${atrRatio.toFixed(2)}x below/at average (${atrSma.toFixed(4)}) [FALLBACK]`,
+                priority: 6,
+                candle
+            });
+        }
+        
+        return signals; // Return with fallback signals
+    }
+    
+    // Ensure we can access previous value (ATR index must be >= 1)
+    if (atrIndex < 1) {
+        if (debugMode && onLog) {
+            //onLog(`[ATR_EVAL] ❌ ATR index ${atrIndex} < 1 (cannot access previous value)`, 'debug');
+        }
+        return signals;
+    }
+    
+    // Use correct mapped indices
+    const currentAtr = indicators.atr[atrIndex];
+    const atrSma = indicators.atrSma[atrIndex];
+    const prevAtr = indicators.atr[atrIndex - 1];
+    const prevAtrSma = indicators.atrSma[atrIndex - 1];
+    
+    // Final validation
+    if (currentAtr === null || currentAtr === undefined || 
+        atrSma === null || atrSma === undefined ||
+        prevAtr === null || prevAtr === undefined ||
+        prevAtrSma === null || prevAtrSma === undefined) {
+        if (debugMode && onLog) {
+            //onLog(`[ATR_EVAL] ❌ Null/undefined ATR values at atrIndex=${atrIndex} (klineIndex=${index}) - currentAtr=${currentAtr}, atrSma=${atrSma}, prevAtr=${prevAtr}, prevAtrSma=${prevAtrSma}`, 'debug');
+        }
+        return signals;
+    }
     const multiplier = atrSettings.multiplier || 1.5;
     
-    // Event: ATR spike (high volatility)
-    if (currentAtr > atrSma * multiplier && prevAtr <= prevAtrSma * multiplier) {
+    if (debugMode && onLog) {
+        //onLog(`[ATR_EVAL] ATR values (klineIndex=${index} → atrIndex=${atrIndex}): current=${currentAtr.toFixed(4)}, prev=${prevAtr.toFixed(4)}, atrSma=${atrSma.toFixed(4)}, prevAtrSma=${prevAtrSma.toFixed(4)}, multiplier=${multiplier}`, 'debug');
+    }
+    
+    // Check for "ATR Expansion" signal (expected by strategy)
+    // This is typically when ATR spikes above its SMA
+    const isExpansion = currentAtr > atrSma * multiplier && prevAtr <= prevAtrSma * multiplier;
+    if (debugMode && onLog) {
+        //onLog(`[ATR_EVAL] Expansion check: currentAtr > atrSma*multiplier? ${currentAtr.toFixed(4)} > ${(atrSma * multiplier).toFixed(4)} = ${currentAtr > atrSma * multiplier}, prevAtr <= prevAtrSma*multiplier? ${prevAtr.toFixed(4)} <= ${(prevAtrSma * multiplier).toFixed(4)} = ${prevAtr <= prevAtrSma * multiplier}`, 'debug');
+    }
+    
+    // Event: ATR spike (high volatility) - this matches "ATR Expansion"
+    if (isExpansion) {
         signals.push({
             type: 'atr',
-            value: 'High Volatility',
+            value: 'ATR Expansion',
             strength: 75,
             isEvent: true,
             details: `ATR spiked to ${currentAtr.toFixed(4)} (${(currentAtr/atrSma).toFixed(1)}x average)`,
             priority: 7
         });
+        if (debugMode && onLog) {
+            //onLog(`[ATR_EVAL] ✅ ATR Expansion detected`, 'debug');
+        }
+    } else {
+        if (debugMode && onLog) {
+            //onLog(`[ATR_EVAL] ❌ ATR Expansion not detected - currentAtr=${currentAtr.toFixed(4)}, threshold=${(atrSma * multiplier).toFixed(4)}, ratio=${(currentAtr / atrSma).toFixed(2)}x`, 'debug');
+        }
     }
     
     // Event: ATR compression (low volatility)
@@ -349,6 +573,46 @@ export const evaluateAtrCondition = (candle, indicators, index, signalSettings, 
             details: `ATR compressed to ${currentAtr.toFixed(4)} (${(currentAtr/atrSma).toFixed(1)}x average)`,
             priority: 6
         });
+    }
+    
+    // State-based signals (always provide a signal based on current ATR position)
+    // These help strategies that want state conditions rather than just events
+    
+    // "ATR Above Average" - State signal: ATR is currently above its SMA (indicating higher volatility)
+    const atrRatio = currentAtr / atrSma;
+    if (atrRatio > 1.0) {
+        // Strength scales from 60 to 80 based on how far above average (1.0x to 2.0x+)
+        const strength = Math.min(80, 60 + Math.min(20, (atrRatio - 1.0) * 20)); // Scale from 60-80
+        signals.push({
+            type: 'atr',
+            value: 'ATR Above Average',
+            strength: strength,
+            isEvent: false, // State signal
+            details: `ATR (${currentAtr.toFixed(4)}) is ${atrRatio.toFixed(2)}x above average (${atrSma.toFixed(4)})`,
+            priority: 6,
+            candle
+        });
+        if (debugMode && onLog) {
+            //onLog(`[ATR_EVAL] ✅ State-based "ATR Above Average" signal ADDED (strength=${strength.toFixed(2)}, ratio=${atrRatio.toFixed(2)}x)`, 'debug');
+        }
+    }
+    
+    // "ATR Below Average" - State signal: ATR is currently below its SMA (indicating lower volatility)
+    if (atrRatio <= 1.0) {
+        // Strength scales from 60 to 75 based on how far below average (0.5x to 1.0x)
+        const strength = Math.min(75, 60 + Math.min(15, (1.0 - atrRatio) * 30)); // Scale from 60-75
+        signals.push({
+            type: 'atr',
+            value: 'ATR Below Average',
+            strength: strength,
+            isEvent: false, // State signal
+            details: `ATR (${currentAtr.toFixed(4)}) is ${atrRatio.toFixed(2)}x below/at average (${atrSma.toFixed(4)})`,
+            priority: 6,
+            candle
+        });
+        if (debugMode && onLog) {
+            //onLog(`[ATR_EVAL] ✅ State-based "ATR Below Average" signal ADDED (strength=${strength.toFixed(2)}, ratio=${atrRatio.toFixed(2)}x)`, 'debug');
+        }
     }
     
     return signals;
@@ -373,20 +637,50 @@ export function evaluateBbwCondition(candle, indicators, index, signalSettings, 
     const isSqueezeStart = currentBbw < settings.threshold && prevBbw >= settings.threshold;
     if (isSqueezeStart) {
         const strength = 75;
-        signals.push({ type: 'bbw', value: `squeeze_start`, strength: strength, isEvent: true });
+        const signal = { type: 'bbw', value: `squeeze_start`, strength: strength, isEvent: true };
+        signals.push(signal);
     }
 
     // Squeeze Release Condition: A transition from below the threshold to above it.
     const isSqueezeRelease = currentBbw > settings.threshold && prevBbw <= settings.threshold;
     if (isSqueezeRelease) {
         const strength = 80;
-        signals.push({ type: 'bbw', value: 'squeeze_release', strength: strength, isEvent: true });
+        const signal = { type: 'bbw', value: 'squeeze_release', strength: strength, isEvent: true };
+        signals.push(signal);
+    }
+    
+    // Volatility Expansion: Significant increase in BBW (even if not from a squeeze)
+    // This catches cases where BBW increases substantially but was already above threshold
+    const bbwIncrease = currentBbw - prevBbw;
+    const bbwIncreasePercent = prevBbw > 0 ? (bbwIncrease / prevBbw) * 100 : 0;
+    const isVolatilityExpansion = currentBbw > settings.threshold && 
+                                   bbwIncreasePercent > 15 && // At least 15% increase
+                                   bbwIncrease > 0.5; // At least 0.5% absolute increase
+    
+    if (isVolatilityExpansion && !isSqueezeRelease) {
+        // Only generate if we didn't already generate squeeze_release
+        const strength = 70; // Slightly lower than squeeze_release since it's not a true squeeze release
+        const signal = { type: 'bbw', value: 'squeeze_release', strength: strength, isEvent: true };
+        signals.push(signal);
     }
     
     // In Squeeze State: The current value is below the threshold.
     const isInSqueeze = currentBbw < settings.threshold;
     if (isInSqueeze) {
-        signals.push({ type: 'bbw', value: 'in_squeeze', strength: 60, isEvent: false });
+        const signal = { type: 'bbw', value: 'in_squeeze', strength: 60, isEvent: false };
+        signals.push(signal);
+    }
+    
+    // Expansion State: BBW is above threshold (volatility is expanded)
+    // This is a state-based signal that indicates volatility is currently expanded
+    const isExpansionState = currentBbw > settings.threshold;
+    if (isExpansionState) {
+        const signal1 = { type: 'bbw', value: 'Expansion State', strength: 65, isEvent: false };
+        signals.push(signal1);
+        
+        // Also generate "Expansion" as an alias (state-based signal)
+        const signal2 = { type: 'bbw', value: 'Expansion', strength: 65, isEvent: false };
+        signals.push(signal2);
     }
     
     return signals;
@@ -411,31 +705,216 @@ export const evaluateKeltnerCondition = (candle, indicators, index, signalSettin
     const signals = [];
     const keltnerSettings = signalSettings.keltner || {};
     
-    if (!indicators.keltner || !indicators.keltner[index] || index < 1) {
-        return signals;
+    // DEBUG: Log entry and initial conditions
+    if (debugMode && onLog) {
+        //onLog(`[KELTNER_EVAL] Starting evaluation: index=${index}, hasKeltner=${!!indicators.keltner}, keltnerLength=${indicators.keltner?.length || 0}, keltner[index]=${!!indicators.keltner?.[index]}, keltner[index-1]=${!!indicators.keltner?.[index - 1]}`, 'debug');
+        if (indicators.keltner && indicators.keltner.length > 0) {
+            // Log actual values and types for debugging
+            const keltnerAtIndex = indicators.keltner[index];
+            const keltnerAtPrevIndex = indicators.keltner[index - 1];
+            //onLog(`[KELTNER_EVAL] Raw values: keltner[${index}]=${keltnerAtIndex} (type=${typeof keltnerAtIndex}), keltner[${index-1}]=${keltnerAtPrevIndex} (type=${typeof keltnerAtPrevIndex})`, 'debug');
+            if (keltnerAtIndex === null || keltnerAtIndex === undefined) {
+                // Check what the last valid index is
+                let lastValidIndex = -1;
+                let lastValidValue = null;
+                for (let i = index; i >= 0; i--) {
+                    if (indicators.keltner[i] && typeof indicators.keltner[i] === 'object') {
+                        lastValidIndex = i;
+                        lastValidValue = indicators.keltner[i];
+                        break;
+                    }
+                }
+                //onLog(`[KELTNER_EVAL] Last valid Keltner found at index ${lastValidIndex}: ${lastValidValue ? JSON.stringify({upper: lastValidValue.upper, middle: lastValidValue.middle, lower: lastValidValue.lower}) : 'none'}`, 'debug');
+            }
+        }
     }
     
-    const currentKeltner = indicators.keltner[index];
-    const prevKeltner = indicators.keltner[index - 1];
+    // Find the last valid Keltner value if current index is null
+    let currentKeltner = indicators.keltner?.[index];
+    let prevKeltner = indicators.keltner?.[index - 1];
+    
+    // FALLBACK: If current is null, search backwards for last valid value
+    if (!currentKeltner && indicators.keltner) {
+        for (let i = index; i >= 0; i--) {
+            if (indicators.keltner[i] && typeof indicators.keltner[i] === 'object') {
+                currentKeltner = indicators.keltner[i];
+                if (debugMode && onLog) {
+                    onLog(`[KELTNER_EVAL] ⚠️ Using fallback: currentKeltner at index ${i} instead of ${index}`, 'debug');
+                }
+                break;
+            }
+        }
+    }
+    
+    // FALLBACK: If prev is null, search backwards from index-1
+    if (!prevKeltner && indicators.keltner) {
+        for (let i = index - 1; i >= 0; i--) {
+            if (indicators.keltner[i] && typeof indicators.keltner[i] === 'object') {
+                prevKeltner = indicators.keltner[i];
+                if (debugMode && onLog) {
+                    onLog(`[KELTNER_EVAL] ⚠️ Using fallback: prevKeltner at index ${i} instead of ${index - 1}`, 'debug');
+                }
+                break;
+            }
+        }
+    }
+    
+    if (!indicators.keltner || !currentKeltner || !prevKeltner || index < 1) {
+        if (debugMode && onLog) {
+            //onLog(`[KELTNER_EVAL] ❌ Early exit - Missing data: hasKeltner=${!!indicators.keltner}, currentKeltner=${!!currentKeltner}, prevKeltner=${!!prevKeltner}, index=${index}, index<1=${index < 1}`, 'debug');
+            if (indicators.keltner) {
+                // Count valid vs null values for debugging
+                let validCount = 0;
+                let nullCount = 0;
+                for (let i = 0; i < Math.min(indicators.keltner.length, index + 5); i++) {
+                    if (indicators.keltner[i] && typeof indicators.keltner[i] === 'object') {
+                        validCount++;
+                    } else {
+                        nullCount++;
+                    }
+                }
+                //onLog(`[KELTNER_EVAL] Data quality: ${validCount} valid, ${nullCount} null in first ${Math.min(indicators.keltner.length, index + 5)} elements`, 'debug');
+            }
+        }
+        return signals;
+    }
     const currentPrice = candle.close;
     const prevPrice = indicators.data?.[index - 1]?.close; // Safely access prevPrice
     
-    if (!currentKeltner || !prevKeltner || isNil(prevPrice)) { // Added prevPrice check
+    if (!currentKeltner || !prevKeltner || isNil(prevPrice)) {
+        if (debugMode && onLog) {
+            //onLog(`[KELTNER_EVAL] ❌ Early exit - Invalid data: currentKeltner=${!!currentKeltner}, prevKeltner=${!!prevKeltner}, prevPrice=${prevPrice} (isNil=${isNil(prevPrice)}), currentKeltnerType=${typeof currentKeltner}, prevKeltnerType=${typeof prevKeltner}`, 'debug');
+            if (currentKeltner) {
+                //onLog(`[KELTNER_EVAL] currentKeltner keys: ${Object.keys(currentKeltner).join(', ')}`, 'debug');
+            }
+            if (prevKeltner) {
+                //onLog(`[KELTNER_EVAL] prevKeltner keys: ${Object.keys(prevKeltner).join(', ')}`, 'debug');
+            }
+        }
         return signals;
     }
     
     const { upper, middle, lower } = currentKeltner;
     const { upper: prevUpper, middle: prevMiddle, lower: prevLower } = prevKeltner;
     
+    // DEBUG: Log extracted values
+    if (debugMode && onLog) {
+        //onLog(`[KELTNER_EVAL] Data extracted: currentPrice=${currentPrice}, upper=${upper}, middle=${middle}, lower=${lower}`, 'debug');
+        //onLog(`[KELTNER_EVAL] Previous: prevPrice=${prevPrice}, prevUpper=${prevUpper}, prevMiddle=${prevMiddle}, prevLower=${prevLower}`, 'debug');
+    }
+    
+    // --- State-Based Signals (NEW) ---
+    
+    // 1. Price Position Relative to Keltner Bands
+    if (currentPrice > upper) {
+        if (debugMode && onLog) {
+            //onLog(`[KELTNER_EVAL] ✅ Price Above Upper Band: ${currentPrice} > ${upper}`, 'debug');
+        }
+        const distanceFromUpper = (currentPrice - upper) / upper;
+        const strength = 60 + Math.min(25, distanceFromUpper * 500);
+        signals.push({
+            type: 'keltner',
+            value: 'Price Above Upper Band',
+            strength: strength,
+            isEvent: false,
+            details: `Price (${currentPrice.toFixed(4)}) is above upper Keltner band (${upper.toFixed(4)}) - strong uptrend`,
+            priority: 7,
+            candle
+        });
+    } else if (currentPrice < lower) {
+        if (debugMode && onLog) {
+            //onLog(`[KELTNER_EVAL] ✅ Price Below Lower Band: ${currentPrice} < ${lower}`, 'debug');
+        }
+        const distanceFromLower = (lower - currentPrice) / lower;
+        const strength = 60 + Math.min(25, distanceFromLower * 500);
+        signals.push({
+            type: 'keltner',
+            value: 'Price Below Lower Band',
+            strength: strength,
+            isEvent: false,
+            details: `Price (${currentPrice.toFixed(4)}) is below lower Keltner band (${lower.toFixed(4)}) - strong downtrend`,
+            priority: 7,
+            candle
+        });
+    } else if (currentPrice > middle) {
+        if (debugMode && onLog) {
+            //onLog(`[KELTNER_EVAL] ✅ Price Above Middle: ${currentPrice} > ${middle}`, 'debug');
+        }
+        const distanceFromMiddle = (currentPrice - middle) / middle;
+        const strength = 40 + Math.min(20, distanceFromMiddle * 400);
+        signals.push({
+            type: 'keltner',
+            value: 'Price Above Middle',
+            strength: strength,
+            isEvent: false,
+            details: `Price (${currentPrice.toFixed(4)}) is above middle line (${middle.toFixed(4)}) - bullish`,
+            priority: 6,
+            candle
+        });
+    } else {
+        if (debugMode && onLog) {
+            //onLog(`[KELTNER_EVAL] ✅ Price Below Middle: ${currentPrice} <= ${middle}`, 'debug');
+        }
+        const distanceFromMiddle = (middle - currentPrice) / middle;
+        const strength = 40 + Math.min(20, distanceFromMiddle * 400);
+        signals.push({
+            type: 'keltner',
+            value: 'Price Below Middle',
+            strength: strength,
+            isEvent: false,
+            details: `Price (${currentPrice.toFixed(4)}) is below middle line (${middle.toFixed(4)}) - bearish`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // 2. Keltner Channel Width State
+    const channelWidth = (upper - lower) / middle;
+    if (debugMode && onLog) {
+        //onLog(`[KELTNER_EVAL] Channel width calculation: upper=${upper}, lower=${lower}, middle=${middle}, channelWidth=${channelWidth} (${(channelWidth * 100).toFixed(2)}%)`, 'debug');
+    }
+    if (channelWidth > 0.03) {
+        if (debugMode && onLog) {
+            //onLog(`[KELTNER_EVAL] ✅ Wide Channel: ${(channelWidth * 100).toFixed(2)}% > 3%`, 'debug');
+        }
+        signals.push({
+            type: 'keltner',
+            value: 'Wide Channel',
+            strength: 35,
+            isEvent: false,
+            details: `Keltner channel is wide (${(channelWidth * 100).toFixed(2)}%) - high volatility`,
+            priority: 4,
+            candle
+        });
+    } else if (channelWidth < 0.01) {
+        if (debugMode && onLog) {
+            //onLog(`[KELTNER_EVAL] ✅ Narrow Channel: ${(channelWidth * 100).toFixed(2)}% < 1%`, 'debug');
+        }
+        signals.push({
+            type: 'keltner',
+            value: 'Narrow Channel',
+            strength: 45,
+            isEvent: false,
+            details: `Keltner channel is narrow (${(channelWidth * 100).toFixed(2)}%) - low volatility, potential squeeze`,
+            priority: 5,
+            candle
+        });
+    } else if (debugMode && onLog) {
+        //onLog(`[KELTNER_EVAL] Channel width is normal: ${(channelWidth * 100).toFixed(2)}% (between 1% and 3%)`, 'debug');
+    }
+    
+    // --- Event-Based Signals ---
+    
     // Event: Price breaks above upper Keltner Channel
     if (prevPrice <= prevUpper && currentPrice > upper) {
         signals.push({
             type: 'keltner',
             value: 'Upper Breakout',
-            strength: 80,
+            strength: 90,
             isEvent: true,
             details: `Price broke above upper Keltner Channel: ${currentPrice.toFixed(4)} > ${upper.toFixed(4)}`,
-            priority: 8
+            priority: 8,
+            candle
         });
     }
     
@@ -444,10 +923,11 @@ export const evaluateKeltnerCondition = (candle, indicators, index, signalSettin
         signals.push({
             type: 'keltner',
             value: 'Lower Breakdown',
-            strength: 80,
+            strength: 90,
             isEvent: true,
             details: `Price broke below lower Keltner Channel: ${currentPrice.toFixed(4)} < ${lower.toFixed(4)}`,
-            priority: 8
+            priority: 8,
+            candle
         });
     }
     
@@ -459,7 +939,8 @@ export const evaluateKeltnerCondition = (candle, indicators, index, signalSettin
             strength: 70,
             isEvent: true,
             details: `Price crossed above Keltner middle line: ${currentPrice.toFixed(4)} > ${middle.toFixed(4)}`,
-            priority: 7
+            priority: 7,
+            candle
         });
     }
     
@@ -470,9 +951,21 @@ export const evaluateKeltnerCondition = (candle, indicators, index, signalSettin
             value: 'Bearish Middle Cross',
             strength: 70,
             isEvent: true,
-            details: `Price crossed below Keltner middle line: ${currentPrice.toFixed(4)} < ${middle.toFixed(4)}`, // Corrected typo here, was lower.toFixed(4)
-            priority: 7
+            details: `Price crossed below Keltner middle line: ${currentPrice.toFixed(4)} < ${middle.toFixed(4)}`,
+            priority: 7,
+            candle
         });
+    }
+    
+    if (debugMode && onLog) {
+        //onLog(`[KELTNER_EVAL] Final result: ${signals.length} signals generated`, 'debug');
+        if (signals.length > 0) {
+            signals.forEach((sig, idx) => {
+                //onLog(`[KELTNER_EVAL] Signal[${idx}]: value="${sig.value}", strength=${sig.strength}, isEvent=${sig.isEvent}`, 'debug');
+            });
+        } else {
+            onLog(`[KELTNER_EVAL] ⚠️ No signals generated - this will cause "Not Found"`, 'debug');
+        }
     }
     
     return signals;
@@ -501,15 +994,95 @@ export const evaluateDonchianCondition = (candle, indicators, index, signalSetti
     const { upper, middle, lower } = currentDonchian;
     const { upper: prevUpper, middle: prevMiddle, lower: prevLower } = prevDonchian;
     
+    // --- State-Based Signals (NEW) ---
+    
+    // 1. Price Position Relative to Donchian Bands
+    if (currentPrice > upper) {
+        const distanceFromUpper = (currentPrice - upper) / upper;
+        const strength = 65 + Math.min(25, distanceFromUpper * 500);
+        signals.push({
+            type: 'donchian',
+            value: 'Price Above Upper Band',
+            strength: strength,
+            isEvent: false,
+            details: `Price (${currentPrice.toFixed(4)}) is above Donchian upper band (${upper.toFixed(4)}) - new high`,
+            priority: 8,
+            candle
+        });
+    } else if (currentPrice < lower) {
+        const distanceFromLower = (lower - currentPrice) / lower;
+        const strength = 65 + Math.min(25, distanceFromLower * 500);
+        signals.push({
+            type: 'donchian',
+            value: 'Price Below Lower Band',
+            strength: strength,
+            isEvent: false,
+            details: `Price (${currentPrice.toFixed(4)}) is below Donchian lower band (${lower.toFixed(4)}) - new low`,
+            priority: 8,
+            candle
+        });
+    } else if (currentPrice > middle) {
+        const distanceFromMiddle = (currentPrice - middle) / middle;
+        const strength = 40 + Math.min(25, distanceFromMiddle * 400);
+        signals.push({
+            type: 'donchian',
+            value: 'Price Above Middle',
+            strength: strength,
+            isEvent: false,
+            details: `Price (${currentPrice.toFixed(4)}) is above middle line (${middle.toFixed(4)}) - bullish`,
+            priority: 6,
+            candle
+        });
+    } else {
+        const distanceFromMiddle = (middle - currentPrice) / middle;
+        const strength = 40 + Math.min(25, distanceFromMiddle * 400);
+        signals.push({
+            type: 'donchian',
+            value: 'Price Below Middle',
+            strength: strength,
+            isEvent: false,
+            details: `Price (${currentPrice.toFixed(4)}) is below middle line (${middle.toFixed(4)}) - bearish`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // 2. Donchian Channel Width State
+    const channelWidth = (upper - lower) / middle;
+    if (channelWidth > 0.05) {
+        signals.push({
+            type: 'donchian',
+            value: 'Wide Range',
+            strength: 35,
+            isEvent: false,
+            details: `Donchian channel is wide (${(channelWidth * 100).toFixed(2)}%) - high volatility`,
+            priority: 4,
+            candle
+        });
+    } else if (channelWidth < 0.015) {
+        signals.push({
+            type: 'donchian',
+            value: 'Narrow Range',
+            strength: 45,
+            isEvent: false,
+            details: `Donchian channel is narrow (${(channelWidth * 100).toFixed(2)}%) - consolidation`,
+            priority: 5,
+            candle
+        });
+    }
+    
+    // --- Event-Based Signals ---
+    
     // Event: Price breaks above upper Donchian Channel (New High)
     if (prevPrice <= prevUpper && currentPrice > upper) {
         signals.push({
             type: 'donchian',
             value: 'Upper Breakout',
-            strength: 85,
+            strength: 90,
             isEvent: true,
             details: `Price broke above Donchian upper band: ${currentPrice.toFixed(4)} > ${upper.toFixed(4)}`,
-            priority: 9
+            priority: 9,
+            candle
         });
     }
     
@@ -518,10 +1091,11 @@ export const evaluateDonchianCondition = (candle, indicators, index, signalSetti
         signals.push({
             type: 'donchian',
             value: 'Lower Breakdown',
-            strength: 85,
+            strength: 90,
             isEvent: true,
             details: `Price broke below Donchian lower band: ${currentPrice.toFixed(4)} < ${lower.toFixed(4)}`,
-            priority: 9
+            priority: 9,
+            candle
         });
     }
     
@@ -533,7 +1107,8 @@ export const evaluateDonchianCondition = (candle, indicators, index, signalSetti
             strength: 70,
             isEvent: true,
             details: `Price crossed above Donchian middle line: ${currentPrice.toFixed(4)} > ${middle.toFixed(4)}`,
-            priority: 7
+            priority: 7,
+            candle
         });
     }
     
@@ -545,7 +1120,8 @@ export const evaluateDonchianCondition = (candle, indicators, index, signalSetti
             strength: 70,
             isEvent: true,
             details: `Price crossed below Donchian middle line: ${currentPrice.toFixed(4)} < ${middle.toFixed(4)}`,
-            priority: 7
+            priority: 7,
+            candle
         });
     }
     
@@ -563,21 +1139,57 @@ export const evaluateTtmSqueeze = (candle, indicators, index, signalSettings, ma
     const signals = [];
     const ttmSettings = signalSettings.ttm_squeeze;
     
-    // CRITICAL DEBUG: Log every 1000th candle to see if function is being called
-    if (onLog && index % 1000 === 0) {
-        onLog(`[TTM_SQUEEZE DEBUG] Function called for candle ${index}`, 'debug');
-        if (indicators.ttm_squeeze && indicators.ttm_squeeze[index] !== undefined) {
-            onLog(`[TTM_SQUEEZE DEBUG] TTM_Squeeze value: ${JSON.stringify(indicators.ttm_squeeze[index])}`, 'debug');
+    // ALWAYS log entry for debugging TTM Squeeze issues
+    //console.log(`[TTM_SQUEEZE_EVAL] 🔍 Starting evaluation at index ${index}`);
+    //console.log(`[TTM_SQUEEZE_EVAL] Has ttmSettings:`, !!ttmSettings, `Enabled:`, ttmSettings?.enabled);
+    //console.log(`[TTM_SQUEEZE_EVAL] Has indicators.ttm_squeeze:`, !!indicators.ttm_squeeze);
+    //console.log(`[TTM_SQUEEZE_EVAL] ttm_squeeze length:`, indicators.ttm_squeeze?.length || 0);
+    //console.log(`[TTM_SQUEEZE_EVAL] index ${index} validity:`, index >= 0 && index < (indicators.ttm_squeeze?.length || 0));
+    
+    // DEBUG: Log entry and initial conditions
+    if (debugMode && onLog) {
+        //onLog(`[TTM_SQUEEZE_EVAL] Starting evaluation: index=${index}, hasTtmSqueeze=${!!indicators.ttm_squeeze}, ttmSqueezeLength=${indicators.ttm_squeeze?.length || 0}, ttmSqueeze[index]=${!!indicators.ttm_squeeze?.[index]}, ttmSqueeze[index-1]=${!!indicators.ttm_squeeze?.[index - 1]}`, 'debug');
+        if (indicators.ttm_squeeze && indicators.ttm_squeeze.length > 0) {
+            // Log actual values and types for debugging
+            const ttmAtIndex = indicators.ttm_squeeze[index];
+            const ttmAtPrevIndex = indicators.ttm_squeeze[index - 1];
+            //onLog(`[TTM_SQUEEZE_EVAL] Raw values: ttm_squeeze[${index}]=${ttmAtIndex ? JSON.stringify(ttmAtIndex) : 'null'} (type=${typeof ttmAtIndex}), ttm_squeeze[${index-1}]=${ttmAtPrevIndex ? JSON.stringify(ttmAtPrevIndex) : 'null'} (type=${typeof ttmAtPrevIndex})`, 'debug');
+            if (ttmAtIndex === null || ttmAtIndex === undefined) {
+                // Check what the last valid index is
+                let lastValidIndex = -1;
+                let lastValidValue = null;
+                for (let i = index; i >= 0; i--) {
+                    if (indicators.ttm_squeeze[i] && typeof indicators.ttm_squeeze[i] === 'object') {
+                        lastValidIndex = i;
+                        lastValidValue = indicators.ttm_squeeze[i];
+                        break;
+                    }
+                }
+                //onLog(`[TTM_SQUEEZE_EVAL] Last valid TTM Squeeze found at index ${lastValidIndex}: ${lastValidValue ? JSON.stringify(lastValidValue) : 'none'}`, 'debug');
+            }
+        }
+        // Check dependencies
+        //onLog(`[TTM_SQUEEZE_EVAL] Dependencies: hasBollinger=${!!indicators.bollinger}, hasKeltner=${!!indicators.keltner}, hasAwesomeOscillator=${!!indicators.awesomeoscillator}`, 'debug');
+        if (indicators.bollinger && index < indicators.bollinger.length) {
+            //onLog(`[TTM_SQUEEZE_EVAL] Bollinger[${index}]: ${indicators.bollinger[index] ? JSON.stringify({upper: indicators.bollinger[index].upper, lower: indicators.bollinger[index].lower}) : 'null'}`, 'debug');
+        }
+        if (indicators.keltner && index < indicators.keltner.length) {
+            //onLog(`[TTM_SQUEEZE_EVAL] Keltner[${index}]: ${indicators.keltner[index] ? JSON.stringify({upper: indicators.keltner[index].upper, lower: indicators.keltner[index].lower}) : 'null'}`, 'debug');
+        }
+        if (indicators.awesomeoscillator && index < indicators.awesomeoscillator.length) {
+            //onLog(`[TTM_SQUEEZE_EVAL] AwesomeOscillator[${index}]: ${indicators.awesomeoscillator[index]}`, 'debug');
         }
     }
     
-    if (!ttmSettings || !ttmSettings.enabled) return signals;
+    if (!ttmSettings || !ttmSettings.enabled) {
+        if (debugMode && onLog) {
+            //onLog(`[TTM_SQUEEZE_EVAL] ❌ Early exit - Settings: hasTtmSettings=${!!ttmSettings}, enabled=${ttmSettings?.enabled}`, 'debug');
+        }
+        return signals;
+    }
 
     const squeezeData = indicators.ttm_squeeze;
     if (!squeezeData || index < ttmSettings.minSqueezeDuration) {
-        if (onLog && index % 1000 === 0) {
-            onLog(`[TTM_SQUEEZE DEBUG] Skipping: squeezeData=${!!squeezeData}, index=${index}, minDuration=${ttmSettings.minSqueezeDuration}`, 'debug');
-        }
         return signals;
     }
 
@@ -585,9 +1197,6 @@ export const evaluateTtmSqueeze = (candle, indicators, index, signalSettings, ma
     const prevSqueezeState = squeezeData[index - 1];
 
     if (!squeezeState || !prevSqueezeState) {
-        if (onLog && index % 1000 === 0) {
-            onLog(`[TTM_SQUEEZE DEBUG] Missing data: squeezeState=${!!squeezeState}, prevSqueezeState=${!!prevSqueezeState}`, 'debug');
-        }
         return signals;
     }
 
@@ -602,29 +1211,122 @@ export const evaluateTtmSqueeze = (candle, indicators, index, signalSettings, ma
         }
     }
 
-    // DIAGNOSTIC LOGGING
-    if (onLog && debugMode && indicators.data && index > indicators.data.length - 50) { // Added indicators.data check for safety
-        onLog(`[TTM EVAL DEBUG] i:${index} | Squeezed: ${squeezeState.isSqueeze} | Prev Squeezed: ${prevSqueezeState.isSqueeze} | Duration: ${squeezeDuration} | Momentum: ${squeezeState.momentum.toFixed(4)}`, 'debug');
-    }
-    
-    // CRITICAL DEBUG: Log TTM_Squeeze values every 1000th candle
-    if (onLog && index % 1000 === 0) {
-        onLog(`[TTM_SQUEEZE DEBUG] Current: isSqueeze=${squeezeState.isSqueeze}, momentum=${squeezeState.momentum}`, 'debug');
-        onLog(`[TTM_SQUEEZE DEBUG] Previous: isSqueeze=${prevSqueezeState.isSqueeze}, momentum=${prevSqueezeState.momentum}`, 'debug');
-        onLog(`[TTM_SQUEEZE DEBUG] Squeeze duration: ${squeezeDuration}, minDuration: ${ttmSettings.minSqueezeDuration}`, 'debug');
+    // DEBUG: Log extracted data
+    if (debugMode && onLog) {
+        //onLog(`[TTM_SQUEEZE_EVAL] Data extracted: isSqueeze=${squeezeState.isSqueeze}, momentum=${squeezeState.momentum}, prevIsSqueeze=${prevSqueezeState.isSqueeze}, prevMomentum=${prevSqueezeState.momentum}, squeezeDuration=${squeezeDuration}`, 'debug');
     }
 
+    // --- State-Based Signals (NEW) ---
+    
+    // 1. TTM Squeeze State
+    if (squeezeState.isSqueeze) {
+        const strength = 50 + Math.min(30, Math.min(squeezeDuration, 20) * 1.5);
+        if (debugMode && onLog) {
+            //onLog(`[TTM_SQUEEZE_EVAL] ✅ In Squeeze: duration=${squeezeDuration}, strength=${strength}`, 'debug');
+        }
+        signals.push({
+            type: 'ttm_squeeze',
+            value: 'In Squeeze',
+            strength: strength,
+            isEvent: false,
+            details: `TTM Squeeze active for ${squeezeDuration} candles - low volatility, potential breakout`,
+            priority: 6,
+            candle
+        });
+    } else {
+        if (debugMode && onLog) {
+            //onLog(`[TTM_SQUEEZE_EVAL] ✅ No Squeeze: isSqueeze=false`, 'debug');
+        }
+        signals.push({
+            type: 'ttm_squeeze',
+            value: 'No Squeeze',
+            strength: 25,
+            isEvent: false,
+            details: `TTM Squeeze not active - normal volatility`,
+            priority: 3,
+            candle
+        });
+    }
+    
+    // 2. TTM Momentum State
+    const momentum = squeezeState.momentum;
+    if (momentum > 0.1) {
+        const strength = 45 + Math.min(25, Math.abs(momentum) * 100);
+        if (debugMode && onLog) {
+            //onLog(`[TTM_SQUEEZE_EVAL] ✅ Bullish Momentum: ${momentum.toFixed(4)}, strength=${strength}`, 'debug');
+        }
+        signals.push({
+            type: 'ttm_squeeze',
+            value: 'Bullish Momentum',
+            strength: strength,
+            isEvent: false,
+            details: `TTM momentum is bullish (${momentum.toFixed(4)})`,
+            priority: 6,
+            candle
+        });
+    } else if (momentum < -0.1) {
+        const strength = 45 + Math.min(25, Math.abs(momentum) * 100);
+        if (debugMode && onLog) {
+            //onLog(`[TTM_SQUEEZE_EVAL] ✅ Bearish Momentum: ${momentum.toFixed(4)}, strength=${strength}`, 'debug');
+        }
+        signals.push({
+            type: 'ttm_squeeze',
+            value: 'Bearish Momentum',
+            strength: strength,
+            isEvent: false,
+            details: `TTM momentum is bearish (${momentum.toFixed(4)})`,
+            priority: 6,
+            candle
+        });
+    } else {
+        if (debugMode && onLog) {
+            //onLog(`[TTM_SQUEEZE_EVAL] ✅ Neutral Momentum: ${momentum.toFixed(4)}`, 'debug');
+        }
+        signals.push({
+            type: 'ttm_squeeze',
+            value: 'Neutral Momentum',
+            strength: 30,
+            isEvent: false,
+            details: `TTM momentum is neutral (${momentum.toFixed(4)})`,
+            priority: 4,
+            candle
+        });
+    }
+
+    // --- Event-Based Signals ---
+    
     // Signal fires on the FIRST candle the squeeze is released
     if (!squeezeState.isSqueeze && prevSqueezeState.isSqueeze) {
         if (squeezeDuration >= ttmSettings.minSqueezeDuration) {
-            const momentum = squeezeState.momentum;
             // Bullish Release: Momentum is positive
             if (momentum > 0) {
                 signals.push({
                     type: 'ttm_squeeze',
                     value: 'Squeeze Release Bullish',
                     details: `Squeeze released after ${squeezeDuration} candles with bullish momentum.`,
-                    strength: applyRegimeAdjustment(95, marketRegime, 'ttm_squeeze')
+                    strength: applyRegimeAdjustment(95, marketRegime, 'ttm_squeeze'),
+                    isEvent: true,
+                    priority: 9,
+                    candle
+                });
+                // Also add aliases for backward compatibility with strategy signals
+                signals.push({
+                    type: 'ttm_squeeze',
+                    value: 'Squeeze Release',  // Alias for "Squeeze Release Bullish"
+                    details: `Squeeze released after ${squeezeDuration} candles with bullish momentum.`,
+                    strength: applyRegimeAdjustment(95, marketRegime, 'ttm_squeeze'),
+                    isEvent: true,
+                    priority: 9,
+                    candle
+                });
+                signals.push({
+                    type: 'ttm_squeeze',
+                    value: 'Squeeze Released',  // Alias for "Squeeze Release Bullish"
+                    details: `Squeeze released after ${squeezeDuration} candles with bullish momentum.`,
+                    strength: applyRegimeAdjustment(95, marketRegime, 'ttm_squeeze'),
+                    isEvent: true,
+                    priority: 9,
+                    candle
                 });
             }
             // Bearish Release: Momentum is negative
@@ -633,9 +1335,47 @@ export const evaluateTtmSqueeze = (candle, indicators, index, signalSettings, ma
                     type: 'ttm_squeeze',
                     value: 'Squeeze Release Bearish',
                     details: `Squeeze released after ${squeezeDuration} candles with bearish momentum.`,
-                    strength: applyRegimeAdjustment(95, marketRegime, 'ttm_squeeze')
+                    strength: applyRegimeAdjustment(95, marketRegime, 'ttm_squeeze'),
+                    isEvent: true,
+                    priority: 9,
+                    candle
+                });
+                // Also add aliases for backward compatibility with strategy signals
+                signals.push({
+                    type: 'ttm_squeeze',
+                    value: 'Squeeze Release',  // Alias for "Squeeze Release Bearish"
+                    details: `Squeeze released after ${squeezeDuration} candles with bearish momentum.`,
+                    strength: applyRegimeAdjustment(95, marketRegime, 'ttm_squeeze'),
+                    isEvent: true,
+                    priority: 9,
+                    candle
+                });
+                signals.push({
+                    type: 'ttm_squeeze',
+                    value: 'Squeeze Released',  // Alias for "Squeeze Release Bearish"
+                    details: `Squeeze released after ${squeezeDuration} candles with bearish momentum.`,
+                    strength: applyRegimeAdjustment(95, marketRegime, 'ttm_squeeze'),
+                    isEvent: true,
+                    priority: 9,
+                    candle
                 });
             }
+        }
+    }
+
+    // Log only if no signals generated (potential issue)
+    if (signals.length === 0 && debugMode && onLog) {
+        onLog(`[TTM_SQUEEZE_EVAL] ⚠️ No signals generated at index ${index}`, 'warning');
+    }
+
+    if (debugMode && onLog) {
+        //onLog(`[TTM_SQUEEZE_EVAL] Final result: ${signals.length} signals generated`, 'debug');
+        if (signals.length > 0) {
+            signals.forEach((sig, idx) => {
+                //onLog(`[TTM_SQUEEZE_EVAL] Signal[${idx}]: value="${sig.value}", strength=${sig.strength}, isEvent=${sig.isEvent}`, 'debug');
+            });
+        } else {
+            onLog(`[TTM_SQUEEZE_EVAL] ⚠️ No signals generated - this will cause "Not Found"`, 'debug');
         }
     }
 

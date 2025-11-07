@@ -56,6 +56,7 @@ import { fetchKlineData as fetchKlineDataFromApi, fetchMultiplePrices as fetchMu
 import MarketRegimeDetector from './MarketRegimeDetector';
 import { SIGNAL_WEIGHTS, CORE_SIGNAL_TYPES } from './signalSettings';
 import { getRegimeMultiplier } from './regimeUtils';
+import { calculateUnifiedCombinedStrength } from './unifiedStrengthCalculator';
 
 // Debug limiter (disabled to silence logs)
 let imDebugCount = 0;
@@ -107,8 +108,8 @@ const defaultSignalSettings = {
     mfi: { period: 14 },
     adline: {},
     pivot: {},
-    fibonacci: {},
-    supportresistance: { lookback: 50, tolerance: 0.01 },
+    fibonacci: { lookback: 100 }, // Increased default lookback for better swing detection
+    supportresistance: { lookback: 100, tolerance: 0.01 }, // Increased default lookback for shorter timeframes
     chartpattern: {},
     candlestick: {}
 };
@@ -710,21 +711,59 @@ export const getRequiredIndicators = (signalSettings) => {
  */
 const createSignalLookup = (signalSettings) => {
     const signalLookup = {};
+    // Normalize signal type names (e.g., TTMSqueeze -> ttm_squeeze)
+    const normalizeSignalType = (type) => {
+        if (!type || typeof type !== 'string') return type;
+        const normalized = type.toLowerCase().trim();
+        // Map ALL TTM Squeeze variations to standard name
+        // Handle: TTMSqueeze, TTM_Squeeze, ttm_squeeze, ttmsqueeze, TTM-Squeeze, etc.
+        if (normalized === 'ttmsqueeze' || normalized === 'ttm_squeeze' || normalized === 'ttm-squeeze') {
+            if (normalized !== 'ttm_squeeze') {
+                //console.log(`[SIGNAL_LOOKUP] 🔄 Normalizing "${type}" → "ttm_squeeze"`);
+            }
+            return 'ttm_squeeze';
+        }
+        return normalized;
+    };
+    
     if (Array.isArray(signalSettings)) {
-        signalSettings.forEach(signal => {
+        //console.log(`[SIGNAL_LOOKUP] 📋 Processing array of ${signalSettings.length} signals`);
+        signalSettings.forEach((signal, idx) => {
             if (typeof signal === 'string') {
-                signalLookup[signal.toLowerCase()] = true;
+                const normalizedType = normalizeSignalType(signal);
+                signalLookup[normalizedType] = true;
+                if (signal.toLowerCase().includes('squeeze') || signal.toLowerCase().includes('ttm')) {
+                    //console.log(`[SIGNAL_LOOKUP] ✅ Added string signal [${idx}]: "${signal}" → "${normalizedType}"`);
+                }
             } else if (signal && typeof signal === 'object' && signal.type) {
-                signalLookup[signal.type.toLowerCase()] = signal.parameters || {};
+                const normalizedType = normalizeSignalType(signal.type);
+                signalLookup[normalizedType] = signal.parameters || {};
+                if (signal.type.toLowerCase().includes('squeeze') || signal.type.toLowerCase().includes('ttm')) {
+                    //console.log(`[SIGNAL_LOOKUP] ✅ Added object signal [${idx}]: type="${signal.type}" → "${normalizedType}", value="${signal.value || 'N/A'}"`);
+                }
             }
         });
     } else if (typeof signalSettings === 'object' && signalSettings !== null) {
+        //console.log(`[SIGNAL_LOOKUP] 📋 Processing object with ${Object.keys(signalSettings).length} keys`);
         for (const key in signalSettings) {
             if (Object.prototype.hasOwnProperty.call(signalSettings, key)) {
-                signalLookup[key.toLowerCase()] = signalSettings[key];
+                const normalizedType = normalizeSignalType(key);
+                signalLookup[normalizedType] = signalSettings[key];
+                if (key.toLowerCase().includes('squeeze') || key.toLowerCase().includes('ttm')) {
+                    //console.log(`[SIGNAL_LOOKUP] ✅ Added object key: "${key}" → "${normalizedType}"`);
+                }
             }
         }
     }
+    
+    if (signalLookup.ttm_squeeze) {
+        //console.log(`[SIGNAL_LOOKUP] ✅✅✅ TTM_SQUEEZE FOUND IN LOOKUP! ✅✅✅`);
+        //console.log(`[SIGNAL_LOOKUP] ttm_squeeze value:`, signalLookup.ttm_squeeze);
+    } else {
+        //console.log(`[SIGNAL_LOOKUP] ❌❌❌ TTM_SQUEEZE NOT FOUND IN LOOKUP ❌❌❌`);
+        //console.log(`[SIGNAL_LOOKUP] Available keys:`, Object.keys(signalLookup));
+    }
+    
     return signalLookup;
 };
 
@@ -761,9 +800,9 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
       }
   };
 
-  logMessage('[atr_debug] ===== calculateAllIndicators CALLED =====', 'debug');
-  logMessage(`[atr_debug] Kline data length: ${klines?.length || 0}`, 'debug');
-  logMessage(`[atr_debug] Signal settings received: ${JSON.stringify(signals)}`, 'debug');
+  //logMessage('[atr_debug] ===== calculateAllIndicators CALLED =====', 'debug');
+  //logMessage(`[atr_debug] Kline data length: ${klines?.length || 0}`, 'debug');
+  //logMessage(`[atr_debug] Signal settings received: ${JSON.stringify(signals)}`, 'debug');
 
   if (!Array.isArray(klines) || klines.length === 0) {
     logMessage('[atr_debug] ⚠️ No kline data provided to calculateAllIndicators. Returning empty result.', 'debug', new Error('Empty or invalid kline data'));
@@ -772,7 +811,7 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
 
   const indicators = { data: klines };
   const signalLookup = createSignalLookup(localSignalSettings); // Use localSignalSettings for createSignalLookup
-  logMessage(`[atr_debug] Processed signal lookup keys: ${Object.keys(signalLookup).join(', ')}`, 'debug');
+  //logMessage(`[atr_debug] Processed signal lookup keys: ${Object.keys(signalLookup).join(', ')}`, 'debug');
 
   // Data extraction (for indicators that specifically operate on arrays of numbers)
   const closes = klines.map(d => d.close);
@@ -905,13 +944,24 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
     }
 
     logMessage('[atr_debug] Attempting ATR calculation...', 'debug');
+    
+    // Calculate expected evaluation index (used in signal evaluation)
+    const expectedEvaluationIndex = klines.length - 2;
+    logMessage(`[atr_debug] Expected evaluation index (klines.length - 2): ${expectedEvaluationIndex}`, 'debug');
+    logMessage(`[atr_debug] Expected ATR index for evaluation: ${expectedEvaluationIndex >= (period - 1) ? (expectedEvaluationIndex - (period - 1)) : 'N/A (too early)'}`, 'debug');
+    
     indicators.atr = safeCalculate('ATR', unifiedCalculateATR, klines, period);
 
-    // Existing debug log for ATR, now enhanced
+    // Enhanced diagnostic logging
     const len = indicators.atr?.length || 0;
     const nonNull = indicators.atr ? indicators.atr.filter((v) => v !== null && v !== undefined).length : 0;
     const lastValid = indicators.atr ? [...indicators.atr].reverse().find((v) => v !== null && v !== undefined) : null;
-    logMessage(`[atr_debug] ATR result: len=${len}, nonNull=${nonNull}, last=${lastValid}`, 'debug');
+    const firstValid = indicators.atr ? indicators.atr.find((v) => v !== null && v !== undefined) : null;
+    const lastValidIndex = indicators.atr ? indicators.atr.length - 1 - [...indicators.atr].reverse().findIndex((v) => v !== null && v !== undefined) : -1;
+    
+    logMessage(`[atr_debug] ATR result: len=${len}, nonNull=${nonNull}, first=${firstValid}, last=${lastValid} (at index ${lastValidIndex})`, 'debug');
+    logMessage(`[atr_debug] Length comparison: klines.length=${klines.length}, atr.length=${len}, gap=${klines.length - len}`, 'debug');
+    logMessage(`[atr_debug] Evaluation index check: evaluationIndex=${expectedEvaluationIndex}, atr.length=${len}, willAccess=${expectedEvaluationIndex < len ? 'YES' : `NO (need fallback to index ${lastValidIndex})`}`, 'debug');
     logMessage('[atr_debug] ATR calculation complete (if successful).', 'debug');
 
     if (indicators.atr?.length > 0) {
@@ -954,10 +1004,21 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
   }
   if (signalLookup.ttm_squeeze) {
     // TTM Squeeze logic requires other indicators, handled within its own block for clarity
+    // CRITICAL: Ensure dependencies are calculated even if not explicitly requested
+    if (!indicators.bollinger) {
+        const s = signalLookup.bollinger || {};
+        indicators.bollinger = safeCalculate('Bollinger Bands (TTM Dep)', calculateBollingerBands, klines, s?.period || defaultSignalSettings.bollinger.period, s?.stdDev || defaultSignalSettings.bollinger.stdDev);
+    }
+    if (!indicators.keltner) {
+        const s = signalLookup.keltner || {};
+        indicators.keltner = safeCalculate('Keltner Channels (TTM Dep)', calculateKeltnerChannels, klines, s?.keltnerPeriod || defaultSignalSettings.keltner.keltnerPeriod, s?.atrPeriod || defaultSignalSettings.keltner.atrPeriod, s?.kcMultiplier || defaultSignalSettings.keltner.kcMultiplier);
+    }
+    if (!indicators.awesomeoscillator) {
+        indicators.awesomeoscillator = safeCalculate('Awesome Oscillator (TTM Dep)', calculateAwesomeOscillator, klines);
+    }
+    
+    // Now calculate TTM Squeeze if we have the required dependencies
     if (indicators.bollinger && indicators.keltner) {
-        if (!indicators.awesomeoscillator) {
-            indicators.awesomeoscillator = safeCalculate('Awesome Oscillator (TTM Dep)', calculateAwesomeOscillator, klines);
-        }
         indicators.ttm_squeeze = safeCalculate('TTM Squeeze', () => {
             // Implement proper TTM Squeeze logic
             const ttmSqueezeData = [];
@@ -991,6 +1052,9 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
             
             return ttmSqueezeData;
         });
+    } else {
+        // Log error only if dependencies still missing after attempt to calculate
+        logMessage(`[TTM_SQUEEZE_CALC] ⚠️ Cannot calculate TTM Squeeze: hasBollinger=${!!indicators.bollinger}, hasKeltner=${!!indicators.keltner}`, 'warning');
     }
   }
   if (signalLookup.donchian) {
@@ -1088,21 +1152,95 @@ export function calculateAllIndicators(klines, signals = [], logFunction = conso
   if (signalLookup.trendexhaustion) {
     indicators.trendExhaustion = safeCalculate('Trend Exhaustion', detectTrendExhaustion, klines);
   }
-  if (signalLookup.pivot) {
+  // CRITICAL FIX: Always calculate pivots when ANY signals are requested
+  // This is because evaluateSignalCondition ALWAYS evaluates pivot signals regardless of strategy definition
+  // Pivots are also required for: fibonacci, support/resistance, and keltner signals
+  // Since auto-scanner evaluates ALL signals (including pivot) regardless of strategy signal definitions,
+  // we must always calculate pivots to prevent "hasPivots=false" errors in signal evaluation
+  const needsPivots = signalLookup.pivot || signalLookup.fibonacci || signalLookup.supportresistance || signalLookup.keltner;
+  const hasAnySignals = Object.keys(signalLookup).length > 0;
+  
+  // Calculate pivots if:
+  // 1. Explicitly requested (pivot, fibonacci, support/resistance, keltner)
+  // 2. OR if any signals are provided (auto-scanner context where all signals are evaluated)
+  if (needsPivots || hasAnySignals) {
+    //console.log(`[INDICATOR_MANAGER] Calculating pivots: pivot=${!!signalLookup.pivot}, fibonacci=${!!signalLookup.fibonacci}, supportresistance=${!!signalLookup.supportresistance}, keltner=${!!signalLookup.keltner}, hasAnySignals=${hasAnySignals}`);
     indicators.pivots = safeCalculate('Pivot Points', calculatePivotPoints, klines);
+    //console.log(`[INDICATOR_MANAGER] Pivot calculation result: hasPivots=${!!indicators.pivots}, type=${typeof indicators.pivots}, length=${indicators.pivots?.length || 'N/A'}, isArray=${Array.isArray(indicators.pivots)}`);
+    if (indicators.pivots && Array.isArray(indicators.pivots) && indicators.pivots.length > 48) {
+      const sample48 = indicators.pivots[48];
+      //console.log(`[INDICATOR_MANAGER] Sample[48]: isNull=${sample48 === null}, isUndefined=${sample48 === undefined}, type=${typeof sample48}, isObject=${typeof sample48 === 'object' && sample48 !== null}`);
+      if (sample48 && typeof sample48 === 'object') {
+        //console.log(`[INDICATOR_MANAGER] Sample[48] keys: ${Object.keys(sample48).join(', ')}`);
+      }
+    }
+  } else {
+    console.log(`[INDICATOR_MANAGER] ⚠️ Pivot NOT calculated: no signals provided`);
   }
+  
+  // Create onLog callback from logFunction for SR and Fibonacci diagnostics
+  // Check if logFunction is an onLog-style callback (message, level) or a console.log-style (message)
+  const createOnLog = () => {
+    if (!logFunction || logFunction === console.log) return null;
+    
+    // Check if logFunction accepts 2 parameters (onLog style: message, level)
+    // If it does, use it directly; otherwise return null (will use console.log in calculation functions)
+    if (logFunction.length >= 2) {
+      // onLog-style callback (message, level) - use it directly
+      return (message, level = 'debug') => {
+        logFunction(message, level);
+      };
+    }
+    
+    // For console.log-style callbacks, route through logMessage
+    return (message, level = 'debug') => {
+      if (level === 'error') {
+        logMessage(message, 'error');
+      } else if (level === 'warn' || level === 'warning') {
+        logMessage(message, 'warning');
+      } else {
+        logMessage(message, 'debug');
+      }
+    };
+  };
+  const onLogCallback = createOnLog();
+
   if (signalLookup.fibonacci) {
-    indicators.fibonacci = safeCalculate('Fibonacci Retracements', calculateFibonacciRetracements, klines);
+    const s = signalLookup.fibonacci;
+    const lookback = s?.lookback || defaultSignalSettings.fibonacci.lookback || 100;
+    const minSwingPercent = s?.minSwingPercent || 1.5; // Reduced from 3.0% to 1.5% for shorter timeframes
+    indicators.fibonacci = safeCalculate('Fibonacci Retracements', calculateFibonacciRetracements, klines, lookback, minSwingPercent, onLogCallback);
   }
-  if (signalLookup.supportresistance) {
-    const s = signalLookup.supportresistance;
-    indicators.supportresistance = safeCalculate('Support/Resistance', calculateSupportResistance, klines, s?.lookback || defaultSignalSettings.supportresistance.lookback, s?.tolerance || defaultSignalSettings.supportresistance.tolerance);
+  
+  // CRITICAL: Always calculate supportresistance when ANY signals are requested
+  // This is needed for entry quality metrics (entry_near_support, entry_near_resistance, etc.)
+  // Similar to how pivots are always calculated
+  const hasAnySignalsForSR = Object.keys(signalLookup).length > 0;
+  if (signalLookup.supportresistance || hasAnySignalsForSR) {
+    const s = signalLookup.supportresistance || {};
+    indicators.supportresistance = safeCalculate('Support/Resistance', calculateSupportResistance, klines, s?.lookback || defaultSignalSettings.supportresistance.lookback, s?.tolerance || defaultSignalSettings.supportresistance.tolerance, onLogCallback);
   }
   if (signalLookup.chartpattern) {
     indicators.chartpattern = safeCalculate('Chart Patterns', detectChartPatterns, klines, { chartpattern: signalLookup.chartpattern });
+    // Validate data structure (log errors only)
+    if (indicators.chartpattern && indicators.chartpattern.length > 0) {
+      const sampleIndex = Math.min(48, indicators.chartpattern.length - 1);
+      const sample = indicators.chartpattern[sampleIndex];
+      if (Array.isArray(sample)) {
+        console.error(`[INDICATOR_MANAGER] ❌ Chart Patterns[${sampleIndex}] is an ARRAY, expected object with pattern flags`);
+      }
+    }
   }
   if (signalLookup.candlestick) {
     indicators.candlestickPatterns = safeCalculate('Candlestick Patterns', detectCandlestickPatterns, klines);
+    // Validate data structure (log errors only)
+    if (indicators.candlestickPatterns && indicators.candlestickPatterns.length > 0) {
+      const sampleIndex = Math.min(48, indicators.candlestickPatterns.length - 1);
+      const sample = indicators.candlestickPatterns[sampleIndex];
+      if (Array.isArray(sample)) {
+        console.error(`[INDICATOR_MANAGER] ❌ Candlestick Patterns[${sampleIndex}] is an ARRAY, expected object with readyForAnalysis`);
+      }
+    }
   }
 
   // Final debug log for indicator keys
@@ -1183,39 +1321,25 @@ export {
   calculateWMA
 };
 
-// Calculate weighted combined strength with regime adjustments and core signal bonuses
-function calculateWeightedCombinedStrength(matchedSignals, marketRegime = 'neutral') {
-    let weightedSum = 0;
-    let totalWeight = 0;
-    let coreSignalsCount = 0;
+// Calculate weighted combined strength using unified calculator
+function calculateWeightedCombinedStrength(matchedSignals, marketRegime = 'neutral', regimeConfidence = 0.5) {
+    // Use unified calculator for consistency
+    const result = calculateUnifiedCombinedStrength(matchedSignals, {
+        marketRegime: marketRegime,
+        regimeConfidence: regimeConfidence,
+        useAdvancedFeatures: true,
+        useSimpleRegimeMultiplier: false
+    });
     
-    for (const signal of matchedSignals) {
-        const signalType = signal.type?.toLowerCase();
-        const weight = SIGNAL_WEIGHTS[signalType] || 1.0;
-        const isCore = CORE_SIGNAL_TYPES.includes(signalType);
-        
-        // Apply both weight and regime adjustment
-        const regimeMultiplier = getRegimeMultiplier(marketRegime, signalType, signal.category);
-        const finalStrength = signal.strength * weight * regimeMultiplier;
-        
-        weightedSum += finalStrength;
-        totalWeight += weight;
-        
-        if (isCore) coreSignalsCount++;
-    }
-    
-    // Core signal bonus (10 points per core signal, max 50 points)
-    const coreBonus = Math.min(coreSignalsCount * 10, 50);
-    
-    // Signal diversity bonus (bonus for having multiple different signal types)
-    const uniqueTypes = new Set(matchedSignals.map(s => s.type?.toLowerCase()));
-    const diversityBonus = uniqueTypes.size > 3 ? 5 : 0;
-    
-    return weightedSum + coreBonus + diversityBonus;
+    // Return both strength and breakdown for analytics
+    return {
+        totalStrength: result.totalStrength,
+        breakdown: result.breakdown
+    };
 }
 
 // Evaluate signal conditions for a strategy
-export const evaluateSignalConditions = (strategy, indicators, klinesForEval) => {
+export const evaluateSignalConditions = (strategy, indicators, klinesForEval, marketRegime = null) => {
   try {
     if (!strategy || !strategy.signals || !indicators) {
       return {
@@ -1274,11 +1398,17 @@ export const evaluateSignalConditions = (strategy, indicators, klinesForEval) =>
     }
 
     // Calculate weighted combined strength using the new system
-    const combinedStrength = calculateWeightedCombinedStrength(matchedSignals, 'neutral');
+    // Use actual market regime if provided, otherwise default to 'neutral'
+    const regime = marketRegime?.regime || 'neutral';
+    const regimeConfidence = marketRegime?.confidence || 0.5;
+    const strengthResult = calculateWeightedCombinedStrength(matchedSignals, regime, regimeConfidence);
+    const combinedStrength = typeof strengthResult === 'number' ? strengthResult : strengthResult.totalStrength;
+    const strengthBreakdown = typeof strengthResult === 'object' && strengthResult.breakdown ? strengthResult.breakdown : null;
     const isMatch = signalCount >= (strategy.minSignals || 1) && combinedStrength >= (strategy.minStrength || 50);
 
     return {
       isMatch,
+      strengthBreakdown: strengthBreakdown, // Include breakdown for analytics
       combinedStrength,
       matchedSignals,
       signalCount,

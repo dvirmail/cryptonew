@@ -23,13 +23,15 @@ const TechnicalSignalPanel = ({
 
   const getGroupStats = (groupSignals) => {
     if (!groupSignals || !Array.isArray(groupSignals)) return { enabled: 0, total: 0 };
-    const enabled = groupSignals.filter(signal => signalSettings[signal]?.enabled).length;
-    return { enabled, total: groupSignals.length };
+    const visibleSignals = groupSignals.filter(signal => !signalSettings[signal]?.hidden);
+    const enabled = visibleSignals.filter(signal => signalSettings[signal]?.enabled).length;
+    return { enabled, total: visibleSignals.length };
   };
 
   const toggleSignalGroup = (groupSignals, enable) => {
     groupSignals.forEach(signalKey => {
-      if (signalSettings[signalKey] && typeof onSignalEnabledChange === 'function') {
+      const settings = signalSettings[signalKey];
+      if (settings && !settings.hidden && typeof onSignalEnabledChange === 'function') {
         onSignalEnabledChange(signalKey, enable);
       }
     });
@@ -163,7 +165,12 @@ const TechnicalSignalPanel = ({
                 </AccordionTrigger>
                 <AccordionContent className="p-4 border-t border-gray-200 dark:border-gray-800">
                   <div className="grid grid-cols-1 md::grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                    {categoryData.signals.map(signalKey => renderSignalControl(signalKey))}
+                    {categoryData.signals
+                      .filter(signalKey => {
+                        const settings = signalSettings[signalKey];
+                        return settings && !settings.hidden; // Filter out hidden indicators
+                      })
+                      .map(signalKey => renderSignalControl(signalKey))}
                   </div>
                 </AccordionContent>
               </AccordionItem>

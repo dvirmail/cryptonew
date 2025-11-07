@@ -409,7 +409,7 @@ class ApiQueue {
       } else if (priority === 'critical') {
         requestTimeout = 300000;
       } else if (cacheKey && typeof cacheKey === 'string' && (cacheKey.includes('BacktestCombination') || cacheKey.includes('updateStrategyStats'))) {
-        requestTimeout = 180000;
+        requestTimeout = 600000; // Increased to 10 minutes for large strategy lists (1700+)
       } else {
         requestTimeout = 120000;
       }
@@ -741,7 +741,14 @@ export const queueEntityCall = async (entityName, method, ...args) => {
   }
 
   // NEW: Log Trade calls at enqueue time (before we mutate args)
-  if (entityName === 'Trade') {
+            if (entityName === 'Trade' && method === 'create') {
+              //console.log('[debug_save] ==========================================');
+              //console.log('[debug_save] Trade.create ENQUEUED');
+              //console.log('[debug_save] Trade.create args[0] keys:', args[0] ? Object.keys(args[0]) : 'NO ARGS');
+              //console.log('[debug_save] Trade.create has position_id:', args[0]?.position_id !== undefined, 'value:', args[0]?.position_id);
+              //console.log('[debug_save] Trade.create has duration_hours:', args[0]?.duration_hours !== undefined, 'value:', args[0]?.duration_hours);
+              //console.log('[debug_save] Trade.create has exit_reason:', args[0]?.exit_reason !== undefined, 'value:', args[0]?.exit_reason);
+              //console.log('[debug_save] ==========================================');
     DEBUG_TRADE.log('[ENQUEUE]', {
       entity: entityName,
       method,
@@ -817,6 +824,8 @@ export const queueEntityCall = async (entityName, method, ...args) => {
     if (method === 'create' || method === 'bulkCreate' || method === 'update' || method === 'list' || method === 'filter' || entityName === 'BacktestCombination') {
       if (entityName === 'BacktestCombination' && method === 'update') {
         timeoutMs = 480000;
+      } else if (entityName === 'BacktestCombination' && method === 'list') {
+        timeoutMs = 600000; // 10 minutes for loading large strategy lists (1700+)
       } else if (entityName !== 'MarketAlert') { // Don't override MarketAlert timeout if already set
         timeoutMs = 300000;
       }
@@ -938,15 +947,23 @@ export const queueEntityCall = async (entityName, method, ...args) => {
           }
           
           // Additional logging for successful Trade creation
-          if (entityName === 'Trade' && method === 'create' && result) {
-            DEBUG_TRADE.log('[TRADE_CREATE_OK]', {
-              databaseId: result.id,
-              tradeId: result.trade_id,
-              finalMarketRegime: result.market_regime || 'REGIME_NOT_SAVED',
-              finalRegimeConfidence: result.regime_confidence || 'CONFIDENCE_NOT_SAVED',
-              finalCombinedStrength: result.combined_strength || 'STRENGTH_NOT_SAVED',
-              finalConvictionScore: result.conviction_score || 'CONVICTION_NOT_SAVED'
-            });
+          if (entityName === 'Trade' && method === 'create') {
+            if (result) {
+              // Removed debug_save logs to prevent console flooding
+              // Only log via DEBUG_TRADE for production debugging
+              DEBUG_TRADE.log('[TRADE_CREATE_OK]', {
+                databaseId: result.id,
+                tradeId: result.trade_id,
+                finalMarketRegime: result.market_regime || 'REGIME_NOT_SAVED',
+                finalRegimeConfidence: result.regime_confidence || 'CONFIDENCE_NOT_SAVED',
+                finalCombinedStrength: result.combined_strength || 'STRENGTH_NOT_SAVED',
+                finalConvictionScore: result.conviction_score || 'CONVICTION_NOT_SAVED'
+              });
+            } else {
+              console.error('[debug_save] ❌ ==========================================');
+              console.error('[debug_save] ❌ Trade.create FAILED - no result returned');
+              console.error('[debug_save] ❌ ==========================================');
+            }
           }
 
           // NEW: Success logging for Trade calls

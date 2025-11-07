@@ -5,7 +5,7 @@
     "available_balance": "0.00000000",
     "balance_in_trades": 0,
     "total_equity": "0.00000000",
-    "total_realized_pnl": 0,
+    "total_realized_pnl": 60.50734799999995,
     "unrealized_pnl": "0.00000000",
     "open_positions_count": 0,
     "last_binance_sync": "2025-10-26T20:11:43.815Z",
@@ -13,13 +13,13 @@
     "positions": [],
     "status": "synced",
     "created_date": "2025-10-26T20:10:39.475Z",
-    "updated_date": "2025-10-30T18:25:30.467Z",
-    "total_trades_count": 0,
-    "winning_trades_count": 0,
-    "losing_trades_count": 0,
-    "total_gross_profit": 0,
-    "total_gross_loss": 0,
-    "total_fees_paid": 0,
-    "last_updated_timestamp": "2025-10-30T18:25:30.467Z"
+    "updated_date": "2025-11-06T23:02:23.082Z",
+    "total_trades_count": 250,
+    "winning_trades_count": 146,
+    "losing_trades_count": 104,
+    "total_gross_profit": 88.06387526999997,
+    "total_gross_loss": 27.55652727000001,
+    "total_fees_paid": 23.674078269999974,
+    "last_updated_timestamp": "2025-11-06T23:02:23.082Z"
   }
 ]

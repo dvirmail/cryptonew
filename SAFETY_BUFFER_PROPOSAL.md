@@ -75,7 +75,7 @@ const bufferedCost = bufferedQuantity * currentPrice;
 if (bufferedCost <= availableBalance) {
     quantityCrypto = bufferedQuantity;  // Add 5% buffer (we can afford it)
     quantityCrypto = Math.floor(quantityCrypto / stepSize) * stepSize;  // Re-floor
-    console.log(`[POSITION_OPENING] ✅ Applied 5% buffer: ${quantityCrypto} (using ${bufferedCost} of ${availableBalance} available)`);
+    //console.log(`[POSITION_OPENING] ✅ Applied 5% buffer: ${quantityCrypto} (using ${bufferedCost} of ${availableBalance} available)`);
 } else {
     // Can't afford buffer - use original quantity (already meets minimums)
     // Original quantity is fine - buffer is optional safety feature

@@ -161,12 +161,15 @@ function detectDoubleTopBottom(priceData, currentIndex, settings) {
 
     // Check for Double Bottom
     const lows = pivots.lows;
+    
     if (lows.length >= 2) {
         for (let i = 0; i < lows.length - 1; i++) {
             const firstBottom = lows[i];
             const secondBottom = lows[i + 1];
             
-            if (isValidDoubleBottom(firstBottom, secondBottom, priceData, tolerance)) {
+            const isValid = isValidDoubleBottom(firstBottom, secondBottom, priceData, tolerance);
+            
+            if (isValid) {
                 const pattern = createDoubleBottomPattern(firstBottom, secondBottom, priceData, currentIndex);
                 patterns.push(pattern);
             }
@@ -364,7 +367,9 @@ function detectInverseHeadAndShoulders(priceData, currentIndex, settings) {
     const minPatternLength = 20;
     const lookback = Math.min(settings.maxPatternLength || 60, currentIndex);
 
-    if (currentIndex < minPatternLength) return patterns;
+    if (currentIndex < minPatternLength) {
+        return patterns;
+    }
 
     // Find three significant lows
     const lows = findPivotPoints(priceData, currentIndex - lookback, currentIndex, 5).lows;
@@ -378,7 +383,9 @@ function detectInverseHeadAndShoulders(priceData, currentIndex, settings) {
         const rightShoulder = lows[i + 2];
 
         // Validate inverse head and shoulders criteria
-        if (isValidInverseHeadAndShoulders(leftShoulder, head, rightShoulder, priceData, settings)) {
+        const isValid = isValidInverseHeadAndShoulders(leftShoulder, head, rightShoulder, priceData, settings);
+
+        if (isValid) {
             const pattern = {
                 type: 'Inverse Head and Shoulders',
                 subtype: 'bullish',

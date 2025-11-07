@@ -3,12 +3,39 @@
  * 
  * This module detects and handles signal correlations to prevent double-counting
  * of related signals in combined strength calculations.
+ * 
+ * Last updated: 2025-01-27 - Balanced correlation threshold to 0.70 and penalty to 10% for optimal strategy count
+ * Version: 2.3.0 - Threshold set to 0.70 with 10% penalty factor to balance correlation detection with strategy diversity
  */
 
 export class SignalCorrelationDetector {
   constructor() {
     this.correlationMatrix = this.initializeCorrelationMatrix();
-    this.correlationThreshold = 0.8; // Signals with correlation > 0.8 are considered highly correlated
+    this.correlationThreshold = 0.70; // Signals with correlation >= 0.70 are considered correlated (balanced to capture moderate-high correlations while maintaining strategy count)
+    
+    // Log sampling counters to avoid flooding console
+    this.correlationLogCounter = 0;
+    this.correlationPenaltyLogCounter = 0;
+    this.loggedCombinations = new Set(); // Track which signal combinations have been logged
+    
+    // Track correlation examples per context (for sampling)
+    this.correlationExamplesByContext = {
+      backtest: {
+        positive: [],
+        negative: [],
+        penalty: [],
+        bonus: []
+      },
+      scanner: {
+        positive: [],
+        negative: [],
+        penalty: [],
+        bonus: []
+      }
+    };
+    
+    // ✅ Validate critical correlations on initialization
+    this.validateCriticalCorrelations();
     
     // Expose test function globally for easy console access
     if (typeof window !== 'undefined') {
@@ -18,6 +45,45 @@ export class SignalCorrelationDetector {
         console.log(`${signal1} ↔ ${signal2}: ${correlation !== 0 ? correlation.toFixed(3) : 'NO CORRELATION'}`);
         return correlation;
       };
+    }
+  }
+  
+  /**
+   * Validate that critical correlations exist in the matrix
+   * This helps catch cache issues early
+   */
+  validateCriticalCorrelations() {
+    const criticalPairs = [
+      ['ma200', 'stochastic'],
+      ['ichimoku', 'stochastic'],
+      ['adx', 'stochastic'],
+      ['psar', 'stochastic'],
+      ['maribbon', 'stochastic'],
+      ['ema', 'stochastic'],
+      ['tema', 'stochastic'],
+      ['dema', 'stochastic'],
+      ['hma', 'stochastic'],
+      ['wma', 'stochastic'],
+      ['MA200', 'Stochastic'],
+      ['Ichimoku', 'Stochastic'],
+      ['ADX', 'Stochastic'],
+      ['PSAR', 'Stochastic'],
+      ['EMA', 'Stochastic']
+    ];
+    
+    let missingPairs = [];
+    for (const [type1, type2] of criticalPairs) {
+      const correlation = this.calculateCorrelation(type1, type2);
+      if (correlation === 0) {
+        missingPairs.push(`${type1} ↔ ${type2}`);
+      }
+    }
+    
+    if (missingPairs.length > 0) {
+      console.error(`❌ [CORRELATION_VALIDATION] Missing ${missingPairs.length} critical correlations:`, missingPairs);
+      console.error(`⚠️  [CORRELATION_VALIDATION] This indicates cached code. Please hard refresh (Cmd+Shift+R or Ctrl+Shift+F5)`);
+    } else {
+      //console.log(`✅ [CORRELATION_VALIDATION] All ${criticalPairs.length} critical correlations validated`);
     }
   }
 
@@ -211,7 +277,68 @@ export class SignalCorrelationDetector {
         'roc': 0.55,
         'awesomeoscillator': 0.50,
         'cmo': 0.50,
-        'mfi': 0.60
+        'mfi': 0.60,
+        // Cross-category correlations with trend indicators
+        'ma200': 0.20,
+        'MA200': 0.20,
+        'ichimoku': 0.20,
+        'Ichimoku': 0.20,
+        'adx': 0.20,
+        'ADX': 0.20,
+        'psar': 0.20,
+        'PSAR': 0.20,
+        'maribbon': 0.20
+      },
+      'stochastic': {
+        'Stochastic': 0.95,
+        'stochastic_oversold': 0.90,
+        'stochastic_overbought': 0.90,
+        'RSI': 0.80,
+        'rsi': 0.80,
+        'rsi_oversold': 0.80,
+        'rsi_overbought': 0.80,
+        'williamsr': 0.85,
+        'williams_r': 0.85,
+        'CCI': 0.70,
+        'cci': 0.70,
+        'cci_oversold': 0.70,
+        'cci_overbought': 0.70,
+        'roc': 0.55,
+        'ROC': 0.55,
+        'awesomeoscillator': 0.50,
+        'awesomeOscillator': 0.50,
+        'cmo': 0.50,
+        'CMO': 0.50,
+        'mfi': 0.60,
+        'MFI': 0.60,
+        // Cross-category correlations with trend indicators
+        'ma200': 0.20,
+        'MA200': 0.20,
+        'ichimoku': 0.20,
+        'Ichimoku': 0.20,
+        'adx': 0.20,
+        'ADX': 0.20,
+        'psar': 0.20,
+        'PSAR': 0.20,
+        'maribbon': 0.20,
+        'macd': 0.20,
+        'MACD': 0.20,
+        'ema': 0.20,
+        'EMA': 0.20,
+        'tema': 0.20,
+        'dema': 0.20,
+        'hma': 0.20,
+        'wma': 0.20,
+        'WMA': 0.20,
+        'bollinger': 0.20,
+        'Bollinger': 0.20,
+        'atr': 0.20,
+        'ATR': 0.20,
+        'volume': 0.20,
+        'obv': 0.20,
+        'OBV': 0.20,
+        'cmf': 0.20,
+        'CMF': 0.20
       },
       'CCI': {
         'cci_oversold': 0.90,
@@ -264,7 +391,16 @@ export class SignalCorrelationDetector {
         'adx': 0.50,
         'PSAR': 0.65,
         'psar': 0.65,
-        'maribbon': 0.55
+        'maribbon': 0.55,
+        // Cross-category correlations with momentum indicators
+        'stochastic': 0.20,
+        'Stochastic': 0.20,
+        'RSI': 0.20,
+        'rsi': 0.20,
+        'CCI': 0.20,
+        'cci': 0.20,
+        'williamsr': 0.20,
+        'williams_r': 0.20
       },
       'Ichimoku': {
         'ichimoku': 0.90,
@@ -282,7 +418,16 @@ export class SignalCorrelationDetector {
         'psar': 0.45,
         'macd': 0.50,
         'macd_cross': 0.50,
-        'maribbon': 0.50
+        'maribbon': 0.50,
+        // Cross-category correlations with momentum indicators
+        'stochastic': 0.20,
+        'Stochastic': 0.20,
+        'RSI': 0.20,
+        'rsi': 0.20,
+        'CCI': 0.20,
+        'cci': 0.20,
+        'williamsr': 0.20,
+        'williams_r': 0.20
       },
       'ADX': {
         'adx': 0.90,
@@ -300,7 +445,16 @@ export class SignalCorrelationDetector {
         'psar': 0.50,
         'macd': 0.40,
         'macd_cross': 0.40,
-        'maribbon': 0.40
+        'maribbon': 0.40,
+        // Cross-category correlations with momentum indicators
+        'stochastic': 0.20,
+        'Stochastic': 0.20,
+        'RSI': 0.20,
+        'rsi': 0.20,
+        'CCI': 0.20,
+        'cci': 0.20,
+        'williamsr': 0.20,
+        'williams_r': 0.20
       },
       'PSAR': {
         'psar': 0.90,
@@ -318,7 +472,16 @@ export class SignalCorrelationDetector {
         'wma': 0.40,
         'macd': 0.50,
         'macd_cross': 0.50,
-        'maribbon': 0.35
+        'maribbon': 0.35,
+        // Cross-category correlations with momentum indicators
+        'stochastic': 0.20,
+        'Stochastic': 0.20,
+        'RSI': 0.20,
+        'rsi': 0.20,
+        'CCI': 0.20,
+        'cci': 0.20,
+        'williamsr': 0.20,
+        'williams_r': 0.20
       },
       'ema_cross': {
         'macd_cross': 0.75,
@@ -344,7 +507,9 @@ export class SignalCorrelationDetector {
         'ma200': 0.75,
         'sma_cross': 0.80,
         'macd_cross': 0.65,
-        'psar': 0.60
+        'psar': 0.60,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
       'dema': {
         'ema': 0.85,
@@ -360,14 +525,19 @@ export class SignalCorrelationDetector {
         'ema': 0.75,
         'dema': 0.70,
         'psar': 0.65,
-        'macd_cross': 0.55
+        'macd_cross': 0.55,
+        'stochastic': 0.20,
+        'Stochastic': 0.20,
+        // Updated: 2025-01-27 - Added stochastic correlation
       },
       'psar': {
         'ma200': 0.65,
         'ema': 0.60,
         'dema': 0.55,
         'trend_line_break': 0.70,
-        'macd_cross': 0.50
+        'macd_cross': 0.50,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
 
       // Additional trend indicator correlations - filling gaps
@@ -380,7 +550,9 @@ export class SignalCorrelationDetector {
         'hma': 0.45,
         'wma': 0.45,
         'macd_cross': 0.40,
-        'psar': 0.50
+        'psar': 0.50,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
       'ichimoku': {
         'ema': 0.65,
@@ -391,7 +563,9 @@ export class SignalCorrelationDetector {
         'hma': 0.55,
         'wma': 0.55,
         'macd_cross': 0.50,
-        'psar': 0.45
+        'psar': 0.45,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
       'tema': {
         'ema': 0.80,
@@ -402,7 +576,9 @@ export class SignalCorrelationDetector {
         'hma': 0.70,
         'wma': 0.70,
         'macd_cross': 0.50,
-        'psar': 0.40
+        'psar': 0.40,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
       'dema': {
         'ema': 0.85,
@@ -413,7 +589,9 @@ export class SignalCorrelationDetector {
         'hma': 0.75,
         'wma': 0.75,
         'macd_cross': 0.55,
-        'psar': 0.45
+        'psar': 0.45,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
       'hma': {
         'ema': 0.75,
@@ -424,7 +602,9 @@ export class SignalCorrelationDetector {
         'dema': 0.75,
         'wma': 0.80,
         'macd_cross': 0.50,
-        'psar': 0.40
+        'psar': 0.40,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
       'wma': {
         'ema': 0.80,
@@ -435,7 +615,9 @@ export class SignalCorrelationDetector {
         'dema': 0.75,
         'hma': 0.80,
         'macd_cross': 0.50,
-        'psar': 0.40
+        'psar': 0.40,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
       'maribbon': {
         'ema': 0.60,
@@ -447,7 +629,9 @@ export class SignalCorrelationDetector {
         'hma': 0.65,
         'wma': 0.65,
         'macd_cross': 0.45,
-        'psar': 0.35
+        'psar': 0.35,
+        'stochastic': 0.20,
+        'Stochastic': 0.20
       },
 
       // Generic volume signal correlations
@@ -531,8 +715,9 @@ export class SignalCorrelationDetector {
       },
 
       // Cross-category correlations (should be low/no correlation)
-      // Volume ↔ Momentum (low correlation)
+      // Volume ↔ Momentum (low correlation) - MERGED with Volume ↔ Trend
       'volume_spike': {
+        // Momentum correlations
         'rsi_oversold': 0.20,
         'rsi_overbought': 0.20,
         'stochastic_oversold': 0.20,
@@ -548,47 +733,8 @@ export class SignalCorrelationDetector {
         'cmo_positive': 0.20,
         'cmo_negative': 0.20,
         'mfi_oversold': 0.30,
-        'mfi_overbought': 0.30
-      },
-      'volume_breakout': {
-        'rsi_oversold': 0.20,
-        'rsi_overbought': 0.20,
-        'stochastic_oversold': 0.20,
-        'stochastic_overbought': 0.20,
-        'williams_r': 0.20,
-        'williamsr': 0.20,
-        'cci_oversold': 0.20,
-        'cci_overbought': 0.20,
-        'roc_positive': 0.20,
-        'roc_negative': 0.20,
-        'awesomeoscillator_positive': 0.20,
-        'awesomeoscillator_negative': 0.20,
-        'cmo_positive': 0.20,
-        'cmo_negative': 0.20,
-        'mfi_oversold': 0.30,
-        'mfi_overbought': 0.30
-      },
-      'volume_profile': {
-        'rsi_oversold': 0.20,
-        'rsi_overbought': 0.20,
-        'stochastic_oversold': 0.20,
-        'stochastic_overbought': 0.20,
-        'williams_r': 0.20,
-        'williamsr': 0.20,
-        'cci_oversold': 0.20,
-        'cci_overbought': 0.20,
-        'roc_positive': 0.20,
-        'roc_negative': 0.20,
-        'awesomeoscillator_positive': 0.20,
-        'awesomeoscillator_negative': 0.20,
-        'cmo_positive': 0.20,
-        'cmo_negative': 0.20,
-        'mfi_oversold': 0.30,
-        'mfi_overbought': 0.30
-      },
-
-      // Volume ↔ Trend (low correlation)
-      'volume_spike': {
+        'mfi_overbought': 0.30,
+        // Trend correlations
         'ema': 0.20,
         'EMA': 0.20,
         'ma200': 0.20,
@@ -609,6 +755,24 @@ export class SignalCorrelationDetector {
         'maribbon': 0.20
       },
       'volume_breakout': {
+        // Momentum correlations
+        'rsi_oversold': 0.20,
+        'rsi_overbought': 0.20,
+        'stochastic_oversold': 0.20,
+        'stochastic_overbought': 0.20,
+        'williams_r': 0.20,
+        'williamsr': 0.20,
+        'cci_oversold': 0.20,
+        'cci_overbought': 0.20,
+        'roc_positive': 0.20,
+        'roc_negative': 0.20,
+        'awesomeoscillator_positive': 0.20,
+        'awesomeoscillator_negative': 0.20,
+        'cmo_positive': 0.20,
+        'cmo_negative': 0.20,
+        'mfi_oversold': 0.30,
+        'mfi_overbought': 0.30,
+        // Trend correlations
         'ema': 0.20,
         'EMA': 0.20,
         'ma200': 0.20,
@@ -629,6 +793,24 @@ export class SignalCorrelationDetector {
         'maribbon': 0.20
       },
       'volume_profile': {
+        // Momentum correlations
+        'rsi_oversold': 0.20,
+        'rsi_overbought': 0.20,
+        'stochastic_oversold': 0.20,
+        'stochastic_overbought': 0.20,
+        'williams_r': 0.20,
+        'williamsr': 0.20,
+        'cci_oversold': 0.20,
+        'cci_overbought': 0.20,
+        'roc_positive': 0.20,
+        'roc_negative': 0.20,
+        'awesomeoscillator_positive': 0.20,
+        'awesomeoscillator_negative': 0.20,
+        'cmo_positive': 0.20,
+        'cmo_negative': 0.20,
+        'mfi_oversold': 0.30,
+        'mfi_overbought': 0.30,
+        // Trend correlations
         'ema': 0.20,
         'EMA': 0.20,
         'ma200': 0.20,
@@ -649,8 +831,9 @@ export class SignalCorrelationDetector {
         'maribbon': 0.20
       },
 
-      // Volatility ↔ Momentum (low correlation)
+      // Volatility ↔ Momentum/Volume/Trend (low correlation) - MERGED
       'volatility_breakout': {
+        // Momentum correlations
         'rsi_oversold': 0.20,
         'rsi_overbought': 0.20,
         'stochastic_oversold': 0.20,
@@ -666,11 +849,41 @@ export class SignalCorrelationDetector {
         'cmo_positive': 0.20,
         'cmo_negative': 0.20,
         'mfi_oversold': 0.20,
-        'mfi_overbought': 0.20
-      },
-
-      // Volatility ↔ Volume (low correlation) - merged with above
-      'volatility_breakout': {
+        'mfi_overbought': 0.20,
+        // Volume correlations
+        'volume_spike': 0.20,
+        'volume_breakout': 0.20,
+        'volume_profile': 0.20,
+        'obv_increasing': 0.20,
+        'obv_decreasing': 0.20,
+        'obv_divergence': 0.20,
+        'cmf_positive': 0.20,
+        'cmf_negative': 0.20,
+        'cmf_divergence': 0.20,
+        'adline_increasing': 0.20,
+        'adline_decreasing': 0.20,
+        'adline_divergence': 0.20,
+        // Trend correlations
+        'ema': 0.20,
+        'EMA': 0.20,
+        'ma200': 0.20,
+        'MA200': 0.20,
+        'macd': 0.20,
+        'MACD': 0.20,
+        'macd_cross': 0.20,
+        'tema': 0.20,
+        'dema': 0.20,
+        'hma': 0.20,
+        'wma': 0.20,
+        'WMA': 0.20,
+        'ichimoku': 0.20,
+        'Ichimoku': 0.20,
+        'adx': 0.20,
+        'ADX': 0.20,
+        'psar': 0.20,
+        'PSAR': 0.20,
+        'maribbon': 0.20,
+        // Volatility-specific correlations (high)
         'bollinger_breakout': 0.80,
         'bollinger_squeeze': 0.60,
         'atr_expansion': 0.75,
@@ -694,55 +907,7 @@ export class SignalCorrelationDetector {
         'donchian': 0.60,
         'Donchian': 0.60,
         'ttm_squeeze': 0.60,
-        'TTM_Squeeze': 0.60,
-        // Cross-category correlations
-        'rsi_oversold': 0.20,
-        'rsi_overbought': 0.20,
-        'stochastic_oversold': 0.20,
-        'stochastic_overbought': 0.20,
-        'williams_r': 0.20,
-        'williamsr': 0.20,
-        'cci_oversold': 0.20,
-        'cci_overbought': 0.20,
-        'roc_positive': 0.20,
-        'roc_negative': 0.20,
-        'awesomeoscillator_positive': 0.20,
-        'awesomeoscillator_negative': 0.20,
-        'cmo_positive': 0.20,
-        'cmo_negative': 0.20,
-        'mfi_oversold': 0.20,
-        'mfi_overbought': 0.20,
-        'volume_spike': 0.20,
-        'volume_breakout': 0.20,
-        'volume_profile': 0.20,
-        'obv_increasing': 0.20,
-        'obv_decreasing': 0.20,
-        'obv_divergence': 0.20,
-        'cmf_positive': 0.20,
-        'cmf_negative': 0.20,
-        'cmf_divergence': 0.20,
-        'adline_increasing': 0.20,
-        'adline_decreasing': 0.20,
-        'adline_divergence': 0.20,
-        'ema': 0.20,
-        'EMA': 0.20,
-        'ma200': 0.20,
-        'MA200': 0.20,
-        'macd': 0.20,
-        'MACD': 0.20,
-        'macd_cross': 0.20,
-        'tema': 0.20,
-        'dema': 0.20,
-        'hma': 0.20,
-        'wma': 0.20,
-        'WMA': 0.20,
-        'ichimoku': 0.20,
-        'Ichimoku': 0.20,
-        'adx': 0.20,
-        'ADX': 0.20,
-        'psar': 0.20,
-        'PSAR': 0.20,
-        'maribbon': 0.20
+        'TTM_Squeeze': 0.60
       },
 
       // Trend ↔ Volatility (low correlation)
@@ -982,38 +1147,161 @@ export class SignalCorrelationDetector {
         'ttm_squeeze': -0.85
       },
 
-      // Pattern signals - low correlation with technical indicators
-      'head_shoulders': {
-        'double_top': 0.40,
-        'double_bottom': -0.30,
-        'triangle': 0.20
-      },
-      'double_top': {
-        'head_shoulders': 0.40,
-        'double_bottom': -0.50,
-        'triangle': 0.25
-      },
-      'double_bottom': {
-        'head_shoulders': -0.30,
-        'double_top': -0.50,
-        'triangle': 0.20
+      // Support/Resistance correlations - HIGH PRIORITY
+      'supportresistance': {
+        'fibonacci': 0.75,          // High: both identify price levels
+        'pivot': 0.80,              // High: pivot points are S/R levels
+        'ema': 0.50,                // Moderate: EMA can act as dynamic S/R
+        'EMA': 0.50,
+        'ma200': 0.55,              // Moderate: MA200 often acts as S/R
+        'MA200': 0.55,
+        'macd': 0.45,               // Moderate: MACD relates to trend/S/R
+        'MACD': 0.45,
+        'macd_cross': 0.45,         // Moderate: MACD cross relates to trend/S/R
+        'trend_line_break': 0.70,   // High: trend lines are S/R
+        'rsi': 0.25,                // Low: different categories
+        'RSI': 0.25,
+        'stochastic': 0.25,         // Low: different categories
+        'Stochastic': 0.25,
+        'williamsr': 0.25,
+        'williams_r': 0.25,
+        'volume': 0.30,             // Low: volume confirms S/R but different
+        'Volume': 0.30,
+        'bollinger': 0.35,          // Low: bands can act as S/R but different
+        'Bollinger': 0.35,
+        'atr': 0.30,
+        'ATR': 0.30
       },
 
-      // Candlestick patterns - low correlation with technical indicators
+      // Fibonacci correlations - HIGH PRIORITY
+      'fibonacci': {
+        'supportresistance': 0.75,  // High: both identify price levels
+        'pivot': 0.70,              // Moderate-High: Fibonacci pivots exist
+        'ema': 0.50,                // Moderate: retracements relate to trend
+        'EMA': 0.50,
+        'ma200': 0.55,              // Moderate: retracements relate to trend
+        'MA200': 0.55,
+        'macd': 0.45,               // Moderate: relates to trend
+        'MACD': 0.45,
+        'macd_cross': 0.45,        // Moderate: relates to trend
+        'trend_line_break': 0.65,   // Moderate-High: retracements relate to trend
+        'rsi': 0.25,                // Low: different categories
+        'RSI': 0.25,
+        'stochastic': 0.25,        // Low: different categories
+        'Stochastic': 0.25,
+        'williamsr': 0.25,
+        'williams_r': 0.25,
+        'volume': 0.30,             // Low: different categories
+        'Volume': 0.30,
+        'bollinger': 0.30,         // Low: different categories
+        'Bollinger': 0.30,
+        'atr': 0.30,
+        'ATR': 0.30
+      },
+
+      // Pivot point correlations - HIGH PRIORITY
+      'pivot': {
+        'supportresistance': 0.80,  // High: pivot points ARE S/R levels
+        'fibonacci': 0.70,          // Moderate-High: Fibonacci pivots exist
+        'ema': 0.50,                // Moderate: relates to trend
+        'EMA': 0.50,
+        'ma200': 0.55,              // Moderate: relates to trend
+        'MA200': 0.55,
+        'macd': 0.45,               // Moderate: relates to trend
+        'MACD': 0.45,
+        'macd_cross': 0.45,        // Moderate: relates to trend
+        'trend_line_break': 0.65,   // Moderate-High: relates to trend
+        'rsi': 0.25,                // Low: different categories
+        'RSI': 0.25,
+        'stochastic': 0.25,         // Low: different categories
+        'Stochastic': 0.25,
+        'williamsr': 0.25,
+        'williams_r': 0.25,
+        'volume': 0.30,             // Low: different categories
+        'Volume': 0.30,
+        'bollinger': 0.30,          // Low: different categories
+        'Bollinger': 0.30,
+        'atr': 0.30,
+        'ATR': 0.30
+      },
+
+      // Pattern signals - enhanced correlations
+      'head_shoulders': {
+        'double_top': 0.40,         // Low: similar patterns
+        'double_bottom': -0.30,     // Negative: opposite pattern
+        'triangle': 0.20,          // Low: different pattern type
+        'macd': 0.50,               // Moderate: relates to trend reversal
+        'MACD': 0.50,
+        'macd_cross': 0.50,        // Moderate: relates to trend reversal
+        'ema': 0.45,                // Moderate: relates to trend
+        'EMA': 0.45,
+        'supportresistance': 0.60,  // Moderate-High: patterns form at S/R
+        'fibonacci': 0.55,          // Moderate: patterns form at Fib levels
+        'pivot': 0.50               // Moderate: patterns form at pivots
+      },
+      'double_top': {
+        'head_shoulders': 0.40,    // Low: similar patterns
+        'double_bottom': -0.50,     // Negative: opposite pattern
+        'triangle': 0.25,          // Low: different pattern type
+        'macd': 0.50,              // Moderate: relates to trend reversal
+        'MACD': 0.50,
+        'macd_cross': 0.50,        // Moderate: relates to trend reversal
+        'ema': 0.45,                // Moderate: relates to trend
+        'EMA': 0.45,
+        'supportresistance': 0.60,  // Moderate-High: patterns form at S/R
+        'fibonacci': 0.55,          // Moderate: patterns form at Fib levels
+        'pivot': 0.50               // Moderate: patterns form at pivots
+      },
+      'double_bottom': {
+        'head_shoulders': -0.30,   // Negative: opposite pattern
+        'double_top': -0.50,       // Negative: opposite pattern
+        'triangle': 0.20,          // Low: different pattern type
+        'macd': 0.50,              // Moderate: relates to trend reversal
+        'MACD': 0.50,
+        'macd_cross': 0.50,        // Moderate: relates to trend reversal
+        'ema': 0.45,                // Moderate: relates to trend
+        'EMA': 0.45,
+        'supportresistance': 0.60,  // Moderate-High: patterns form at S/R
+        'fibonacci': 0.55,          // Moderate: patterns form at Fib levels
+        'pivot': 0.50               // Moderate: patterns form at pivots
+      },
+
+      // Candlestick patterns - enhanced correlations
       'doji': {
-        'hammer': 0.30,
-        'shooting_star': 0.25,
-        'engulfing': 0.35
+        'hammer': 0.30,             // Low: both are reversal patterns
+        'shooting_star': 0.25,       // Low: both are reversal patterns
+        'engulfing': 0.35,          // Low: both are reversal patterns
+        'supportresistance': 0.50,  // Moderate: patterns form at S/R
+        'fibonacci': 0.45,          // Moderate: patterns form at Fib levels
+        'pivot': 0.40               // Low: patterns form at pivots
       },
       'hammer': {
-        'doji': 0.30,
-        'shooting_star': -0.40,
-        'engulfing': 0.50
+        'doji': 0.30,               // Low: both are reversal patterns
+        'shooting_star': -0.40,      // Negative: opposite pattern
+        'engulfing': 0.50,          // Moderate: both are bullish reversal patterns
+        'rsi_oversold': 0.50,        // Moderate: reversal at oversold
+        'stochastic_oversold': 0.45, // Moderate: reversal at oversold
+        'supportresistance': 0.60,   // Moderate-High: patterns form at S/R
+        'fibonacci': 0.55,           // Moderate: patterns form at Fib levels
+        'pivot': 0.50                // Moderate: patterns form at pivots
       },
       'shooting_star': {
-        'doji': 0.25,
-        'hammer': -0.40,
-        'engulfing': 0.45
+        'doji': 0.25,                // Low: both are reversal patterns
+        'hammer': -0.40,              // Negative: opposite pattern
+        'engulfing': 0.45,           // Moderate: both are bearish reversal patterns
+        'rsi_overbought': 0.50,      // Moderate: reversal at overbought
+        'stochastic_overbought': 0.45, // Moderate: reversal at overbought
+        'supportresistance': 0.60,    // Moderate-High: patterns form at S/R
+        'fibonacci': 0.55,            // Moderate: patterns form at Fib levels
+        'pivot': 0.50                 // Moderate: patterns form at pivots
+      },
+      'engulfing': {
+        'doji': 0.35,                // Low: both are reversal patterns
+        'hammer': 0.50,               // Moderate: both are bullish reversal patterns
+        'shooting_star': 0.45,       // Moderate: both are bearish reversal patterns
+        'supportresistance': 0.60,    // Moderate-High: patterns form at S/R
+        'fibonacci': 0.55,            // Moderate: patterns form at Fib levels
+        'pivot': 0.50                 // Moderate: patterns form at pivots
       },
 
       // Additional signal type mappings for actual generated signals
@@ -1919,8 +2207,29 @@ export class SignalCorrelationDetector {
       return this.correlationMatrix[type2][type1];
     }
     
-    // Log missing correlation for debugging - NO FALLBACKS as requested
-    console.error(`❌ [CORRELATION_DETECTOR] Missing correlation mapping: ${type1} ↔ ${type2}`);
+    // Silent return for low-correlation pairs (trend ↔ momentum should return 0.20 but might not be explicitly defined)
+    // Only log error for pairs that should have explicit correlations
+    const shouldHaveCorrelation = (
+      (type1.includes('stochastic') || type2.includes('stochastic')) &&
+      (type1.match(/^(ma200|ichimoku|adx|psar|maribbon|ema|tema|dema|hma|wma)$/) ||
+       type2.match(/^(ma200|ichimoku|adx|psar|maribbon|ema|tema|dema|hma|wma)$/))
+    );
+    
+    if (shouldHaveCorrelation) {
+      console.error(`❌ [CORRELATION_DETECTOR] Missing correlation mapping: ${type1} ↔ ${type2}`, {
+        type1,
+        type2,
+        originalType1: signalType1,
+        originalType2: signalType2,
+        hasType1: !!this.correlationMatrix[type1],
+        hasType2: !!this.correlationMatrix[type2],
+        type1Keys: this.correlationMatrix[type1] ? Object.keys(this.correlationMatrix[type1]).slice(0, 10) : [],
+        type2Keys: this.correlationMatrix[type2] ? Object.keys(this.correlationMatrix[type2]).slice(0, 10) : [],
+        matrixVersion: '2.1.0',
+        timestamp: new Date().toISOString(),
+        hint: 'Hard refresh browser (Cmd+Shift+R) if correlations were recently added'
+      });
+    }
     
     return 0; // No correlation found
   }
@@ -1932,6 +2241,15 @@ export class SignalCorrelationDetector {
    */
   detectCorrelations(signals) {
     const correlations = [];
+    const allCheckedPairs = []; // Track all pairs checked for logging
+    
+    // Create a unique key for this signal combination for logging purposes
+    const signalTypes = signals
+      .map(s => s.type)
+      .filter(Boolean)
+      .sort()
+      .join('+');
+    const combinationKey = signalTypes;
     
     for (let i = 0; i < signals.length; i++) {
       for (let j = i + 1; j < signals.length; j++) {
@@ -1943,6 +2261,14 @@ export class SignalCorrelationDetector {
         }
         
         const correlation = this.calculateCorrelation(signal1.type, signal2.type);
+        
+        // Track all pairs for logging (even if below threshold)
+        allCheckedPairs.push({
+          signal1: signal1.type,
+          signal2: signal2.type,
+          correlation: correlation,
+          aboveThreshold: Math.abs(correlation) >= this.correlationThreshold
+        });
         
         if (Math.abs(correlation) >= this.correlationThreshold) {
           const correlationPair = {
@@ -1956,7 +2282,29 @@ export class SignalCorrelationDetector {
       }
     }
     
+    // Log correlations once per unique signal combination
+    this.logCorrelations(allCheckedPairs, correlations, combinationKey);
+    
     return correlations;
+  }
+
+  /**
+   * Log correlations once per unique signal combination
+   * @param {Array} allPairs - All signal pairs checked
+   * @param {Array} significantPairs - Pairs above threshold
+   * @param {string} combinationKey - Unique key for this signal combination
+   */
+  logCorrelations(allPairs, significantPairs, combinationKey) {
+    // Skip if we've already logged this combination
+    if (this.loggedCombinations.has(combinationKey)) {
+      return;
+    }
+    
+    // Mark this combination as logged
+    this.loggedCombinations.add(combinationKey);
+    this.correlationLogCounter++;
+    
+    // Correlation examples are logged in getCorrelationReport() to avoid duplication
   }
 
   /**
@@ -1984,10 +2332,28 @@ export class SignalCorrelationDetector {
     
     // Use average correlation strength with reduced penalty factor
     const averageCorrelationStrength = totalCorrelationStrength / correlations.length;
-    const penalty = averageCorrelationStrength * 0.15; // Reduced from 30% to 15%
+    const penalty = averageCorrelationStrength * 0.10; // Reduced to 10% to balance correlation detection with strategy count
 
     // Cap penalty at 25% to avoid completely nullifying signals
-    return Math.min(0.25, penalty);
+    const finalPenalty = Math.min(0.25, penalty);
+    
+    // Log penalty calculation once per unique signal combination
+    if (signals && signals.length > 0) {
+      const signalTypes = signals
+        .map(s => s.type)
+        .filter(Boolean)
+        .sort()
+        .join('+');
+      const combinationKey = signalTypes;
+      
+      // Only log if penalty > 0 and we haven't logged this combination yet
+      if (finalPenalty > 0 && !this.loggedCombinations.has(`penalty_${combinationKey}`)) {
+        this.loggedCombinations.add(`penalty_${combinationKey}`);
+        //console.log(`[CORRELATION_PENALTY] [${combinationKey}] ${correlations.length} correlation(s) found. Average: ${averageCorrelationStrength.toFixed(3)}, Penalty: ${(finalPenalty * 100).toFixed(2)}%`);
+      }
+    }
+    
+    return finalPenalty;
   }
 
   /**
@@ -2002,17 +2368,41 @@ export class SignalCorrelationDetector {
 
     const correlations = this.detectCorrelations(signals);
     let totalBonus = 0;
+    const complementaryPairs = [];
     
     for (const correlation of correlations) {
       // Negative correlation indicates complementary signals
       if (correlation.correlation < -0.5) {
         const bonus = Math.abs(correlation.correlation) * 0.2; // 20% bonus for complementary signals
         totalBonus += bonus;
+        complementaryPairs.push({
+          pair: `${correlation.signal1} ↔ ${correlation.signal2}`,
+          correlation: correlation.correlation,
+          bonus: bonus
+        });
       }
     }
 
     // Cap bonus at 30% to avoid over-inflating strength
-    return Math.min(0.3, totalBonus);
+    const finalBonus = Math.min(0.3, totalBonus);
+    
+    // Log bonus calculation once per unique signal combination
+    if (signals && signals.length > 0 && finalBonus > 0) {
+      const signalTypes = signals
+        .map(s => s.type)
+        .filter(Boolean)
+        .sort()
+        .join('+');
+      const combinationKey = signalTypes;
+      
+      // Only log if we haven't logged this combination yet
+      if (!this.loggedCombinations.has(`bonus_${combinationKey}`)) {
+        this.loggedCombinations.add(`bonus_${combinationKey}`);
+        //console.log(`[CORRELATION_BONUS] [${combinationKey}] ${complementaryPairs.length} complementary pair(s): ${complementaryPairs.map(p => `${p.pair} (${p.correlation.toFixed(3)})`).join(', ')}. Total bonus: ${(finalBonus * 100).toFixed(2)}%`);
+      }
+    }
+    
+    return finalBonus;
   }
 
   /**
@@ -2043,10 +2433,10 @@ export class SignalCorrelationDetector {
   /**
    * Filter signals to remove highly correlated ones
    * @param {Array} signals - Array of signal objects
-   * @param {number} maxCorrelation - Maximum allowed correlation (default: 0.8)
+   * @param {number} maxCorrelation - Maximum allowed correlation (default: 0.70, matches correlationThreshold)
    * @returns {Array} Filtered signals array
    */
-  filterCorrelatedSignals(signals, maxCorrelation = 0.8) {
+  filterCorrelatedSignals(signals, maxCorrelation = 0.70) {
     if (!signals || signals.length <= 1) {
       return signals;
     }
@@ -2085,15 +2475,53 @@ export class SignalCorrelationDetector {
   /**
    * Get correlation report for a signal combination
    * @param {Array} signals - Array of signal objects
+   * @param {string} context - Context identifier ('BACKTEST' or 'SCANNER')
    * @returns {Object} Correlation report
    */
-  getCorrelationReport(signals) {
+  getCorrelationReport(signals, context = 'UNKNOWN') {
     const correlations = this.detectCorrelations(signals);
     const penalty = this.calculateCorrelationPenalty(signals);
     const bonus = this.calculateCorrelationBonus(signals);
     const diversityScore = this.getDiversityScore(signals);
     
-    // DEBUG: Removed to prevent log flooding
+    // Log correlation examples with very conservative sampling - only ONE example of each type per session
+    const hasSignals = signals && signals.length > 0;
+    
+    if (hasSignals && correlations.length > 0) {
+      const contextKey = context === 'BACKTEST' ? 'backtest' : 'scanner';
+      const examples = this.correlationExamplesByContext[contextKey];
+      
+      const signalNames = signals.map(s => (s.type || s.name || 'unknown')).filter(Boolean).join(', ');
+      const positiveCorrelations = correlations.filter(c => c.correlation > 0);
+      const negativeCorrelations = correlations.filter(c => c.correlation < 0);
+      
+      // Log only ONE positive correlation example per session
+      if (positiveCorrelations.length > 0 && examples.positive.length === 0) {
+        const example = positiveCorrelations[0];
+        //console.log(`[CORRELATION_EXAMPLE] [${context}] Positive correlation: ${example.signal1} ↔ ${example.signal2} = ${example.correlation.toFixed(3)} (Signals: ${signalNames})`);
+        examples.positive.push({ example, signalNames });
+      }
+      
+      // Log only ONE negative correlation example per session
+      if (negativeCorrelations.length > 0 && examples.negative.length === 0) {
+        const example = negativeCorrelations[0];
+        const bonusInfo = bonus > 0 ? ` (Bonus: ${(bonus * 100).toFixed(1)}%)` : ' (No bonus - correlation not strong enough)';
+        //console.log(`[CORRELATION_EXAMPLE] [${context}] Negative correlation: ${example.signal1} ↔ ${example.signal2} = ${example.correlation.toFixed(3)}${bonusInfo} (Signals: ${signalNames})`);
+        examples.negative.push({ example, signalNames });
+      }
+      
+      // Log only ONE penalty example per session
+      if (penalty > 0 && examples.penalty.length === 0) {
+        //console.log(`[CORRELATION_EXAMPLE] [${context}] Penalty: ${(penalty * 100).toFixed(1)}% (from ${positiveCorrelations.length} positive correlation(s)) - Signals: ${signalNames}`);
+        examples.penalty.push({ penalty, signalNames });
+      }
+      
+      // Log only ONE bonus example per session
+      if (bonus > 0 && examples.bonus.length === 0) {
+        //console.log(`[CORRELATION_EXAMPLE] [${context}] Bonus: ${(bonus * 100).toFixed(1)}% (from ${negativeCorrelations.length} negative/complementary correlation(s)) - Signals: ${signalNames}`);
+        examples.bonus.push({ bonus, signalNames });
+      }
+    }
     
     return {
       correlations,
@@ -2113,7 +2541,7 @@ export class SignalCorrelationDetector {
    * This function tests every possible signal combination and reports results
    */
   testAllCorrelations() {
-    console.log('🧪 [CORRELATION_TEST] Starting comprehensive correlation test...');
+    //console.log('🧪 [CORRELATION_TEST] Starting comprehensive correlation test...');
     
     const allSignalTypes = this.getAllSignalTypes();
     const testResults = {
@@ -2129,7 +2557,7 @@ export class SignalCorrelationDetector {
       }
     };
 
-    console.log(`📊 [CORRELATION_TEST] Testing ${allSignalTypes.length} signal types...`);
+    //console.log(`📊 [CORRELATION_TEST] Testing ${allSignalTypes.length} signal types...`);
     
     // Test every possible combination
     for (let i = 0; i < allSignalTypes.length; i++) {
@@ -2158,36 +2586,36 @@ export class SignalCorrelationDetector {
             testResults.correlationStats.negativeCorrelations++;
           }
           
-          console.log(`✅ [CORRELATION_TEST] ${signal1} ↔ ${signal2}: ${correlation.toFixed(3)}`);
+          //console.log(`✅ [CORRELATION_TEST] ${signal1} ↔ ${signal2}: ${correlation.toFixed(3)}`);
         } else {
           testResults.failedTests++;
           testResults.missingCorrelations.push(`${signal1} ↔ ${signal2}`);
-          console.log(`❌ [CORRELATION_TEST] ${signal1} ↔ ${signal2}: NO CORRELATION`);
+          //console.log(`❌ [CORRELATION_TEST] ${signal1} ↔ ${signal2}: NO CORRELATION`);
         }
       }
     }
 
     // Print comprehensive test results
-    console.log('\n📈 [CORRELATION_TEST] === TEST RESULTS SUMMARY ===');
-    console.log(`Total Tests: ${testResults.totalTests}`);
-    console.log(`Successful Tests: ${testResults.successfulTests} (${((testResults.successfulTests / testResults.totalTests) * 100).toFixed(1)}%)`);
-    console.log(`Failed Tests: ${testResults.failedTests} (${((testResults.failedTests / testResults.totalTests) * 100).toFixed(1)}%)`);
+    //console.log('\n📈 [CORRELATION_TEST] === TEST RESULTS SUMMARY ===');
+    //console.log(`Total Tests: ${testResults.totalTests}`);
+    //console.log(`Successful Tests: ${testResults.successfulTests} (${((testResults.successfulTests / testResults.totalTests) * 100).toFixed(1)}%)`);
+    //console.log(`Failed Tests: ${testResults.failedTests} (${((testResults.failedTests / testResults.totalTests) * 100).toFixed(1)}%)`);
     
-    console.log('\n📊 [CORRELATION_TEST] === CORRELATION STATISTICS ===');
-    console.log(`High Correlations (≥0.8): ${testResults.correlationStats.highCorrelations}`);
-    console.log(`Moderate Correlations (0.5-0.8): ${testResults.correlationStats.moderateCorrelations}`);
-    console.log(`Low Correlations (<0.5): ${testResults.correlationStats.lowCorrelations}`);
-    console.log(`Negative Correlations: ${testResults.correlationStats.negativeCorrelations}`);
+    //console.log('\n📊 [CORRELATION_TEST] === CORRELATION STATISTICS ===');
+    //console.log(`High Correlations (≥0.8): ${testResults.correlationStats.highCorrelations}`);
+    //console.log(`Moderate Correlations (0.5-0.8): ${testResults.correlationStats.moderateCorrelations}`);
+    //console.log(`Low Correlations (<0.5): ${testResults.correlationStats.lowCorrelations}`);
+    //console.log(`Negative Correlations: ${testResults.correlationStats.negativeCorrelations}`);
 
     if (testResults.missingCorrelations.length > 0) {
-      console.log('\n❌ [CORRELATION_TEST] === MISSING CORRELATIONS ===');
+      //console.log('\n❌ [CORRELATION_TEST] === MISSING CORRELATIONS ===');
       testResults.missingCorrelations.forEach(missing => {
         console.log(`Missing: ${missing}`);
       });
     }
 
     // Test specific signal combinations
-    console.log('\n🔍 [CORRELATION_TEST] === SPECIFIC COMBINATION TESTS ===');
+    //console.log('\n🔍 [CORRELATION_TEST] === SPECIFIC COMBINATION TESTS ===');
     this.testSpecificCombinations();
 
     return testResults;

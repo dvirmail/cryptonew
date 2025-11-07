@@ -14,14 +14,10 @@ export const SIGNAL_WEIGHTS = {
   'atr': 1.5,
   
   // IMPORTANT SIGNALS (1.2-1.4) - Strong confirmation signals
-  'psar': 1.3,
+  'psar': 1.2,  // Reduced from 1.3 - should be lower than core indicators
   'williamsr': 1.3,
-  'mfi': 1.3,
+  'mfi': 1.2,   // Reduced from 1.3 - volume indicators should be consistent
   'adx': 1.2,
-  'tema': 1.2,
-  'dema': 1.2,
-  'hma': 1.2,
-  'wma': 1.2,
   'cci': 1.2,
   'roc': 1.2,
   'awesomeoscillator': 1.2,
@@ -62,7 +58,7 @@ export const SIGNAL_CATEGORIES = {
   'Trend': {
     icon: 'Activity',
     description: 'Determine the direction and strength of a market trend.',
-    signals: ['macd', 'ema', 'ma200', 'ichimoku', 'maribbon', 'adx', 'psar', 'tema', 'dema', 'hma', 'wma']
+    signals: ['macd', 'ema', 'ma200', 'ichimoku', 'maribbon', 'adx', 'psar']
   },
   'Volatility': {
     icon: 'Zap',
@@ -89,7 +85,7 @@ export const SIGNAL_CATEGORIES = {
 export const defaultSignalSettings = {
   rsi: {
     name: "RSI",
-    enabled: false, // Updated from outline
+    enabled: true, // Enabled by default - core signal
     category: 'momentum',
     pandasTaName: "rsi",
     period: 14,
@@ -101,7 +97,7 @@ export const defaultSignalSettings = {
   },
   stochastic: {
     name: "Stochastic",
-    enabled: false, // Updated from outline
+    enabled: true, // Enabled by default - core signal
     category: 'momentum',
     pandasTaName: "stoch",
     kPeriod: 14,
@@ -184,7 +180,7 @@ export const defaultSignalSettings = {
   },
   macd: {
     name: "MACD",
-    enabled: false, // Updated from outline
+    enabled: true, // Enabled by default - core signal
     category: 'trend', // Kept as 'trend' for consistency with SIGNAL_CATEGORIES
     pandasTaName: 'macd',
     fastPeriod: 12,
@@ -196,7 +192,7 @@ export const defaultSignalSettings = {
   },
   ema: {
     name: "EMA", // Updated name from outline
-    enabled: false, // Updated from outline
+    enabled: true, // Enabled by default - core signal
     category: 'trend',
     pandasTaName: 'ema',
     period: 20, // Updated period and simplified from fast/slowPeriod as per outline
@@ -206,7 +202,7 @@ export const defaultSignalSettings = {
   },
   ma200: {
     name: "MA200", // Updated name from outline
-    enabled: false, // Updated from outline
+    enabled: true, // Enabled by default - core signal
     category: 'trend',
     pandasTaName: 'sma',
     period: 200,
@@ -216,7 +212,7 @@ export const defaultSignalSettings = {
   },
   ichimoku: {
     name: "Ichimoku Cloud",
-    enabled: false, // Updated from outline
+    enabled: true, // Enabled by default - core signal
     category: 'trend',
     pandasTaName: 'ichimoku',
     tenkan: 9,
@@ -256,7 +252,7 @@ export const defaultSignalSettings = {
     afIncrement: 0.02,
     afMax: 0.2,
     priority: 3,
-    weight: 1.3, // Important signal weight
+    weight: 1.2, // Important signal weight (reduced from 1.3 - should be lower than core indicators like ATR)
     isCoreSignal: false,
     adxThreshold: 20,
     volumeMultiplier: 1.5, // New: Multiplier for volume confirmation
@@ -264,7 +260,8 @@ export const defaultSignalSettings = {
   },
   tema: {
     name: "Triple EMA",
-    enabled: true,
+    enabled: false, // Disabled and hidden - redundant with EMA
+    hidden: true,   // Hide from GUI
     category: "trend",
     pandasTaName: "tema",
     period: 21,
@@ -274,7 +271,8 @@ export const defaultSignalSettings = {
   },
   dema: {
     name: "Double EMA",
-    enabled: true,
+    enabled: false, // Disabled and hidden - redundant with EMA
+    hidden: true,   // Hide from GUI
     category: "trend",
     pandasTaName: "dema",
     period: 21,
@@ -284,7 +282,8 @@ export const defaultSignalSettings = {
   },
   hma: {
     name: "Hull MA",
-    enabled: true,
+    enabled: false, // Disabled and hidden - redundant with EMA
+    hidden: true,   // Hide from GUI
     category: "trend",
     pandasTaName: "hma",
     period: 21,
@@ -294,7 +293,8 @@ export const defaultSignalSettings = {
   },
   wma: {
     name: "Weighted MA",
-    enabled: true,
+    enabled: false, // Disabled and hidden - redundant with EMA
+    hidden: true,   // Hide from GUI
     category: "trend",
     pandasTaName: "wma",
     period: 20,
@@ -304,7 +304,7 @@ export const defaultSignalSettings = {
   },
   bollinger: {
     name: "Bollinger Bands",
-    enabled: false, // Updated from outline
+    enabled: true, // Enabled by default - core signal
     category: 'volatility',
     pandasTaName: 'bbands',
     period: 20,
@@ -317,7 +317,7 @@ export const defaultSignalSettings = {
   },
   atr: {
     name: "ATR",
-    enabled: false, // Updated from outline
+    enabled: true, // Enabled by default - core signal (essential for risk management)
     category: 'volatility',
     pandasTaName: 'atr',
     period: 14,
@@ -380,7 +380,7 @@ export const defaultSignalSettings = {
     oversold: 20,
     overbought: 80,
     priority: 2,
-    weight: 1.3, // Important signal weight
+    weight: 1.2, // Important signal weight (reduced from 1.3 for consistency with other volume indicators)
     isCoreSignal: false,
   },
   obv: {

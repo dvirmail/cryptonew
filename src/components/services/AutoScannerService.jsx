@@ -21,8 +21,7 @@ import TradeArchivingService from "./TradeArchivingService";
 import { functions } from '@/api/localClient';
 import { formatPrice, formatUSDT } from '@/components/utils/priceFormatter';
 import { generateTradeId } from "@/components/utils/id";
-// Assuming updatePerformanceSnapshot is a new function similar to others in '@/api/functions'
-import { updatePerformanceSnapshot } from '@/api/functions';
+// NOTE: updatePerformanceSnapshot removed - analytics now pull directly from Trade table
 import { reconcileWalletState, walletReconciliation, purgeGhostPositions } from '@/api/functions';
 
 // Import constants from centralized files
@@ -99,6 +98,13 @@ class AutoScannerService {
 
         this.backtestCache = new Map();
         this.backtestCacheTimestamps = new Map();
+
+        // ✅ RATE LIMIT PREVENTION: Track exchange info loading state
+        this._exchangeInfoLoading = false;
+        this._exchangeInfoLoadPromise = null;
+        this._exchangeInfoRetryInterval = null;
+        this._exchangeInfoLastAttempt = 0;
+        this._exchangeInfoMinInterval = 60000; // Minimum 1 minute between requests
 
         // Instance properties for _fetchFearAndGreedIndex to work within AutoScannerService
         this.lastFearAndGreedFetch = 0;
@@ -242,6 +248,9 @@ class AutoScannerService {
 
         // Attach the open guard after services are instantiated
         this.attachRegimeOpenGuard();
+
+        // Initialize historical performance from existing trades
+        this._initializeHistoricalPerformance();
 
         // DEBUG: Add global console command for testing
         if (typeof window !== 'undefined') {
@@ -810,6 +819,26 @@ class AutoScannerService {
         }
     }
 
+    /**
+     * Initialize historical performance from existing trades
+     * Loads historical regime performance data on startup
+     */
+    async _initializeHistoricalPerformance() {
+        try {
+            // Import the initialization function
+            const { initializeHistoricalPerformanceFromTrades } = await import('@/components/utils/unifiedStrengthCalculator');
+            
+            // Initialize historical performance (non-blocking, don't wait)
+            initializeHistoricalPerformanceFromTrades().catch(error => {
+                console.warn('[AutoScannerService] ⚠️ Failed to initialize historical performance:', error.message);
+                // Don't throw - allow scanner to continue without historical data
+            });
+        } catch (error) {
+            console.warn('[AutoScannerService] ⚠️ Failed to import historical performance initializer:', error.message);
+            // Don't throw - allow scanner to continue
+        }
+    }
+
     _loadStateFromStorage() {
         try {
             if (typeof window === 'undefined') return;
@@ -1347,28 +1376,8 @@ class AutoScannerService {
                 total_trades_count: this._getCurrentWalletState()?.total_trades_count
             });
 
-            // 2. Update HistoricalPerformance snapshots
-            console.log('[AutoScannerService] Calling updatePerformanceSnapshot function...');
-            console.log('[AutoScannerService] Using direct call instead of queueFunctionCall to avoid hanging');
-            const response = await updatePerformanceSnapshot({ mode: this.state.tradingMode });
-            console.log('[AutoScannerService] Direct updatePerformanceSnapshot call completed');
-
-            console.log(`[AutoScannerService] updatePerformanceSnapshot response: success=${response?.success}, error=${response?.error}`);
-
-            if (response?.success) {
-                console.log('[AutoScannerService] ✅ HistoricalPerformance snapshots created successfully');
-                if (response.snapshotsCreated && response.snapshotsCreated.length > 0) {
-                    response.snapshotsCreated.forEach(snap => {
-                        console.log(`[AutoScannerService] Created ${snap.type} snapshot at ${snap.timestamp}`);
-                    });
-                }
-                if (response.currentMetrics) {
-                    console.log(`[AutoScannerService] Current metrics: PnL=${response.currentMetrics.total_realized_pnl?.toFixed(2) || 'N/A'}`);
-                }
-            } else {
-                console.warn('[AutoScannerService] ⚠️ HistoricalPerformance update had issues: ' + (response?.error || 'Unknown error'));
-            }
-
+            // 2. NOTE: HistoricalPerformance snapshots removed - all analytics now pull directly from Trade table
+            
             console.log('[AutoScannerService] Calculating performance momentum...');
             await this.performanceMetricsService.calculatePerformanceMomentum();
 
@@ -1843,6 +1852,17 @@ class AutoScannerService {
             const confidenceText = `${(this.state.marketRegime.confidence * 100).toFixed(1)}%`;
             const confirmationStatus = this.state.marketRegime.isConfirmed ? 'CONFIRMED' : 'DEVELOPING';
             const streakText = `${this.state.marketRegime.consecutivePeriods}/${this.state.marketRegime.confirmationThreshold}`;
+            
+            // Log regime performance (sampled: log every regime update, but only once per unique regime+confidence combination)
+            const regimeKey = `${regimeResult.regime}_${Math.round(resolvedConfidencePct)}`;
+            if (!this._regimePerformanceLogged) {
+              this._regimePerformanceLogged = new Set();
+            }
+            if (!this._regimePerformanceLogged.has(regimeKey)) {
+              this._regimePerformanceLogged.add(regimeKey);
+              const volatilityInfo = `ADX: ${volatilityData.adx.adx?.toFixed(2) || 'N/A'}, BBW: ${volatilityData.bbw?.toFixed(4) || 'N/A'}`;
+              //console.log(`[REGIME_PERFORMANCE] [SCANNER] Regime: ${regimeResult.regime}, Confidence: ${confidenceText}, Status: ${confirmationStatus}, Streak: ${streakText}, ${volatilityInfo}`);
+            }
 
             this.addLog(`[REGIME_CALCULATION] 🎯 ${regimeResult.regime.toUpperCase()} detected with ${confidenceText} confidence`, 'info');
             this.addLog(`[REGIME_CALCULATION] 📊 Status: ${confirmationStatus} (${streakText} consecutive periods)`, 'info');
@@ -1992,8 +2012,42 @@ class AutoScannerService {
     }
 
     async _loadExchangeInfo() {
+        // ✅ RATE LIMIT PREVENTION: Prevent duplicate/concurrent requests
+        if (this._exchangeInfoLoading && this._exchangeInfoLoadPromise) {
+            console.log('[AutoScannerService] [EXCHANGE_INFO] ⏳ Exchange info load already in progress, waiting for existing request...');
+            return await this._exchangeInfoLoadPromise;
+        }
+
+        // ✅ RATE LIMIT PREVENTION: Throttle requests (minimum 1 minute between requests)
+        const now = Date.now();
+        const timeSinceLastAttempt = now - this._exchangeInfoLastAttempt;
+        if (timeSinceLastAttempt < this._exchangeInfoMinInterval && this._exchangeInfoLastAttempt > 0) {
+            const waitTime = this._exchangeInfoMinInterval - timeSinceLastAttempt;
+            const waitSeconds = Math.ceil(waitTime / 1000);
+            console.log(`[AutoScannerService] [EXCHANGE_INFO] ⏳ Throttling request - last attempt was ${Math.round(timeSinceLastAttempt / 1000)}s ago. Waiting ${waitSeconds}s...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+        }
+        this._exchangeInfoLastAttempt = Date.now();
+
+        // ✅ RATE LIMIT PREVENTION: Check cache first (if we have cached data, use it)
+        if (this.state.exchangeInfo && Object.keys(this.state.exchangeInfo).length > 0) {
+            console.log('[AutoScannerService] [EXCHANGE_INFO] ✅ Using cached exchange info');
+            return this.state.exchangeInfo;
+        }
+
+        // Mark as loading and create promise
+        this._exchangeInfoLoading = true;
+        this._exchangeInfoLoadPromise = this._loadExchangeInfoInternal().finally(() => {
+            this._exchangeInfoLoading = false;
+            this._exchangeInfoLoadPromise = null;
+        });
+
+        return await this._exchangeInfoLoadPromise;
+    }
+
+    async _loadExchangeInfoInternal() {
         // Use the robust implementation instead of delegating to LifecycleService
-        console.log('[AutoScannerService] [EXCHANGE_INFO] 📋 _loadExchangeInfo() called');
+        console.log('[AutoScannerService] [EXCHANGE_INFO] 📋 _loadExchangeInfoInternal() called');
         const MAX_RETRIES = 3;
         let attempt = 0;
         let lastError = null;
@@ -2012,49 +2066,253 @@ class AutoScannerService {
                     console.log(`[AutoScannerService] [EXCHANGE_INFO] Using default proxy URL: ${proxyUrl}`);
                 }
 
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 🌐 Calling liveTradingAPI with action: getExchangeInfo, mode: ${this.state.tradingMode}`);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 🌐 Fetching exchange info directly from proxy: ${proxyUrl}/api/binance/exchangeInfo`);
 
-                const requestParams = {
-                    action: 'getExchangeInfo',
-                    tradingMode: this.state.tradingMode,
-                    proxyUrl: proxyUrl
+                // Call proxy endpoint directly to avoid double-wrapping issues
+                const httpResponse = await fetch(`${proxyUrl}/api/binance/exchangeInfo?tradingMode=${this.state.tradingMode}`);
+                
+                if (!httpResponse.ok) {
+                    throw new Error(`HTTP ${httpResponse.status}: ${httpResponse.statusText}`);
+                }
+                
+                const responseData = await httpResponse.json();
+                
+                // ✅ FIX: Log the raw response first to understand the structure
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Raw responseData:`, {
+                    keys: Object.keys(responseData || {}),
+                    hasSuccess: 'success' in (responseData || {}),
+                    hasData: 'data' in (responseData || {}),
+                    hasError: 'error' in (responseData || {}),
+                    successValue: responseData?.success,
+                    dataType: typeof responseData?.data,
+                    dataKeys: responseData?.data ? Object.keys(responseData.data) : 'no data',
+                    sample: JSON.stringify(responseData).substring(0, 200)
+                });
+
+                // ✅ FIX: Handle error responses from proxy
+                if (responseData?.success === false || responseData?.error) {
+                    const errorMsg = responseData?.error || responseData?.message || 'Unknown error from proxy';
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Proxy returned error:`, errorMsg);
+                    throw new Error(`Proxy error: ${errorMsg}`);
+                }
+
+                // ✅ FIX: Check if Binance returned an error (even though proxy says success: true)
+                // Binance errors have structure: {code: -1003, msg: '...'}
+                if (responseData?.data && typeof responseData.data === 'object' && 'code' in responseData.data && 'msg' in responseData.data) {
+                    const binanceCode = responseData.data.code;
+                    const binanceMsg = responseData.data.msg;
+                    
+                    // Rate limit errors (code -1003, -1005, etc.)
+                    if (binanceCode === -1003 || binanceCode === -1005) {
+                        const banUntilMatch = binanceMsg.match(/until (\d+)/);
+                        const banUntil = banUntilMatch ? parseInt(banUntilMatch[1]) : null;
+                        const banUntilDate = banUntil ? new Date(banUntil) : null;
+                        const now = Date.now();
+                        const waitTime = banUntil ? Math.max(0, banUntil - now) : 60000; // Default 1 minute if can't parse
+                        
+                        console.error(`[AutoScannerService] [EXCHANGE_INFO] ⚠️ Binance rate limit error (code ${binanceCode}):`, binanceMsg);
+                        
+                        if (banUntilDate) {
+                            const waitMinutes = Math.ceil(waitTime / 60000);
+                            const waitSeconds = Math.ceil(waitTime / 1000);
+                            
+                            // ✅ FIX: If ban has expired (waitTime <= 0), retry once more
+                            if (waitTime <= 0) {
+                                console.warn(`[AutoScannerService] [EXCHANGE_INFO] ⚠️ Rate limit ban appears to have expired (was until ${banUntilDate.toISOString()}). Retrying...`);
+                                // Continue to next retry attempt (don't throw yet)
+                                throw new Error('Rate limit ban expired, retrying...');
+                            }
+                            
+                            console.error(`[AutoScannerService] [EXCHANGE_INFO] ⏳ IP banned until ${banUntilDate.toISOString()} (${waitMinutes} minutes, ${waitSeconds} seconds)`);
+                            
+                            // ✅ FIX: Create a special error that indicates we should skip retries
+                            const rateLimitError = new Error(`Binance rate limit exceeded. IP banned until ${banUntilDate.toISOString()}. Please wait ${waitMinutes} minutes or use WebSocket Streams.`);
+                            rateLimitError.isRateLimit = true;
+                            rateLimitError.banUntil = banUntil;
+                            rateLimitError.waitTime = waitTime;
+                            throw rateLimitError;
+                        } else {
+                            // Can't parse ban time, wait a bit and retry
+                            console.warn(`[AutoScannerService] [EXCHANGE_INFO] ⚠️ Could not parse ban duration from message. Waiting 1 minute before retry.`);
+                            const rateLimitError = new Error(`Binance rate limit exceeded: ${binanceMsg}`);
+                            rateLimitError.isRateLimit = true;
+                            rateLimitError.waitTime = 60000; // 1 minute default
+                            throw rateLimitError;
+                        }
+                    } else {
+                        // Other Binance errors
+                        console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Binance API error (code ${binanceCode}):`, binanceMsg);
+                        throw new Error(`Binance API error (${binanceCode}): ${binanceMsg}`);
+                    }
+                }
+
+                // Proxy returns: { success: true, data: { timezone: "...", serverTime: ..., symbols: [...] } }
+                // OR: { success: true, data: { ...nested structure... } }
+                const response = {
+                    success: responseData.success,
+                    data: responseData.data
                 };
 
-                // Call liveTradingAPI directly to avoid queue delays
-                const response = await liveTradingAPI(requestParams);
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Processed response:`, {
+                    success: response?.success,
+                    hasData: !!response?.data,
+                    dataType: typeof response?.data,
+                    dataKeys: response?.data ? Object.keys(response.data) : 'no data',
+                    dataKeysDetailed: response?.data ? Object.keys(response.data).map(k => ({
+                        key: k,
+                        type: typeof response.data[k],
+                        isArray: Array.isArray(response.data[k]),
+                        arrayLength: Array.isArray(response.data[k]) ? response.data[k].length : 'N/A'
+                    })) : 'no data',
+                    hasSymbols: Array.isArray(response?.data?.symbols),
+                    symbolsCount: Array.isArray(response?.data?.symbols) ? response.data.symbols.length : 0
+                });
 
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response received:`, response);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response type:`, typeof response);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response success:`, response?.success);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response keys:`, Object.keys(response || {}));
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response.data:`, response?.data);
-                console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Response.data.success:`, response?.data?.success);
-
-                // Handle both response formats:
-                // 1. Direct liveTradingAPI response: {success: true, data: {...}}
-                // 2. queueFunctionCall response: {data: {...}} (no success property)
-                const isSuccess = response?.success === true || (response?.data && !response?.success);
-                
-                if (!isSuccess) {
-                    const errorMsg = response?.message || response?.error || 'Unknown error from liveTradingAPI';
-                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Response not successful:`, { response, errorMsg });
+                // ✅ FIX: Check if response is actually successful
+                if (!responseData?.success && !responseData?.data) {
+                    const errorMsg = responseData?.error || responseData?.message || 'Invalid response structure from proxy';
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Response not successful:`, { responseData, errorMsg });
                     throw new Error(errorMsg);
                 }
 
-                const exchangeInfoData = response.data;
+                // Handle multiple response formats:
+                // 1. Direct proxy response: {success: true, data: {timezone: "...", symbols: [...]}}
+                // 2. Double-wrapped response: {success: true, data: {success: true, data: {symbols: [...]}}}
+                // 3. Error response: {success: false, error: "..."}
+                let exchangeInfoData = response.data;
+                
+                // Check if we have double-wrapping: {success: true, data: {success: true, data: {...}}}
+                if (exchangeInfoData?.data && Array.isArray(exchangeInfoData.data.symbols)) {
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Detected double-wrapped response, unwrapping...`);
+                    exchangeInfoData = exchangeInfoData.data;
+                }
+                
+                // Also check if response.data itself is the exchange info (direct Binance response)
+                // Binance returns: {timezone: "...", serverTime: ..., symbols: [...]}
+                if (Array.isArray(exchangeInfoData?.symbols)) {
+                    // This is the correct structure, proceed
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] ✅ Found symbols array at exchangeInfoData.symbols`);
+                } else if (exchangeInfoData && typeof exchangeInfoData === 'object') {
+                    // ✅ FIX: Log what keys we actually have
+                    const keys = Object.keys(exchangeInfoData);
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔍 Checking nested structure for symbols...`);
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 exchangeInfoData keys (${keys.length}):`, keys);
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 exchangeInfoData values:`, keys.reduce((acc, k) => {
+                        const val = exchangeInfoData[k];
+                        if (Array.isArray(val)) {
+                            acc[k] = `Array(${val.length})`;
+                        } else if (typeof val === 'object' && val !== null) {
+                            acc[k] = `Object(${Object.keys(val).length} keys: ${Object.keys(val).slice(0, 5).join(', ')})`;
+                        } else {
+                            acc[k] = String(val).substring(0, 50);
+                        }
+                        return acc;
+                    }, {}));
+                    
+                    // ✅ FIX: Check if one of the keys contains symbols
+                    for (const key of keys) {
+                        const value = exchangeInfoData[key];
+                        if (Array.isArray(value) && value.length > 0 && value[0]?.symbol) {
+                            console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Found symbols array at exchangeInfoData.${key}`);
+                            // Reconstruct exchangeInfoData with symbols at root
+                            exchangeInfoData = { ...exchangeInfoData, symbols: value };
+                            break;
+                        } else if (typeof value === 'object' && value !== null && Array.isArray(value.symbols)) {
+                            console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Found symbols at exchangeInfoData.${key}.symbols`);
+                            exchangeInfoData = value;
+                            break;
+                        }
+                    }
+                    
+                    // Check if symbols might be at root level of response
+                    if (!Array.isArray(exchangeInfoData?.symbols) && Array.isArray(response.symbols)) {
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Found symbols at response root level`);
+                        exchangeInfoData = response;
+                    }
+                }
 
                 console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info data:`, exchangeInfoData);
                 console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info data.symbols:`, exchangeInfoData?.symbols);
                 console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Is symbols array:`, Array.isArray(exchangeInfoData?.symbols));
                 
                 if (!exchangeInfoData || !Array.isArray(exchangeInfoData.symbols)) {
-                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Invalid exchange info structure:`, {
-                        hasData: !!exchangeInfoData,
-                        hasSymbols: !!exchangeInfoData?.symbols,
-                        symbolsType: typeof exchangeInfoData?.symbols,
-                        symbolsIsArray: Array.isArray(exchangeInfoData?.symbols)
-                    });
-                    throw new Error('Invalid exchange info structure');
+                    // ✅ FIX: Try multiple fallback paths with better logging
+                    let foundSymbols = false;
+                    
+                    // Try response.data.data.symbols (double-wrapped)
+                    if (response?.data?.data?.symbols && Array.isArray(response.data.data.symbols)) {
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Found symbols at response.data.data level`);
+                        exchangeInfoData = response.data.data;
+                        foundSymbols = true;
+                    }
+                    // Try response.symbols (root level)
+                    else if (response?.symbols && Array.isArray(response.symbols)) {
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Found symbols at response root level`);
+                        exchangeInfoData = response;
+                        foundSymbols = true;
+                    }
+                    // Try responseData.data.symbols (direct from raw response)
+                    else if (responseData?.data?.symbols && Array.isArray(responseData.data.symbols)) {
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Found symbols at responseData.data level`);
+                        exchangeInfoData = responseData.data;
+                        foundSymbols = true;
+                    }
+                    // Try responseData.symbols (raw response root)
+                    else if (responseData?.symbols && Array.isArray(responseData.symbols)) {
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Found symbols at responseData root level`);
+                        exchangeInfoData = responseData;
+                        foundSymbols = true;
+                    }
+                    
+                    if (!foundSymbols) {
+                        // ✅ FIX: Enhanced error logging with actual keys and values
+                        const exchangeInfoDataKeys = exchangeInfoData ? Object.keys(exchangeInfoData) : [];
+                        const exchangeInfoDataValues = {};
+                        if (exchangeInfoData) {
+                            exchangeInfoDataKeys.forEach(key => {
+                                const value = exchangeInfoData[key];
+                                if (Array.isArray(value)) {
+                                    exchangeInfoDataValues[key] = `Array(${value.length})`;
+                                } else if (typeof value === 'object' && value !== null) {
+                                    exchangeInfoDataValues[key] = `Object(${Object.keys(value).length} keys)`;
+                    } else {
+                                    exchangeInfoDataValues[key] = String(value).substring(0, 100);
+                                }
+                            });
+                        }
+                        
+                        const diagnosticInfo = {
+                            hasExchangeInfoData: !!exchangeInfoData,
+                            exchangeInfoDataType: typeof exchangeInfoData,
+                            exchangeInfoDataKeys: exchangeInfoDataKeys,
+                            exchangeInfoDataValues: exchangeInfoDataValues,
+                            hasSymbols: !!exchangeInfoData?.symbols,
+                            symbolsType: typeof exchangeInfoData?.symbols,
+                            symbolsIsArray: Array.isArray(exchangeInfoData?.symbols),
+                            responseKeys: Object.keys(response || {}),
+                            responseDataKeys: Object.keys(responseData || {}),
+                            responseHasData: !!response?.data,
+                            responseDataHasData: !!responseData?.data,
+                            responseDataDataKeys: responseData?.data ? Object.keys(responseData.data) : 'no responseData.data',
+                            responseDataDataHasSymbols: Array.isArray(responseData?.data?.symbols),
+                            fullResponseSample: JSON.stringify(responseData).substring(0, 2000),
+                            fullExchangeInfoDataSample: JSON.stringify(exchangeInfoData).substring(0, 2000)
+                        };
+                        
+                        console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Invalid exchange info structure - symbols array not found:`, diagnosticInfo);
+                        console.error(`[AutoScannerService] [EXCHANGE_INFO] 🔍 ExchangeInfoData keys are:`, exchangeInfoDataKeys);
+                        console.error(`[AutoScannerService] [EXCHANGE_INFO] 🔍 ExchangeInfoData values:`, exchangeInfoDataValues);
+                        console.error(`[AutoScannerService] [EXCHANGE_INFO] 🔍 Full responseData:`, responseData);
+                        console.error(`[AutoScannerService] [EXCHANGE_INFO] 🔍 Full exchangeInfoData:`, exchangeInfoData);
+                        
+                        throw new Error(`Invalid exchange info structure: symbols array not found. ExchangeInfoData has keys: ${exchangeInfoDataKeys.join(', ')}. Check proxy response format.`);
+                    }
+                }
+                
+                // Final validation
+                if (!exchangeInfoData || !Array.isArray(exchangeInfoData.symbols)) {
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Final validation failed after all unwrapping attempts`);
+                    throw new Error('Invalid exchange info structure - symbols array not found after unwrapping');
                 }
 
                 console.log(`[AutoScannerService] [EXCHANGE_INFO] 📊 Exchange info structure:`, {
@@ -2083,6 +2341,30 @@ class AutoScannerService {
                 lastError = error;
                 console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Attempt ${attempt} failed:`, error.message);
                 
+                // ✅ FIX: For rate limit errors, start background retry process
+                if (error.isRateLimit) {
+                    const waitTime = error.waitTime || 60000;
+                    const waitMinutes = Math.ceil(waitTime / 60000);
+                    
+                    if (waitTime <= 0) {
+                        // Ban expired, try one more time immediately
+                        console.warn(`[AutoScannerService] [EXCHANGE_INFO] ⚠️ Rate limit ban expired. Retrying immediately...`);
+                        attempt--; // Decrement so we can retry
+                        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+                        continue;
+                    }
+                    
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ⛔ Rate limit detected - will wait ${waitMinutes} minutes.`);
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Starting background retry process...`);
+                    
+                    // ✅ Start background retry mechanism
+                    this._startExchangeInfoBackgroundRetry(error);
+                    
+                    // Throw error to prevent initialization from completing
+                    throw error;
+                }
+                
+                // For non-rate-limit errors, retry with exponential backoff
                 if (attempt < MAX_RETRIES) {
                     const delay = Math.pow(2, attempt) * 1000; // Exponential backoff
                     console.log(`[AutoScannerService] [EXCHANGE_INFO] ⏳ Retrying in ${delay}ms...`);
@@ -2093,7 +2375,109 @@ class AutoScannerService {
 
         // If all retries failed, throw the last error
         console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ All ${MAX_RETRIES} attempts failed`);
-        throw lastError || new Error('Failed to load exchange info after all retries');
+        
+        // ✅ FIX: Scanner cannot run without exchange info - throw error to prevent initialization
+        if (lastError) {
+            console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Scanner initialization BLOCKED: Exchange info is required for scanner operation.`);
+            throw lastError;
+        }
+        
+        throw new Error('Failed to load exchange info after all retries. Scanner cannot run without exchange info.');
+    }
+
+    /**
+     * ✅ BACKGROUND RETRY: Start a background process to retry exchange info loading
+     * This allows the scanner to continue working once the rate limit ban expires
+     */
+    _startExchangeInfoBackgroundRetry(rateLimitError) {
+        // Clear any existing retry interval
+        if (this._exchangeInfoRetryInterval) {
+            clearInterval(this._exchangeInfoRetryInterval);
+        }
+
+        const waitTime = rateLimitError.waitTime || 60000;
+        const banUntil = rateLimitError.banUntil || (Date.now() + waitTime);
+        const retryInterval = Math.min(waitTime, 60000); // Check every minute or when ban expires, whichever is sooner
+
+        console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Background retry started. Will check every ${Math.ceil(retryInterval / 1000)}s until ban expires at ${new Date(banUntil).toISOString()}`);
+
+        this._exchangeInfoRetryInterval = setInterval(async () => {
+            const now = Date.now();
+            
+            // Check if ban has expired
+            if (now >= banUntil) {
+                console.log(`[AutoScannerService] [EXCHANGE_INFO] ✅ Rate limit ban expired. Attempting to load exchange info...`);
+                
+                try {
+                    // Clear retry interval
+                    clearInterval(this._exchangeInfoRetryInterval);
+                    this._exchangeInfoRetryInterval = null;
+                    
+                    // Reset loading state to allow new request
+                    this._exchangeInfoLoading = false;
+                    this._exchangeInfoLoadPromise = null;
+                    
+                    // Attempt to load exchange info
+                    const exchangeInfo = await this._loadExchangeInfo();
+                    
+                    if (exchangeInfo && Object.keys(exchangeInfo).length > 0) {
+                        this.state.exchangeInfo = exchangeInfo;
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] ✅ Exchange info loaded successfully after rate limit ban expired!`);
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Scanner can now continue with full functionality.`);
+                        
+                        // Notify subscribers that exchange info is now available
+                        this.notifySubscribers();
+                        
+                        // If scanner is running but wasn't initialized properly, try to complete initialization
+                        if (this.state.isRunning && !this.state.exchangeInfo) {
+                            console.log(`[AutoScannerService] [EXCHANGE_INFO] 🔄 Attempting to complete scanner initialization...`);
+                            // PositionManager might need to reinitialize with exchange info
+                            if (this.positionManager && typeof this.positionManager.initialize === 'function') {
+                                try {
+                                    await this.positionManager.initialize();
+                                    console.log(`[AutoScannerService] [EXCHANGE_INFO] ✅ PositionManager reinitialized with exchange info`);
+                                } catch (err) {
+                                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Failed to reinitialize PositionManager:`, err);
+                                }
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error(`[AutoScannerService] [EXCHANGE_INFO] ❌ Background retry failed:`, error.message);
+                    
+                    // If still rate limited, restart the retry process
+                    if (error.isRateLimit) {
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] ⚠️ Still rate limited, restarting background retry...`);
+                        this._startExchangeInfoBackgroundRetry(error);
+                    } else {
+                        // For other errors, retry after a delay
+                        console.log(`[AutoScannerService] [EXCHANGE_INFO] ⏳ Retrying in 60 seconds...`);
+                        setTimeout(() => {
+                            this._exchangeInfoRetryInterval = null;
+                            this._startExchangeInfoBackgroundRetry({ waitTime: 60000, banUntil: Date.now() + 60000 });
+                        }, 60000);
+                    }
+                }
+            } else {
+                const remainingTime = banUntil - now;
+                const remainingMinutes = Math.ceil(remainingTime / 60000);
+                if (remainingMinutes % 5 === 0 || remainingMinutes <= 1) {
+                    // Log every 5 minutes or in the last minute
+                    console.log(`[AutoScannerService] [EXCHANGE_INFO] ⏳ Waiting for rate limit ban to expire... ${remainingMinutes} minute(s) remaining`);
+                }
+            }
+        }, retryInterval);
+    }
+
+    /**
+     * ✅ Stop background retry process (cleanup)
+     */
+    _stopExchangeInfoBackgroundRetry() {
+        if (this._exchangeInfoRetryInterval) {
+            clearInterval(this._exchangeInfoRetryInterval);
+            this._exchangeInfoRetryInterval = null;
+            console.log(`[AutoScannerService] [EXCHANGE_INFO] 🛑 Background retry stopped`);
+        }
     }
 
     getExchangeInfo() {

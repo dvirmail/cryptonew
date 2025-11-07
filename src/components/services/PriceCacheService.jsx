@@ -431,8 +431,25 @@ class PriceCacheService {
             
             //console.log(`[PriceCacheService] ✅ Batch price fetch successful: ${priceMap.size}/${symbols.length} symbols`);
             
+            // Suppress warnings for expected errors (invalid symbols, DNS issues on testnet)
             if (result.summary && result.summary.failed > 0) {
-                console.warn(`[PriceCacheService] ⚠️ ${result.summary.failed} symbols failed to fetch`);
+                const failedSymbols = result.failed || [];
+                const nonSuppressedErrors = failedSymbols.filter(f => {
+                    const error = f.error || '';
+                    // Suppress DNS/timeout errors and invalid symbol errors (expected on testnet)
+                    return !error.includes('DNS resolution') && 
+                           !error.includes('timeout') && 
+                           !error.includes('Invalid symbol') &&
+                           !error.includes('ENOTFOUND');
+                });
+                
+                if (nonSuppressedErrors.length > 0) {
+                    const failedSymbolNames = nonSuppressedErrors.map(f => f.symbol || f).join(', ');
+                    console.warn(`[PriceCacheService] ⚠️ ${nonSuppressedErrors.length} symbols failed to fetch: ${failedSymbolNames}`);
+                    if (nonSuppressedErrors[0].error) {
+                        console.warn(`[PriceCacheService] ⚠️ First error: ${nonSuppressedErrors[0].error}`);
+                    }
+                }
             }
             
             return priceMap;
@@ -498,13 +515,42 @@ class PriceCacheService {
             result.data.forEach(tickerData => {
                 if (tickerData && tickerData.symbol) {
                     tickerMap.set(tickerData.symbol, tickerData);
+                    
+                    // CRITICAL: Check if ETH has the problematic 4160.88 price in 24hr ticker
+                    if (tickerData.symbol === 'ETHUSDT' && tickerData.lastPrice) {
+                        const ethLastPrice = parseFloat(tickerData.lastPrice);
+                        if (ethLastPrice === 4160.88 || Math.abs(ethLastPrice - 4160.88) < 0.01) {
+                            console.error(`[PriceCacheService] 🚨🚨🚨 ETH 24hr TICKER HAS 4160.88 🚨🚨🚨`);
+                            console.error(`[PriceCacheService] 🚨 ETH 24hr ticker lastPrice: ${ethLastPrice}`);
+                            console.error(`[PriceCacheService] 🚨 Full ticker data:`, JSON.stringify(tickerData, null, 2));
+                            console.error(`[PriceCacheService] 🚨 This confirms 4160.88 is coming from 24hr ticker's lastPrice`);
+                            console.error(`[PriceCacheService] 🚨🚨🚨 END ETH 4160.88 ALERT 🚨🚨🚨`);
+                        }
+                    }
                 }
             });
             
             //console.log(`[PriceCacheService] ✅ Batch fetch successful: ${tickerMap.size}/${symbols.length} symbols`);
             
+            // Suppress warnings for expected errors (invalid symbols, DNS issues on testnet)
             if (result.summary && result.summary.failed > 0) {
-                console.warn(`[PriceCacheService] ⚠️ ${result.summary.failed} symbols failed to fetch`);
+                const failedSymbols = result.failed || [];
+                const nonSuppressedErrors = failedSymbols.filter(f => {
+                    const error = f.error || '';
+                    // Suppress DNS/timeout errors and invalid symbol errors (expected on testnet)
+                    return !error.includes('DNS resolution') && 
+                           !error.includes('timeout') && 
+                           !error.includes('Invalid symbol') &&
+                           !error.includes('ENOTFOUND');
+                });
+                
+                if (nonSuppressedErrors.length > 0) {
+                    const failedSymbolNames = nonSuppressedErrors.map(f => f.symbol || f).join(', ');
+                    console.warn(`[PriceCacheService] ⚠️ ${nonSuppressedErrors.length} symbols failed to fetch: ${failedSymbolNames}`);
+                    if (nonSuppressedErrors[0].error) {
+                        console.warn(`[PriceCacheService] ⚠️ First error: ${nonSuppressedErrors[0].error}`);
+                    }
+                }
             }
             
             return tickerMap;

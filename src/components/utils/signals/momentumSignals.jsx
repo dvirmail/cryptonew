@@ -1,6 +1,7 @@
 
 import { get } from 'lodash';
 import { getRegimeMultiplier } from '../regimeUtils';
+import { detectAdvancedDivergence } from './divergenceUtils';
 
 // --- START: REUSABLE & NEW HELPER FUNCTIONS ---
 
@@ -713,7 +714,7 @@ export const evaluateRsiEnhanced = (candle, indicators, index, signalSettings, m
     const signals = [];
     const rsiSettings = signalSettings.rsi || {};
     
-    if (!indicators.rsi || indicators.rsi.length <= index || index < 1) { // Changed condition to match new outline structure requirements
+    if (!indicators.rsi || indicators.rsi.length <= index || index < 1) {
         return signals;
     }
     
@@ -722,7 +723,7 @@ export const evaluateRsiEnhanced = (candle, indicators, index, signalSettings, m
     const overbought = rsiSettings.overbought || 70;
     const oversold = rsiSettings.oversold || 30;
 
-    if (!isNumber(currentRsi) || !isNumber(prevRsi)) { // Added check for valid numbers
+    if (!isNumber(currentRsi) || !isNumber(prevRsi)) {
         return signals;
     }
     
@@ -780,6 +781,34 @@ export const evaluateRsiEnhanced = (candle, indicators, index, signalSettings, m
         });
     }
     
+    // --- State-Based Signals (for strategies requiring state conditions) ---
+    
+    // "RSI Above 50" - State signal indicating bullish momentum
+    if (currentRsi > 50) {
+        signals.push({
+            type: 'RSI',
+            value: 'RSI Above 50',
+            strength: Math.min(70, 50 + (currentRsi - 50) * 0.8), // Scale from 50 to 70 based on how far above 50
+            isEvent: false,
+            details: `RSI is above 50 (current: ${currentRsi.toFixed(2)})`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // "RSI Below 50" - State signal indicating bearish momentum
+    if (currentRsi < 50) {
+        signals.push({
+            type: 'RSI',
+            value: 'RSI Below 50',
+            strength: Math.min(70, 50 + (50 - currentRsi) * 0.8), // Scale from 50 to 70 based on how far below 50
+            isEvent: false,
+            details: `RSI is below 50 (current: ${currentRsi.toFixed(2)})`,
+            priority: 6,
+            candle
+        });
+    }
+    
     return signals;
 };
 
@@ -787,10 +816,28 @@ export const evaluateRsiEnhanced = (candle, indicators, index, signalSettings, m
  * Enhanced Stochastic evaluation with event-based signals only
  */
 export const evaluateStochasticCondition = (candle, indicators, index, signalSettings, marketRegime, onLog, debugMode) => {
+    // CRITICAL: Log function entry ALWAYS
+    const logCheck = (msg) => {
+        if (onLog) {
+            onLog(msg, 'debug');
+        } else {
+            console.log(msg);
+        }
+    };
+    
+    //logCheck(`[STOCHASTIC_EVAL] ===== FUNCTION CALLED ===== index=${index}, debugMode=${debugMode}, hasCandle=${!!candle}, hasIndicators=${!!indicators}, hasSignalSettings=${!!signalSettings}, hasOnLog=${!!onLog}`);
+    
     const signals = [];
     const stochSettings = signalSettings.stochastic || {};
     
-    if (!indicators.stochastic || indicators.stochastic.length <= index || index < 1) { // Changed condition to match new outline structure requirements
+    // Check indicator availability
+    //logCheck(`[STOCHASTIC_EVAL] Indicator check: stochastic=${!!indicators.stochastic}, stochastic.length=${indicators.stochastic?.length}, index=${index}, index < 1=${index < 1}, length <= index=${indicators.stochastic?.length <= index}`);
+    
+    if (!indicators.stochastic || indicators.stochastic.length <= index || index < 1) {
+        const reason = !indicators.stochastic ? 'stochastic indicator missing' : 
+                      indicators.stochastic.length <= index ? `stochastic.length (${indicators.stochastic.length}) <= index (${index})` :
+                      'index < 1';
+        //logCheck(`[STOCHASTIC_EVAL] ❌ EARLY EXIT - ${reason}`);
         return signals;
     }
     
@@ -799,18 +846,31 @@ export const evaluateStochasticCondition = (candle, indicators, index, signalSet
     const overbought = stochSettings.overbought || 80;
     const oversold = stochSettings.oversold || 20;
     
-    if (!currentStoch || !prevStoch || typeof currentStoch.K !== 'number' || typeof currentStoch.D !== 'number' || typeof prevStoch.K !== 'number' || typeof prevStoch.D !== 'number') { // Used .K and .D as per existing data structure
+    //logCheck(`[STOCHASTIC_EVAL] Data check: currentStoch=${!!currentStoch}, prevStoch=${!!prevStoch}, currentStoch.K=${currentStoch?.K} (type=${typeof currentStoch?.K}), currentStoch.D=${currentStoch?.D} (type=${typeof currentStoch?.D}), prevStoch.K=${prevStoch?.K} (type=${typeof prevStoch?.K}), prevStoch.D=${prevStoch?.D} (type=${typeof prevStoch?.D})`);
+    //logCheck(`[STOCHASTIC_EVAL] Settings: overbought=${overbought}, oversold=${oversold}`);
+    
+    if (!currentStoch || !prevStoch || typeof currentStoch.K !== 'number' || typeof currentStoch.D !== 'number' || typeof prevStoch.K !== 'number' || typeof prevStoch.D !== 'number') {
+        const reason = !currentStoch ? 'currentStoch missing' :
+                      !prevStoch ? 'prevStoch missing' :
+                      typeof currentStoch.K !== 'number' ? 'currentStoch.K is not a number' :
+                      typeof currentStoch.D !== 'number' ? 'currentStoch.D is not a number' :
+                      typeof prevStoch.K !== 'number' ? 'prevStoch.K is not a number' :
+                      'prevStoch.D is not a number';
+        //logCheck(`[STOCHASTIC_EVAL] ❌ EARLY EXIT - Invalid data: ${reason}`);
         return signals;
     }
     
-    const currentK = currentStoch.K; // Changed to K
-    const currentD = currentStoch.D; // Changed to D
-    const prevK = prevStoch.K; // Changed to K
-    const prevD = prevStoch.D; // Changed to D
+    const currentK = currentStoch.K;
+    const currentD = currentStoch.D;
+    const prevK = prevStoch.K;
+    const prevD = prevStoch.D;
+    
+    //logCheck(`[STOCHASTIC_EVAL] Values: currentK=${currentK}, currentD=${currentD}, prevK=${prevK}, prevD=${prevD}`);
     
     // --- Event-Based Signals Only ---
     
     // Bullish crossover: %K crosses above %D
+    //logCheck(`[STOCHASTIC_EVAL] Checking bullish cross: prevK (${prevK}) <= prevD (${prevD}) = ${prevK <= prevD}, currentK (${currentK}) > currentD (${currentD}) = ${currentK > currentD}`);
     if (prevK <= prevD && currentK > currentD) {
         signals.push({
             type: 'Stochastic',
@@ -819,11 +879,13 @@ export const evaluateStochasticCondition = (candle, indicators, index, signalSet
             isEvent: true,
             details: `%K crossed above %D: K=${currentK.toFixed(2)}, D=${currentD.toFixed(2)}`,
             priority: 8,
-            candle // Added candle
+            candle
         });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ "Bullish Cross" signal ADDED`);
     }
     
     // Bearish crossover: %K crosses below %D
+    //logCheck(`[STOCHASTIC_EVAL] Checking bearish cross: prevK (${prevK}) >= prevD (${prevD}) = ${prevK >= prevD}, currentK (${currentK}) < currentD (${currentD}) = ${currentK < currentD}`);
     if (prevK >= prevD && currentK < currentD) {
         signals.push({
             type: 'Stochastic',
@@ -832,11 +894,13 @@ export const evaluateStochasticCondition = (candle, indicators, index, signalSet
             isEvent: true,
             details: `%K crossed below %D: K=${currentK.toFixed(2)}, D=${currentD.toFixed(2)}`,
             priority: 8,
-            candle // Added candle
+            candle
         });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ "Bearish Cross" signal ADDED`);
     }
     
     // Entry into oversold zone
+    //logCheck(`[STOCHASTIC_EVAL] Checking oversold entry: prevK (${prevK}) > oversold (${oversold}) = ${prevK > oversold}, currentK (${currentK}) <= oversold (${oversold}) = ${currentK <= oversold}`);
     if (prevK > oversold && currentK <= oversold) {
         signals.push({
             type: 'Stochastic',
@@ -845,11 +909,28 @@ export const evaluateStochasticCondition = (candle, indicators, index, signalSet
             isEvent: true,
             details: `Stochastic entered oversold zone: ${currentK.toFixed(2)}`,
             priority: 7,
-            candle // Added candle
+            candle
         });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ "Oversold Entry" signal ADDED`);
+    }
+    
+    // Exit from oversold zone (Oversold Exit)
+    //logCheck(`[STOCHASTIC_EVAL] Checking oversold exit: prevK (${prevK}) <= oversold (${oversold}) = ${prevK <= oversold}, currentK (${currentK}) > oversold (${oversold}) = ${currentK > oversold}`);
+    if (prevK <= oversold && currentK > oversold) {
+        signals.push({
+            type: 'Stochastic',
+            value: 'Oversold Exit',
+            strength: 70,
+            isEvent: true,
+            details: `Stochastic exited oversold zone: ${currentK.toFixed(2)}`,
+            priority: 7,
+            candle
+        });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ "Oversold Exit" signal ADDED`);
     }
     
     // Entry into overbought zone
+    //logCheck(`[STOCHASTIC_EVAL] Checking overbought entry: prevK (${prevK}) < overbought (${overbought}) = ${prevK < overbought}, currentK (${currentK}) >= overbought (${overbought}) = ${currentK >= overbought}`);
     if (prevK < overbought && currentK >= overbought) {
         signals.push({
             type: 'Stochastic',
@@ -858,9 +939,107 @@ export const evaluateStochasticCondition = (candle, indicators, index, signalSet
             isEvent: true,
             details: `Stochastic entered overbought zone: ${currentK.toFixed(2)}`,
             priority: 7,
-            candle // Added candle
+            candle
         });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ "Overbought Entry" signal ADDED`);
     }
+    
+    // Exit from overbought zone (Overbought Exit)
+    //logCheck(`[STOCHASTIC_EVAL] Checking overbought exit: prevK (${prevK}) >= overbought (${overbought}) = ${prevK >= overbought}, currentK (${currentK}) < overbought (${overbought}) = ${currentK < overbought}`);
+    if (prevK >= overbought && currentK < overbought) {
+        signals.push({
+            type: 'Stochastic',
+            value: 'Overbought Exit',
+            strength: 70,
+            isEvent: true,
+            details: `Stochastic exited overbought zone: ${currentK.toFixed(2)}`,
+            priority: 7,
+            candle
+        });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ "Overbought Exit" signal ADDED`);
+    }
+    
+    // --- State-Based Signals (for strategies requiring state conditions) ---
+    // These provide signals based on current position, not just transitions
+    
+    // "Oversold Exit" - State signal: K is currently above oversold (indicating recovery from oversold)
+    // This helps strategies that want to catch recovery moves even if the exact exit moment was missed
+    //logCheck(`[STOCHASTIC_EVAL] Checking state-based oversold exit: currentK (${currentK}) > oversold (${oversold}) = ${currentK > oversold}`);
+    if (currentK > oversold) {
+        // Strength scales from 60 to 75 based on how far above oversold
+        const distanceFromOversold = currentK - oversold;
+        const strength = 60 + Math.min(15, (distanceFromOversold / oversold) * 30); // Scale from 60-75
+        signals.push({
+            type: 'Stochastic',
+            value: 'Oversold Exit',
+            strength: strength,
+            isEvent: false, // State signal, not event
+            details: `Stochastic K (${currentK.toFixed(2)}) is above oversold zone (${oversold}), indicating recovery`,
+            priority: 6,
+            candle
+        });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ State-based "Oversold Exit" signal ADDED (strength=${strength.toFixed(2)})`);
+    }
+    
+    // "Oversold Entry" - State signal: K is currently in oversold zone
+    //logCheck(`[STOCHASTIC_EVAL] Checking state-based oversold entry: currentK (${currentK}) <= oversold (${oversold}) = ${currentK <= oversold}`);
+    if (currentK <= oversold) {
+        // Strength scales from 60 to 75 based on how deep in oversold
+        const depthInOversold = oversold - currentK;
+        const strength = 60 + Math.min(15, (depthInOversold / oversold) * 30); // Scale from 60-75
+        signals.push({
+            type: 'Stochastic',
+            value: 'Oversold Entry',
+            strength: strength,
+            isEvent: false, // State signal
+            details: `Stochastic K (${currentK.toFixed(2)}) is in oversold zone (<=${oversold})`,
+            priority: 6,
+            candle
+        });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ State-based "Oversold Entry" signal ADDED (strength=${strength.toFixed(2)})`);
+    }
+    
+    // "Overbought Exit" - State signal: K is currently below overbought (indicating pullback from overbought)
+    //logCheck(`[STOCHASTIC_EVAL] Checking state-based overbought exit: currentK (${currentK}) < overbought (${overbought}) = ${currentK < overbought}`);
+    if (currentK < overbought) {
+        // Strength scales from 60 to 75 based on how far below overbought
+        const distanceFromOverbought = overbought - currentK;
+        const strength = 60 + Math.min(15, (distanceFromOverbought / overbought) * 30); // Scale from 60-75
+        signals.push({
+            type: 'Stochastic',
+            value: 'Overbought Exit',
+            strength: strength,
+            isEvent: false, // State signal
+            details: `Stochastic K (${currentK.toFixed(2)}) is below overbought zone (${overbought}), indicating pullback`,
+            priority: 6,
+            candle
+        });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ State-based "Overbought Exit" signal ADDED (strength=${strength.toFixed(2)})`);
+    }
+    
+    // "Overbought Entry" - State signal: K is currently in overbought zone
+    //logCheck(`[STOCHASTIC_EVAL] Checking state-based overbought entry: currentK (${currentK}) >= overbought (${overbought}) = ${currentK >= overbought}`);
+    if (currentK >= overbought) {
+        // Strength scales from 60 to 75 based on how deep in overbought
+        const depthInOverbought = currentK - overbought;
+        const strength = 60 + Math.min(15, (depthInOverbought / overbought) * 30); // Scale from 60-75
+        signals.push({
+            type: 'Stochastic',
+            value: 'Overbought Entry',
+            strength: strength,
+            isEvent: false, // State signal
+            details: `Stochastic K (${currentK.toFixed(2)}) is in overbought zone (>=${overbought})`,
+            priority: 6,
+            candle
+        });
+        //logCheck(`[STOCHASTIC_EVAL] ✅ State-based "Overbought Entry" signal ADDED (strength=${strength.toFixed(2)})`);
+    }
+    
+    //logCheck(`[STOCHASTIC_EVAL] ===== RETURNING ===== signals.length=${signals.length}`);
+    signals.forEach((sig, idx) => {
+        //logCheck(`[STOCHASTIC_EVAL] Signal[${idx}]: value="${sig.value}", strength=${sig.strength}, isEvent=${sig.isEvent}`);
+    });
+    //logCheck(`[STOCHASTIC_EVAL] ===== FUNCTION EXIT =====`);
     
     return signals;
 };
@@ -885,7 +1064,7 @@ export const evaluateWilliamsRCondition = (candle, indicators, index, signalSett
         return signals;
     }
 
-    // --- Event-Based Signals Only ---
+    // --- Event-Based Signals ---
     
     // Entry into oversold zone
     if (prevWilliams > oversold && currentWilliams <= oversold) {
@@ -936,6 +1115,68 @@ export const evaluateWilliamsRCondition = (candle, indicators, index, signalSett
             details: `Williams %R exited overbought zone: ${currentWilliams.toFixed(2)}`,
             priority: 7,
             candle // Added candle
+        });
+    }
+    
+    // --- State-Based Signals (NEW) ---
+    
+    // "Oversold Exit" - State signal: %R is currently above oversold (indicating recovery)
+    if (currentWilliams > oversold) {
+        const distanceFromOversold = currentWilliams - oversold;
+        const strength = 60 + Math.min(15, (distanceFromOversold / Math.abs(oversold)) * 30);
+        signals.push({
+            type: 'williamsr',
+            value: 'Oversold Exit',
+            strength: strength,
+            isEvent: false,
+            details: `Williams %R (${currentWilliams.toFixed(2)}) is above oversold zone (${oversold}), indicating recovery`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // "Oversold Entry" - State signal: %R is currently in oversold zone
+    if (currentWilliams <= oversold) {
+        const depthInOversold = oversold - currentWilliams;
+        const strength = 60 + Math.min(15, (depthInOversold / Math.abs(oversold)) * 30);
+        signals.push({
+            type: 'williamsr',
+            value: 'Oversold Entry',
+            strength: strength,
+            isEvent: false,
+            details: `Williams %R (${currentWilliams.toFixed(2)}) is in oversold zone (<=${oversold})`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // "Overbought Exit" - State signal: %R is currently below overbought (indicating pullback)
+    if (currentWilliams < overbought) {
+        const distanceFromOverbought = overbought - currentWilliams;
+        const strength = 60 + Math.min(15, (distanceFromOverbought / Math.abs(overbought)) * 30);
+        signals.push({
+            type: 'williamsr',
+            value: 'Overbought Exit',
+            strength: strength,
+            isEvent: false,
+            details: `Williams %R (${currentWilliams.toFixed(2)}) is below overbought zone (${overbought}), indicating pullback`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // "Overbought Entry" - State signal: %R is currently in overbought zone
+    if (currentWilliams >= overbought) {
+        const depthInOverbought = currentWilliams - overbought;
+        const strength = 60 + Math.min(15, (depthInOverbought / Math.abs(overbought)) * 30);
+        signals.push({
+            type: 'williamsr',
+            value: 'Overbought Entry',
+            strength: strength,
+            isEvent: false,
+            details: `Williams %R (${currentWilliams.toFixed(2)}) is in overbought zone (>=${overbought})`,
+            priority: 6,
+            candle
         });
     }
     
@@ -1542,6 +1783,95 @@ export const evaluateCmoCondition = (candle, indicators, index, signalSettings, 
         divergenceLookback = 50 // Default lookback for divergence
     } = cmoSettings;
 
+    // --- State-Based Signals (NEW) ---
+    
+    // 1. CMO Level State
+    if (value > overbought) {
+        const strength = 50 + Math.min(30, (value - overbought) / 2);
+        signals.push({
+            type: 'cmo',
+            value: 'Overbought',
+            strength: strength,
+            isEvent: false,
+            details: `CMO at ${value.toFixed(1)} - overbought condition`,
+            priority: 7,
+            candle
+        });
+    } else if (value < oversold) {
+        const strength = 50 + Math.min(30, (oversold - value) / 2);
+        signals.push({
+            type: 'cmo',
+            value: 'Oversold',
+            strength: strength,
+            isEvent: false,
+            details: `CMO at ${value.toFixed(1)} - oversold condition`,
+            priority: 7,
+            candle
+        });
+    } else if (value > 25) {
+        const strength = 35 + Math.min(20, (value - 25) / 2);
+        signals.push({
+            type: 'cmo',
+            value: 'Bullish Zone',
+            strength: strength,
+            isEvent: false,
+            details: `CMO at ${value.toFixed(1)} - bullish momentum`,
+            priority: 5,
+            candle
+        });
+    } else if (value < -25) {
+        const strength = 35 + Math.min(20, (Math.abs(value) - 25) / 2);
+        signals.push({
+            type: 'cmo',
+            value: 'Bearish Zone',
+            strength: strength,
+            isEvent: false,
+            details: `CMO at ${value.toFixed(1)} - bearish momentum`,
+            priority: 5,
+            candle
+        });
+    } else {
+        signals.push({
+            type: 'cmo',
+            value: 'Neutral Zone',
+            strength: 25,
+            isEvent: false,
+            details: `CMO at ${value.toFixed(1)} - neutral momentum`,
+            priority: 3,
+            candle
+        });
+    }
+    
+    // 2. CMO Direction State
+    const cmoChange = value - prevValue;
+    if (Math.abs(cmoChange) > 5) {
+        if (cmoChange > 0) {
+            const strength = 40 + Math.min(25, Math.abs(cmoChange) * 0.5);
+            signals.push({
+                type: 'cmo',
+                value: 'Rising CMO',
+                strength: strength,
+                isEvent: false,
+                details: `CMO rising by ${cmoChange.toFixed(1)} - momentum increasing`,
+                priority: 6,
+                candle
+            });
+        } else {
+            const strength = 40 + Math.min(25, Math.abs(cmoChange) * 0.5);
+            signals.push({
+                type: 'cmo',
+                value: 'Falling CMO',
+                strength: strength,
+                isEvent: false,
+                details: `CMO falling by ${Math.abs(cmoChange).toFixed(1)} - momentum decreasing`,
+                priority: 6,
+                candle
+            });
+        }
+    }
+
+    // --- Event-Based Signals ---
+
     // 1. Overbought/Oversold Exit Signals (Confirmation of Reversal)
     // Bullish signal: CMO exits the oversold zone, moving up.
     if (value > oversold && prevValue <= oversold) {
@@ -1550,6 +1880,7 @@ export const evaluateCmoCondition = (candle, indicators, index, signalSettings, 
             details: `CMO crossed above ${oversold}`,
             strength: applyRegimeAdjustment(75, marketRegime, 'cmo', 'bullish'),
             name: "CMO Bullish Exit",
+            isEvent: true,
             candle
         });
     }
@@ -1560,6 +1891,7 @@ export const evaluateCmoCondition = (candle, indicators, index, signalSettings, 
             details: `CMO crossed below ${overbought}`,
             strength: applyRegimeAdjustment(75, marketRegime, 'cmo', 'bearish'),
             name: "CMO Bearish Exit",
+            isEvent: true,
             candle
         });
     }
@@ -1650,7 +1982,7 @@ export const evaluateMfiCondition = (candle, indicators, index, signalSettings, 
     if (prevMfi > oversold && currentMfi <= oversold) {
         signals.push({
             type: 'mfi',
-            value: 'Oversold Entry',
+            value: 'MFI Oversold Entry',
             strength: 75,
             isEvent: true,
             details: `MFI entered oversold zone: ${currentMfi.toFixed(2)}`,
@@ -1663,7 +1995,7 @@ export const evaluateMfiCondition = (candle, indicators, index, signalSettings, 
     if (prevMfi <= oversold && currentMfi > oversold) {
         signals.push({
             type: 'mfi',
-            value: 'Oversold Exit',
+            value: 'MFI Oversold Exit',
             strength: 70,
             isEvent: true,
             details: `MFI exited oversold zone: ${currentMfi.toFixed(2)}`,
@@ -1676,7 +2008,7 @@ export const evaluateMfiCondition = (candle, indicators, index, signalSettings, 
     if (prevMfi < overbought && currentMfi >= overbought) {
         signals.push({
             type: 'mfi',
-            value: 'Overbought Entry',
+            value: 'MFI Overbought Entry',
             strength: 75,
             isEvent: true,
             details: `MFI entered overbought zone: ${currentMfi.toFixed(2)}`,
@@ -1689,7 +2021,7 @@ export const evaluateMfiCondition = (candle, indicators, index, signalSettings, 
     if (prevMfi >= overbought && currentMfi < overbought) {
         signals.push({
             type: 'mfi',
-            value: 'Overbought Exit',
+            value: 'MFI Overbought Exit',
             strength: 70,
             isEvent: true,
             details: `MFI exited overbought zone: ${currentMfi.toFixed(2)}`,
@@ -1698,5 +2030,335 @@ export const evaluateMfiCondition = (candle, indicators, index, signalSettings, 
         });
     }
 
-    return signals;
+    // --- State-Based Signals (for strategies requiring state conditions) ---
+    
+    // "MFI Oversold Exit" - State signal: MFI is currently above oversold (indicating recovery)
+    if (currentMfi > oversold) {
+        const distanceFromOversold = currentMfi - oversold;
+        const strength = 60 + Math.min(15, (distanceFromOversold / (100 - oversold)) * 30);
+        signals.push({
+            type: 'mfi',
+            value: 'MFI Oversold Exit',
+            strength: strength,
+            isEvent: false,
+            details: `MFI (${currentMfi.toFixed(2)}) is above oversold zone (${oversold}), indicating recovery`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // "MFI Oversold Entry" - State signal: MFI is currently in oversold zone
+    if (currentMfi <= oversold) {
+        const depthInOversold = oversold - currentMfi;
+        const strength = 60 + Math.min(15, (depthInOversold / oversold) * 30);
+        signals.push({
+            type: 'mfi',
+            value: 'MFI Oversold Entry',
+            strength: strength,
+            isEvent: false,
+            details: `MFI (${currentMfi.toFixed(2)}) is in oversold zone (<=${oversold})`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // "MFI Overbought Exit" - State signal: MFI is currently below overbought (indicating pullback)
+    if (currentMfi < overbought) {
+        const distanceFromOverbought = overbought - currentMfi;
+        const strength = 60 + Math.min(15, (distanceFromOverbought / (100 - overbought)) * 30);
+        signals.push({
+            type: 'mfi',
+            value: 'MFI Overbought Exit',
+            strength: strength,
+            isEvent: false,
+            details: `MFI (${currentMfi.toFixed(2)}) is below overbought zone (${overbought}), indicating pullback`,
+            priority: 6,
+            candle
+        });
+    }
+    
+    // "MFI Overbought Entry" - State signal: MFI is currently in overbought zone
+    if (currentMfi >= overbought) {
+        const depthInOverbought = currentMfi - overbought;
+        const strength = 60 + Math.min(15, (depthInOverbought / (100 - overbought)) * 30);
+        signals.push({
+            type: 'mfi',
+            value: 'MFI Overbought Entry',
+            strength: strength,
+            isEvent: false,
+            details: `MFI (${currentMfi.toFixed(2)}) is in overbought zone (>=${overbought})`,
+            priority: 6,
+            candle
+        });
+    }
+
+    // ✅ Phase 1: MFI Advanced Divergence Detection
+    try {
+        if (debugMode && onLog) {
+            //onLog(`[MFI_DIVERGENCE] Starting detection at index ${index}`, 'debug');
+            //onLog(`[MFI_DIVERGENCE] Conditions check: index>=50=${index >= 50}, hasData=${!!indicators.data}, hasMFI=${!!indicators.mfi}`, 'debug');
+        }
+        
+        if (index >= 50 && indicators.data && indicators.mfi) {
+            // Extract MFI data (filter out nulls/undefined)
+            const mfiRaw = indicators.mfi.slice(0, index + 1);
+            const mfiValidIndices = [];
+            const mfiData = [];
+            
+            // Find valid MFI values and their corresponding indices
+            for (let i = 0; i < mfiRaw.length; i++) {
+                if (isNumber(mfiRaw[i])) {
+                    mfiValidIndices.push(i);
+                    mfiData.push(mfiRaw[i]);
+                }
+            }
+            
+            // Align price data to match MFI data (use only indices where MFI is valid)
+            const priceData = mfiValidIndices.map(i => {
+                const candle = indicators.data[i];
+                return candle ? candle.close : null;
+            }).filter(v => v !== null);
+            
+            // Adjust currentIndex to relative position in aligned arrays
+            const mfiDataLength = mfiData.length;
+            const alignedIndex = mfiDataLength - 1; // Current index in aligned arrays
+            
+            if (debugMode && onLog) {
+                //onLog(`[MFI_DIVERGENCE] Data alignment: originalIndex=${index}, mfiRaw.length=${mfiRaw.length}, validIndices=${mfiValidIndices.length}, priceData.length=${priceData.length}, mfiData.length=${mfiData.length}, alignedIndex=${alignedIndex}`, 'debug');
+                if (priceData.length > 0 && mfiData.length > 0) {
+                    //onLog(`[MFI_DIVERGENCE] Sample data: last 3 prices=${priceData.slice(-3).map(p => p.toFixed(2)).join(', ')}, last 3 MFI=${mfiData.slice(-3).map(m => m.toFixed(2)).join(', ')}`, 'debug');
+                }
+            }
+            
+            if (priceData.length >= 50 && mfiData.length >= 50 && mfiData.length === priceData.length && alignedIndex >= 50) {
+                const divergence = detectAdvancedDivergence(
+                    priceData,
+                    mfiData,
+                    alignedIndex,
+                    {
+                        lookbackPeriod: 50,
+                        minPeakDistance: 5,
+                        maxPeakDistance: 60,
+                        pivotLookback: 5,
+                        minPriceMove: 0.02,
+                        minOscillatorMove: 5, // MFI uses 0-100 range
+                        debugMode: debugMode,
+                        onLog: onLog
+                    }
+                );
+                
+                if (debugMode && onLog) {
+                    //onLog(`[MFI_DIVERGENCE] detectAdvancedDivergence result: ${divergence ? JSON.stringify({ type: divergence.type, strength: divergence.strength }) : 'null'}`, 'debug');
+                }
+                
+                if (divergence) {
+                    // Map divergence type to canonical signal value
+                    // Note: detectAdvancedDivergence returns type like "Regular Bullish Divergence" (with spaces)
+                    let signalValue = '';
+                    if (divergence.type === 'Regular Bullish Divergence' || divergence.type?.includes('Regular Bullish')) {
+                        signalValue = 'MFI Regular Bullish Divergence';
+                    } else if (divergence.type === 'Regular Bearish Divergence' || divergence.type?.includes('Regular Bearish')) {
+                        signalValue = 'MFI Regular Bearish Divergence';
+                    } else if (divergence.type === 'Hidden Bullish Divergence' || divergence.type?.includes('Hidden Bullish')) {
+                        signalValue = 'MFI Hidden Bullish Divergence';
+                    } else if (divergence.type === 'Hidden Bearish Divergence' || divergence.type?.includes('Hidden Bearish')) {
+                        signalValue = 'MFI Hidden Bearish Divergence';
+                    }
+                    
+                    if (debugMode && onLog && !signalValue) {
+                        //onLog(`[MFI_DIVERGENCE] ⚠️ Divergence found but no signalValue mapped. Divergence.type="${divergence.type}"`, 'warning');
+                    }
+                    
+                    if (signalValue) {
+                        if (debugMode && onLog) {
+                            //onLog(`[MFI_DIVERGENCE] ✅ Adding signal: ${signalValue}`, 'debug');
+                        }
+                        signals.push({
+                            type: 'MFI',
+                            value: signalValue,
+                            strength: Math.min(100, divergence.strength + 5),
+                            details: divergence.description || `MFI ${divergence.type} divergence detected`,
+                            priority: 10,
+                            isEvent: true,
+                            candle: index
+                        });
+                    }
+                } else if (debugMode && onLog) {
+                    //onLog(`[MFI_DIVERGENCE] ❌ No divergence detected`, 'debug');
+                }
+            } else if (debugMode && onLog) {
+                //onLog(`[MFI_DIVERGENCE] ❌ Data length check failed: priceData.length=${priceData.length}, mfiData.length=${mfiData.length}, lengthsMatch=${mfiData.length === priceData.length}`, 'debug');
+            }
+        } else if (debugMode && onLog) {
+            //onLog(`[MFI_DIVERGENCE] ❌ Initial conditions failed: index>=50=${index >= 50}, hasData=${!!indicators.data}, hasMFI=${!!indicators.mfi}`, 'debug');
+        }
+    } catch (error) {
+        if (debugMode && onLog) {
+            //onLog(`[MFI_DIVERGENCE] ❌ Error: ${error.message}`, 'warning');
+            //onLog(`[MFI_DIVERGENCE] ❌ Stack: ${error.stack}`, 'warning');
+        }
+    }
+
+    // ✅ Phase 1: MFI Failure Swing Detection
+    try {
+        if (debugMode && onLog) {
+            //onLog(`[MFI_FAILURE_SWING] Starting detection at index ${index}`, 'debug');
+        }
+        
+        if (index >= 20 && indicators.mfi) {
+            const mfiHistory = indicators.mfi.slice(Math.max(0, index - 20), index + 1);
+            const validMfi = mfiHistory.filter(v => isNumber(v) && v >= 0 && v <= 100);
+            
+            if (debugMode && onLog) {
+                //onLog(`[MFI_FAILURE_SWING] Data check: index=${index}, mfiHistory.length=${mfiHistory.length}, validMfi.length=${validMfi.length}, oversold=${oversold}, overbought=${overbought}`, 'debug');
+                if (validMfi.length > 0) {
+                    //onLog(`[MFI_FAILURE_SWING] Recent MFI values: ${validMfi.slice(-5).map(v => v.toFixed(2)).join(', ')}`, 'debug');
+                }
+            }
+            
+            if (validMfi.length >= 10) {
+                // Bullish Failure Swing: MFI falls below 20, then rises above 20, but doesn't exceed 80, then falls below 20 again
+                // Bearish Failure Swing: MFI rises above 80, then falls below 80, but doesn't go below 20, then rises above 80 again
+                
+                // Find oversold/overbought zones
+                let oversoldEntry = -1;
+                let oversoldExit = -1;
+                let overboughtEntry = -1;
+                let overboughtExit = -1;
+                
+                const oversoldThreshold = oversold; // Use from settings
+                const overboughtThreshold = overbought; // Use from settings
+                
+                if (debugMode && onLog) {
+                    //onLog(`[MFI_FAILURE_SWING] Thresholds: oversold=${oversoldThreshold}, overbought=${overboughtThreshold}`, 'debug');
+                }
+                
+                for (let i = 1; i < validMfi.length; i++) {
+                    // Oversold entry
+                    if (validMfi[i-1] > oversoldThreshold && validMfi[i] <= oversoldThreshold && oversoldEntry === -1) {
+                        oversoldEntry = i;
+                        if (debugMode && onLog) {
+                            //onLog(`[MFI_FAILURE_SWING] Oversold entry at i=${i}: ${validMfi[i-1].toFixed(2)} → ${validMfi[i].toFixed(2)}`, 'debug');
+                        }
+                    }
+                    // Oversold exit
+                    if (validMfi[i-1] <= oversoldThreshold && validMfi[i] > oversoldThreshold && oversoldEntry !== -1 && oversoldExit === -1) {
+                        oversoldExit = i;
+                        if (debugMode && onLog) {
+                            //onLog(`[MFI_FAILURE_SWING] Oversold exit at i=${i}: ${validMfi[i-1].toFixed(2)} → ${validMfi[i].toFixed(2)}`, 'debug');
+                        }
+                    }
+                    // Overbought entry
+                    if (validMfi[i-1] < overboughtThreshold && validMfi[i] >= overboughtThreshold && overboughtEntry === -1) {
+                        overboughtEntry = i;
+                        if (debugMode && onLog) {
+                            //onLog(`[MFI_FAILURE_SWING] Overbought entry at i=${i}: ${validMfi[i-1].toFixed(2)} → ${validMfi[i].toFixed(2)}`, 'debug');
+                        }
+                    }
+                    // Overbought exit
+                    if (validMfi[i-1] >= overboughtThreshold && validMfi[i] < overboughtThreshold && overboughtEntry !== -1 && overboughtExit === -1) {
+                        overboughtExit = i;
+                        if (debugMode && onLog) {
+                            //onLog(`[MFI_FAILURE_SWING] Overbought exit at i=${i}: ${validMfi[i-1].toFixed(2)} → ${validMfi[i].toFixed(2)}`, 'debug');
+                        }
+                    }
+                }
+                
+                if (debugMode && onLog) {
+                    //onLog(`[MFI_FAILURE_SWING] Zone analysis: oversoldEntry=${oversoldEntry}, oversoldExit=${oversoldExit}, overboughtEntry=${overboughtEntry}, overboughtExit=${overboughtExit}`, 'debug');
+                }
+                
+                // Bullish Failure Swing: Oversold -> Exit -> Stay below 80 -> Oversold again
+                if (oversoldEntry !== -1 && oversoldExit !== -1 && oversoldExit < validMfi.length - 2) {
+                    const afterExit = validMfi.slice(oversoldExit);
+                    const maxAfterExit = Math.max(...afterExit);
+                    
+                    if (debugMode && onLog) {
+                        //onLog(`[MFI_FAILURE_SWING] Bullish check: oversoldEntry=${oversoldEntry}, oversoldExit=${oversoldExit}, maxAfterExit=${maxAfterExit.toFixed(2)}, overboughtThreshold=${overboughtThreshold}`, 'debug');
+                    }
+                    
+                    // Check if there's a second oversold entry after the exit
+                    let secondOversold = -1;
+                    for (let i = oversoldExit + 1; i < validMfi.length; i++) {
+                        if (validMfi[i-1] > oversoldThreshold && validMfi[i] <= oversoldThreshold) {
+                            secondOversold = i;
+                            break;
+                        }
+                    }
+                    
+                    if (debugMode && onLog) {
+                        //onLog(`[MFI_FAILURE_SWING] Bullish check: secondOversold=${secondOversold !== -1 ? secondOversold : 'not found'}, maxAfterExit < overboughtThreshold? ${maxAfterExit < overboughtThreshold}`, 'debug');
+                    }
+                    
+                    if (secondOversold !== -1 && maxAfterExit < overboughtThreshold) {
+                        if (debugMode && onLog) {
+                            //onLog(`[MFI_FAILURE_SWING] ✅ Bullish Failure Swing detected!`, 'debug');
+                        }
+                        signals.push({
+                            type: 'MFI',
+                            value: 'MFI Failure Swing Bullish',
+                            strength: 85,
+                            details: 'MFI bullish failure swing detected (oversold -> exit -> second oversold without reaching overbought)',
+                            priority: 10,
+                            isEvent: true,
+                            candle: index
+                        });
+                    } else if (debugMode && onLog) {
+                        //onLog(`[MFI_FAILURE_SWING] ❌ Bullish Failure Swing not detected: secondOversold=${secondOversold !== -1 ? 'found' : 'not found'}, maxAfterExit=${maxAfterExit.toFixed(2)} >= ${overboughtThreshold}? ${maxAfterExit >= overboughtThreshold}`, 'debug');
+                    }
+                } else if (debugMode && onLog) {
+                    //onLog(`[MFI_FAILURE_SWING] ❌ Bullish Failure Swing conditions not met: oversoldEntry=${oversoldEntry !== -1}, oversoldExit=${oversoldExit !== -1}, oversoldExit < validMfi.length-2? ${oversoldExit !== -1 && oversoldExit < validMfi.length - 2}`, 'debug');
+                }
+                
+                // Bearish Failure Swing: Overbought -> Exit -> Stay above 20 -> Overbought again
+                if (overboughtEntry !== -1 && overboughtExit !== -1 && overboughtExit < validMfi.length - 2) {
+                    const afterExit = validMfi.slice(overboughtExit);
+                    const minAfterExit = Math.min(...afterExit);
+                    
+                    if (debugMode && onLog) {
+                        //onLog(`[MFI_FAILURE_SWING] Bearish check: overboughtEntry=${overboughtEntry}, overboughtExit=${overboughtExit}, minAfterExit=${minAfterExit.toFixed(2)}, oversoldThreshold=${oversoldThreshold}`, 'debug');
+                    }
+                    
+                    // Check if there's a second overbought entry after the exit
+                    let secondOverbought = -1;
+                    for (let i = overboughtExit + 1; i < validMfi.length; i++) {
+                        if (validMfi[i-1] < overboughtThreshold && validMfi[i] >= overboughtThreshold) {
+                            secondOverbought = i;
+                            break;
+                        }
+                    }
+                    
+                    if (debugMode && onLog) {
+                        //onLog(`[MFI_FAILURE_SWING] Bearish check: secondOverbought=${secondOverbought !== -1 ? secondOverbought : 'not found'}, minAfterExit > oversoldThreshold? ${minAfterExit > oversoldThreshold}`, 'debug');
+                    }
+                    
+                    if (secondOverbought !== -1 && minAfterExit > oversoldThreshold) {
+                        if (debugMode && onLog) {
+                            //onLog(`[MFI_FAILURE_SWING] ✅ Bearish Failure Swing detected!`, 'debug');
+                        }
+                        signals.push({
+                            type: 'MFI',
+                            value: 'MFI Failure Swing Bearish',
+                            strength: 85,
+                            details: 'MFI bearish failure swing detected (overbought -> exit -> second overbought without reaching oversold)',
+                            priority: 10,
+                            isEvent: true,
+                            candle: index
+                        });
+                    } else if (debugMode && onLog) {
+                        //onLog(`[MFI_FAILURE_SWING] ❌ Bearish Failure Swing not detected: secondOverbought=${secondOverbought !== -1 ? 'found' : 'not found'}, minAfterExit=${minAfterExit.toFixed(2)} <= ${oversoldThreshold}? ${minAfterExit <= oversoldThreshold}`, 'debug');
+                    }
+                } else if (debugMode && onLog) {
+                    //onLog(`[MFI_FAILURE_SWING] ❌ Bearish Failure Swing conditions not met: overboughtEntry=${overboughtEntry !== -1}, overboughtExit=${overboughtExit !== -1}, overboughtExit < validMfi.length-2? ${overboughtExit !== -1 && overboughtExit < validMfi.length - 2}`, 'debug');
+                }
+            }
+        }
+    } catch (error) {
+        if (debugMode && onLog) {
+            //onLog(`[MFI_FAILURE_SWING] ❌ Error: ${error.message}`, 'warning');
+            //onLog(`[MFI_FAILURE_SWING] ❌ Stack: ${error.stack}`, 'warning');
+        }
+    }
+
+    return signals.map(s => ({ ...s, type: 'MFI', strength: Math.min(100, Math.max(0, s.strength)), candle: index }));
 };

@@ -92,7 +92,80 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
     const signals = [];
     const srSettings = signalSettings.supportresistance || {};
 
+    // DEBUG: Log entry and initial conditions
+    if (debugMode && onLog) {
+        //onLog(`[SR_EVAL] Starting evaluation: index=${index}, hasSupportResistance=${!!indicators.supportresistance}, srLength=${indicators.supportresistance?.length || 0}, sr[index]=${!!indicators.supportresistance?.[index]}, index<1=${index < 1}`, 'debug');
+        if (indicators.supportresistance && indicators.supportresistance.length > 0) {
+            const srAtIndex = indicators.supportresistance[index];
+            //onLog(`[SR_EVAL] Raw value at index ${index}: ${srAtIndex ? JSON.stringify(srAtIndex) : 'null'} (type=${typeof srAtIndex}, isNull=${srAtIndex === null}, isUndefined=${srAtIndex === undefined}, isEmpty=${srAtIndex !== null && srAtIndex !== undefined && typeof srAtIndex === 'object' && Object.keys(srAtIndex).length === 0})`, 'debug');
+            
+            // Check data quality across the array
+            let validCount = 0;
+            let nullCount = 0;
+            let emptyCount = 0;
+            for (let i = Math.max(0, index - 5); i < Math.min(indicators.supportresistance.length, index + 5); i++) {
+                const val = indicators.supportresistance[i];
+                if (val === null || val === undefined) {
+                    nullCount++;
+                } else if (typeof val === 'object' && (!val.support || val.support.length === 0) && (!val.resistance || val.resistance.length === 0)) {
+                    emptyCount++;
+                } else if (typeof val === 'object') {
+                    validCount++;
+                }
+            }
+            //onLog(`[SR_EVAL] Data quality near index ${index} (±5): ${validCount} valid, ${nullCount} null, ${emptyCount} empty`, 'debug');
+            
+            if (srAtIndex === null || srAtIndex === undefined) {
+                // Check what the last valid index is
+                let lastValidIndex = -1;
+                let lastValidValue = null;
+                for (let i = index; i >= 0; i--) {
+                    if (indicators.supportresistance[i] && typeof indicators.supportresistance[i] === 'object') {
+                        const val = indicators.supportresistance[i];
+                        // Check if it has meaningful data
+                        if ((val.support && val.support.length > 0) || (val.resistance && val.resistance.length > 0)) {
+                            lastValidIndex = i;
+                            lastValidValue = val;
+                            break;
+                        }
+                    }
+                }
+                //onLog(`[SR_EVAL] Last valid Support/Resistance found at index ${lastValidIndex}: ${lastValidValue ? JSON.stringify(lastValidValue) : 'none'}`, 'debug');
+                
+                // Also check forward to see when valid data starts
+                let nextValidIndex = -1;
+                for (let i = index + 1; i < Math.min(indicators.supportresistance.length, index + 10); i++) {
+                    if (indicators.supportresistance[i] && typeof indicators.supportresistance[i] === 'object') {
+                        const val = indicators.supportresistance[i];
+                        if ((val.support && val.support.length > 0) || (val.resistance && val.resistance.length > 0)) {
+                            nextValidIndex = i;
+                            break;
+                        }
+                    }
+                }
+                if (nextValidIndex >= 0) {
+                    //onLog(`[SR_EVAL] Next valid Support/Resistance found at index ${nextValidIndex}`, 'debug');
+                }
+            }
+        }
+    }
+
     if (!indicators.supportresistance || index < 1) {
+        if (debugMode && onLog) {
+            //onLog(`[SR_EVAL] ❌ Early exit - Data/Index: hasSupportResistance=${!!indicators.supportresistance}, index=${index}, index<1=${index < 1}`, 'debug');
+            if (indicators.supportresistance) {
+                let validCount = 0;
+                let nullCount = 0;
+                for (let i = 0; i < Math.min(indicators.supportresistance.length, index + 5); i++) {
+                    if (indicators.supportresistance[i] && typeof indicators.supportresistance[i] === 'object') {
+                        validCount++;
+                    } else {
+                        nullCount++;
+                    }
+                }
+                //onLog(`[SR_EVAL] Data quality: ${validCount} valid, ${nullCount} null in first ${Math.min(indicators.supportresistance.length, index + 5)} elements`, 'debug');
+            }
+        }
         return signals;
     }
 
@@ -102,14 +175,8 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
 
     // SAFETY CHECK: Ensure currentLevels is valid
     if (!currentLevels || typeof currentLevels !== 'object') {
-        // Still provide a baseline signal even if no levels detected
-        signals.push({
-            type: 'supportresistance',
-            value: 'No Clear Levels',
-            strength: 20,
-            details: `No significant support/resistance levels detected`,
-            priority: 3
-        });
+        // Return empty array - invalid data structure, no signals possible
+        // No fallback needed - empty arrays are handled fine by signal matching
         return signals;
     }
 
@@ -142,7 +209,19 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
         }
     }
 
-    // Find nearest support level
+    // DEBUG: Log extracted levels
+    if (debugMode && onLog) {
+        //onLog(`[SR_EVAL] Extracted levels: supportLevels=${supportLevels.length} [${supportLevels.slice(0, 5).map(l => l?.toFixed(2)).join(', ')}${supportLevels.length > 5 ? '...' : ''}], resistanceLevels=${resistanceLevels.length} [${resistanceLevels.slice(0, 5).map(l => l?.toFixed(2)).join(', ')}${resistanceLevels.length > 5 ? '...' : ''}]`, 'debug');
+        //onLog(`[SR_EVAL] currentLevels keys: ${Object.keys(currentLevels).join(', ')}`, 'debug');
+        if (currentLevels.support !== undefined) {
+            //onLog(`[SR_EVAL] currentLevels.support type: ${typeof currentLevels.support}, isArray: ${Array.isArray(currentLevels.support)}, value: ${JSON.stringify(currentLevels.support)}`, 'debug');
+        }
+        if (currentLevels.resistance !== undefined) {
+            //onLog(`[SR_EVAL] currentLevels.resistance type: ${typeof currentLevels.resistance}, isArray: ${Array.isArray(currentLevels.resistance)}, value: ${JSON.stringify(currentLevels.resistance)}`, 'debug');
+        }
+    }
+
+    // Find nearest support level (must be BELOW current price)
     for (const level of supportLevels) {
         if (typeof level === 'number' && level < currentPrice) {
             const distance = Math.abs(currentPrice - level);
@@ -153,7 +232,7 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
         }
     }
 
-    // Find nearest resistance level
+    // Find nearest resistance level (must be ABOVE current price)
     for (const level of resistanceLevels) {
         if (typeof level === 'number' && level > currentPrice) {
             const distance = Math.abs(level - currentPrice);
@@ -162,6 +241,12 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
                 nearestResistance = level;
             }
         }
+    }
+
+
+    // DEBUG: Log nearest levels found
+    if (debugMode && onLog) {
+        //onLog(`[SR_EVAL] Nearest levels: nearestSupport=${nearestSupport ? nearestSupport.toFixed(2) : 'null'}, supportDistance=${supportDistance !== Infinity ? supportDistance.toFixed(2) : 'Infinity'}, nearestResistance=${nearestResistance ? nearestResistance.toFixed(2) : 'null'}, resistanceDistance=${resistanceDistance !== Infinity ? resistanceDistance.toFixed(2) : 'Infinity'}`, 'debug');
     }
 
     // 2. Distance-Based Strength Signals
@@ -187,6 +272,7 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
                 priority: 6
             });
         } else {
+            // Always generate a signal if we have a nearest support, even if it's far
             const strength = 25 + Math.min(15, (1 / supportProximity) * 5);
             signals.push({
                 type: 'supportresistance',
@@ -198,8 +284,8 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
         }
     }
 
-    if (nearestResistance !== null) {
-        const resistanceProximity = resistanceDistance / currentPrice;
+        if (nearestResistance !== null) {
+            const resistanceProximity = resistanceDistance / currentPrice;
         if (resistanceProximity < 0.01) { // Very close to resistance (within 1%)
             signals.push({
                 type: 'supportresistance',
@@ -218,6 +304,7 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
                 priority: 6
             });
         } else {
+            // Always generate a signal if we have a nearest resistance, even if it's far
             const strength = 25 + Math.min(15, (1 / resistanceProximity) * 5);
             signals.push({
                 type: 'supportresistance',
@@ -299,7 +386,7 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
         signals.push({
             type: 'supportresistance',
             value: 'Support Touch',
-            strength: 85,
+            strength: 90,
             details: `Price touched support level at ${nearestSupport.toFixed(2)}`,
             priority: 9
         });
@@ -309,7 +396,7 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
         signals.push({
             type: 'supportresistance',
             value: 'Resistance Touch',
-            strength: 85,
+            strength: 90,
             details: `Price touched resistance level at ${nearestResistance.toFixed(2)}`,
             priority: 9
         });
@@ -361,15 +448,17 @@ export const evaluateSupportResistanceCondition = (candle, indicators, index, si
         });
     }
 
-    // Fallback signal if no levels were processed
+    // No fallback signal - return empty array if no levels detected
+    // This is intentional: empty arrays are handled fine by the signal matching logic,
+    // and fallback signals (strength 20) add noise without providing value
+    // Strategies require specific signal values to match, so "No Clear Levels" never matches anyway
     if (signals.length === 0) {
-        signals.push({
-            type: 'supportresistance',
-            value: 'No Clear Levels',
-            strength: 20,
-            details: `No significant support/resistance levels detected`,
-            priority: 3
-        });
+        // Always check for bugs (this is critical)
+        if (debugMode && onLog && totalLevels >= 1) {
+            onLog(`[SR_EVAL] ⚠️ BUG DETECTED: totalLevels=${totalLevels} (should trigger Level Density signal) but signals.length=0!`, 'error');
+            onLog(`[SR_EVAL] This indicates a code logic error - Level Density check should have fired!`, 'error');
+        }
+        // Return empty array - no fallback signal needed
     }
 
     return signals;
@@ -535,7 +624,68 @@ export const evaluateFibonacciCondition = (candle, indicators, index, signalSett
     const signals = [];
     const fibSettings = signalSettings.fibonacci || {};
 
+    // DEBUG: Log entry and initial conditions
+    if (debugMode && onLog) {
+        //onLog(`[FIB_EVAL] Starting evaluation: index=${index}, hasFibonacci=${!!indicators.fibonacci}, fibLength=${indicators.fibonacci?.length || 0}, fib[index]=${!!indicators.fibonacci?.[index]}, index<1=${index < 1}`, 'debug');
+        if (indicators.fibonacci && indicators.fibonacci.length > 0) {
+            const fibAtIndex = indicators.fibonacci[index];
+            //onLog(`[FIB_EVAL] Raw value at index ${index}: ${fibAtIndex ? JSON.stringify(fibAtIndex) : 'null'} (type=${typeof fibAtIndex}, isNull=${fibAtIndex === null}, isUndefined=${fibAtIndex === undefined}, isEmpty=${fibAtIndex !== null && fibAtIndex !== undefined && typeof fibAtIndex === 'object' && Object.keys(fibAtIndex).length === 0})`, 'debug');
+            
+            // Check data quality across the array
+            let validCount = 0;
+            let nullCount = 0;
+            let emptyCount = 0;
+            for (let i = Math.max(0, index - 5); i < Math.min(indicators.fibonacci.length, index + 5); i++) {
+                const val = indicators.fibonacci[i];
+                if (val === null || val === undefined) {
+                    nullCount++;
+                } else if (typeof val === 'object' && Object.keys(val).length === 0) {
+                    emptyCount++;
+                } else if (typeof val === 'object') {
+                    validCount++;
+                }
+            }
+            //onLog(`[FIB_EVAL] Data quality near index ${index} (±5): ${validCount} valid, ${nullCount} null, ${emptyCount} empty`, 'debug');
+            
+            if (fibAtIndex === null || fibAtIndex === undefined) {
+                // Check what the last valid index is
+                let lastValidIndex = -1;
+                let lastValidValue = null;
+                for (let i = index; i >= 0; i--) {
+                    if (indicators.fibonacci[i] && typeof indicators.fibonacci[i] === 'object') {
+                        const val = indicators.fibonacci[i];
+                        // Check if it has meaningful data
+                        if (Object.keys(val).length > 0) {
+                            lastValidIndex = i;
+                            lastValidValue = val;
+                            break;
+                        }
+                    }
+                }
+                //onLog(`[FIB_EVAL] Last valid Fibonacci found at index ${lastValidIndex}: ${lastValidValue ? JSON.stringify(lastValidValue) : 'none'}`, 'debug');
+                
+                // Also check forward to see when valid data starts
+                let nextValidIndex = -1;
+                for (let i = index + 1; i < Math.min(indicators.fibonacci.length, index + 10); i++) {
+                    if (indicators.fibonacci[i] && typeof indicators.fibonacci[i] === 'object') {
+                        const val = indicators.fibonacci[i];
+                        if (Object.keys(val).length > 0) {
+                            nextValidIndex = i;
+                            break;
+                        }
+                    }
+                }
+                if (nextValidIndex >= 0) {
+                    //onLog(`[FIB_EVAL] Next valid Fibonacci found at index ${nextValidIndex}`, 'debug');
+                }
+            }
+        }
+    }
+
     if (!indicators.fibonacci || index < 1) {
+        if (debugMode && onLog) {
+            //onLog(`[FIB_EVAL] ❌ Early exit - Data/Index: hasFibonacci=${!!indicators.fibonacci}, index=${index}, index<1=${index < 1}`, 'debug');
+        }
         return signals;
     }
 
@@ -545,14 +695,8 @@ export const evaluateFibonacciCondition = (candle, indicators, index, signalSett
 
     // SAFETY CHECK: Ensure currentFib is valid
     if (!currentFib || typeof currentFib !== 'object') {
-        // Still provide a baseline signal even if no fib data
-        signals.push({
-            type: 'fibonacci',
-            value: 'No Fibonacci Data',
-            strength: 20,
-            details: `No Fibonacci retracement data available`,
-            priority: 3
-        });
+        // Return empty array - invalid data structure, no signals possible
+        // No fallback needed - empty arrays are handled fine by signal matching
         return signals;
     }
 
@@ -563,9 +707,20 @@ export const evaluateFibonacciCondition = (candle, indicators, index, signalSett
     const fibLevels = [];
     const levelNames = ['0', '236', '382', '500', '618', '786', '1000'];
     
+    let foundLevelsCount = 0;
     for (const levelName of levelNames) {
-        const level = currentFib[levelName] || currentFib[`fib${levelName}`] || currentFib[`level_${levelName}`];
+        // Check multiple possible key formats
+        // Priority: direct key (0, 236, etc.) -> fib{levelName} -> level_{levelName} -> fib_{levelName}
+        const level = currentFib.levels?.[levelName] || 
+                     currentFib[levelName] || 
+                     currentFib.levels?.[`fib${levelName}`] ||
+                     currentFib.levels?.[`fib_${levelName}`] ||
+                     currentFib[`fib${levelName}`] || 
+                     currentFib[`level_${levelName}`] || 
+                     currentFib[`fib_${levelName}`];
+        
         if (level && typeof level === 'number') {
+            foundLevelsCount++;
             fibLevels.push({
                 value: level,
                 name: levelName === '0' ? '0%' : levelName === '1000' ? '100%' : `${(parseInt(levelName) / 10).toFixed(1)}%`,
@@ -579,13 +734,11 @@ export const evaluateFibonacciCondition = (candle, indicators, index, signalSett
     fibLevels.sort((a, b) => a.value - b.value);
 
     if (fibLevels.length === 0) {
-        signals.push({
-            type: 'fibonacci',
-            value: 'No Valid Levels',
-            strength: 20,
-            details: `No valid Fibonacci levels detected`,
-            priority: 3
-        });
+        if (debugMode && onLog) {
+            //onLog(`[FIB_EVAL] ❌ No valid Fibonacci levels extracted. Returning "No Valid Levels" signal. currentFib structure: ${JSON.stringify(currentFib)}`, 'debug');
+        }
+        // Return empty array - no valid levels extracted
+        // No fallback needed - empty arrays are handled fine by signal matching
         return signals;
     }
 
@@ -604,7 +757,7 @@ export const evaluateFibonacciCondition = (candle, indicators, index, signalSett
             nearestLevel = level;
         }
 
-        // Determine zone
+        // Determine zone (price must be BETWEEN two levels)
         if (i < fibLevels.length - 1) {
             const nextLevel = fibLevels[i + 1];
             if (currentPrice >= level.value && currentPrice <= nextLevel.value) {
@@ -617,6 +770,7 @@ export const evaluateFibonacciCondition = (candle, indicators, index, signalSett
             }
         }
     }
+
 
     // 3. Zone-Based Signals
     if (currentZone) {
@@ -644,44 +798,68 @@ export const evaluateFibonacciCondition = (candle, indicators, index, signalSett
         }
     }
 
-    // 4. Level Proximity Signals
-    if (nearestLevel) {
-        const proximityRatio = nearestDistance / currentPrice;
+    // 4. Level Proximity Signals - Generate signals for ALL nearby levels, even if price is outside zones
+    // Check proximity to all levels, not just the nearest one
+    // Use a more lenient threshold for "At" signals (1% instead of 0.5%) to match strategy expectations
+    // This ensures signals are generated even when currentZone is null (price outside all zones)
+    let proximitySignalsGenerated = 0;
+    for (const level of fibLevels) {
+        const distance = Math.abs(currentPrice - level.value);
+        const proximityRatio = distance / currentPrice;
         
-        if (proximityRatio < 0.005) { // Very close to fib level (within 0.5%)
-            const strength = nearestLevel.importance === 'high' ? 80 : nearestLevel.importance === 'medium' ? 70 : 60;
+        // Use 1% threshold for all Fibonacci levels to match strategy expectations
+        // This ensures "At X% Level" signals are generated when price is within 1% of any level
+        const atThreshold = 0.01; // 1% for all levels (was 0.5% which was too strict)
+        
+        if (proximityRatio < atThreshold) { // Very close to level
+            const strength = level.importance === 'high' ? 80 : level.importance === 'medium' ? 70 : 60;
             signals.push({
                 type: 'fibonacci',
-                value: `At ${nearestLevel.name} Level`,
+                value: `At ${level.name} Level`,
                 strength: strength,
-                details: `Price very close to ${nearestLevel.name} Fibonacci level at ${nearestLevel.value.toFixed(2)}`,
-                priority: nearestLevel.importance === 'high' ? 9 : 8
+                details: `Price very close to ${level.name} Fibonacci level at ${level.value.toFixed(2)}`,
+                priority: level.importance === 'high' ? 9 : 8,
+                isEvent: false
             });
-        } else if (proximityRatio < 0.02) { // Near fib level (within 2%)
-            const baseStrength = nearestLevel.importance === 'high' ? 55 : nearestLevel.importance === 'medium' ? 45 : 35;
+            proximitySignalsGenerated++;
+        } else if (proximityRatio < 0.02) { // Near level (within 2%)
+            const baseStrength = level.importance === 'high' ? 55 : level.importance === 'medium' ? 45 : 35;
             const strength = baseStrength + Math.min(15, (0.02 - proximityRatio) * 1500);
             signals.push({
                 type: 'fibonacci',
-                value: `Near ${nearestLevel.name} Level`,
+                value: `Near ${level.name} Level`,
                 strength: strength,
-                details: `Price approaching ${nearestLevel.name} Fibonacci level at ${nearestLevel.value.toFixed(2)}`,
-                priority: nearestLevel.importance === 'high' ? 7 : 6
+                details: `Price approaching ${level.name} Fibonacci level at ${level.value.toFixed(2)}`,
+                priority: level.importance === 'high' ? 7 : 6,
+                isEvent: false
             });
+            proximitySignalsGenerated++;
         }
     }
+    
+    // Keep track of nearest level for event-based signals below
+    if (nearestLevel) {
+        // Nearest level already processed above, no need to duplicate
+    }
 
-    // 5. Golden Ratio Proximity (61.8% level)
+    // 5. Golden Ratio Proximity (61.8% level) - Keep as additional signal, not replacement
+    // The "At 61.8% Level" signal above should already be generated if price is within 0.5% or 2%
+    // This is just an additional high-priority signal for the golden ratio
     const goldenLevel = fibLevels.find(level => level.key === '618');
     if (goldenLevel) {
         const goldenDistance = Math.abs(currentPrice - goldenLevel.value) / currentPrice;
         if (goldenDistance < 0.01) { // Within 1% of golden ratio
-            signals.push({
-                type: 'fibonacci',
-                value: 'At Golden Ratio',
-                strength: 85,
-                details: `Price at critical 61.8% Golden Ratio level`,
-                priority: 9
-            });
+            // Check if we already have "At 61.8% Level" signal to avoid duplication
+            const alreadyHas618Signal = signals.some(sig => sig.value === 'At 61.8% Level' || sig.value === 'Near 61.8% Level');
+            if (!alreadyHas618Signal) {
+                signals.push({
+                    type: 'fibonacci',
+                    value: 'At Golden Ratio',
+                    strength: 85,
+                    details: `Price at critical 61.8% Golden Ratio level`,
+                    priority: 9
+                });
+            }
         }
     }
 
@@ -802,13 +980,44 @@ export const evaluateFibonacciCondition = (candle, indicators, index, signalSett
                          signals.push({
                             type: 'fibonacci',
                             value: 'Shallow/Deep Retracement',
-                            strength: 40,
+                            strength: 50,
                             details: `Price near extremes of Fibonacci retracement range (${(normalizedCurrentPrice * 100).toFixed(1)}%)`,
                             priority: 5
                         });
                     }
                 }
             }
+        }
+    }
+
+    // Fallback signal if no zones were processed AND no proximity signals were generated
+    // If proximity signals were generated (even when price is outside zones), we don't need fallback
+    if (signals.length === 0) {
+            // Try one more time: generate a signal based on nearest level distance if reasonable
+            // Use a more lenient threshold (5%) for fallback when price is outside all zones
+            // This ensures we generate signals when price is reasonably close to Fibonacci levels
+            if (nearestLevel && nearestDistance < Infinity) {
+                const proximityRatio = nearestDistance / currentPrice;
+                if (proximityRatio < 0.05) { // Within 5% of nearest level (increased from 3%)
+                    // Scale strength based on distance: closer = stronger signal
+                    const baseStrength = 40;
+                    const distanceStrength = Math.max(25, baseStrength - (proximityRatio * 400)); // 40 at 0%, 25 at 3.75%+
+                    signals.push({
+                        type: 'fibonacci',
+                        value: `Near ${nearestLevel.name} Level`,
+                        strength: Math.round(distanceStrength),
+                        details: `Price near ${nearestLevel.name} Fibonacci level (distance: ${(proximityRatio * 100).toFixed(2)}%)`,
+                        priority: proximityRatio < 0.03 ? 6 : 5 // Higher priority if within 3%
+                    });
+                }
+            }
+        
+        // No fallback signal - return empty array if no signals generated
+        // This is intentional: empty arrays are handled fine by the signal matching logic,
+        // and fallback signals (strength 20) add noise without providing value
+        // Strategies require specific signal values to match, so "No Fibonacci Data" never matches anyway
+        if (signals.length === 0) {
+            // Return empty array - no fallback signal needed
         }
     }
 
@@ -824,7 +1033,18 @@ export const evaluatePivotCondition = (candle, indicators, index, signalSettings
     const signals = [];
     const pivotSettings = signalSettings.pivot || {};
 
+    // Add debug logs
+    if (debugMode && onLog) {
+        //onLog(`[PIVOT_EVAL] Starting evaluation: index=${index}, hasPivots=${!!indicators.pivots}, pivotsType=${typeof indicators.pivots}, isArray=${Array.isArray(indicators.pivots)}`, 'debug');
+        if (indicators.pivots) {
+            //onLog(`[PIVOT_EVAL] Pivots array length=${indicators.pivots.length}, index validity=${index >= 0 && index < indicators.pivots.length}`, 'debug');
+        }
+    }
+
     if (!indicators.pivots || index < 1) {
+        if (debugMode && onLog) {
+            onLog(`[PIVOT_EVAL] ⚠️ Early exit: hasPivots=${!!indicators.pivots}, index=${index}`, 'debug');
+        }
         return signals;
     }
 
@@ -832,8 +1052,22 @@ export const evaluatePivotCondition = (candle, indicators, index, signalSettings
     const currentPrice = candle.close;
     const prevPrice = indicators.data[index - 1]?.close;
 
+    // Add detailed logging
+    if (debugMode && onLog) {
+        //onLog(`[PIVOT_EVAL] Index ${index}: currentPivots isNull=${currentPivots === null}, isUndefined=${currentPivots === undefined}, type=${typeof currentPivots}, isObject=${typeof currentPivots === 'object' && currentPivots !== null}`, 'debug');
+        if (currentPivots && typeof currentPivots === 'object') {
+            //onLog(`[PIVOT_EVAL] Index ${index}: currentPivots keys=${Object.keys(currentPivots).join(', ')}`, 'debug');
+            if (currentPivots.traditional) {
+               // onLog(`[PIVOT_EVAL] Index ${index}: traditional.pivot=${currentPivots.traditional.pivot?.toFixed(2) || 'null'}, traditional.s1=${currentPivots.traditional.s1?.toFixed(2) || 'null'}, traditional.r1=${currentPivots.traditional.r1?.toFixed(2) || 'null'}`, 'debug');
+            }
+        }
+    }
+
     // SAFETY CHECK: Ensure currentPivots is valid
     if (!currentPivots || typeof currentPivots !== 'object') {
+        if (debugMode && onLog) {
+            onLog(`[PIVOT_EVAL] ⚠️ No valid pivot data at index ${index}: currentPivots=${currentPivots}, type=${typeof currentPivots}`, 'debug');
+        }
         // Still provide a baseline signal even if no pivots calculated
         signals.push({
             type: 'pivot',
@@ -849,46 +1083,67 @@ export const evaluatePivotCondition = (candle, indicators, index, signalSettings
     // These provide continuous strength without breaking existing logic
 
     // 1. Price Position Relative to Pivot Point
-    const pivot = currentPivots.pivot || currentPivots.pp;
+    // NOTE: The calculatePivotPoints returns nested structure: currentPivots.traditional.pivot, not currentPivots.pivot
+    // Try to find pivot in nested structure first
+    let pivot = currentPivots.pivot || currentPivots.pp;
+    if (!pivot && currentPivots.traditional) {
+        pivot = currentPivots.traditional.pivot;
+    }
+    if (!pivot && currentPivots.woodie) {
+        pivot = currentPivots.woodie.pivot;
+    }
+    
+    if (debugMode && onLog) {
+        //onLog(`[PIVOT_EVAL] Index ${index}: Looking for pivot value. Found: pivot=${pivot?.toFixed(2) || 'null'}, hasTraditional=${!!currentPivots.traditional}, hasWoodie=${!!currentPivots.woodie}`, 'debug');
+    }
+    
     if (pivot && typeof pivot === 'number') {
         const pivotDistance = Math.abs(currentPrice - pivot) / currentPrice;
         
+        // Always generate position relative to pivot (Above/Below), regardless of distance
+        // This allows strategies to match both "At Pivot Point" AND "Above Pivot" simultaneously
         if (currentPrice > pivot) {
-            if (pivotDistance < 0.005) { // Very close to pivot (within 0.5%)
+            const aboveStrength = pivotDistance < 0.005 
+                ? 70  // When very close, still generate "Above Pivot" but with same strength as "At Pivot Point"
+                : 35 + Math.min(25, (1 / pivotDistance) * 0.05);
+            signals.push({
+                type: 'pivot',
+                value: 'Above Pivot',
+                strength: aboveStrength,
+                details: `Price above pivot point at ${pivot.toFixed(2)}`,
+                priority: 5
+            });
+            
+            // Also generate "At Pivot Point" if very close
+            if (pivotDistance < 0.005) {
                 signals.push({
                     type: 'pivot',
                     value: 'At Pivot Point',
-                    strength: 60,
+                    strength: 70,
                     details: `Price very close to pivot point at ${pivot.toFixed(2)}`,
                     priority: 7
-                });
-            } else {
-                const strength = 35 + Math.min(25, (1 / pivotDistance) * 0.05);
-                signals.push({
-                    type: 'pivot',
-                    value: 'Above Pivot',
-                    strength: strength,
-                    details: `Price above pivot point at ${pivot.toFixed(2)}`,
-                    priority: 5
                 });
             }
         } else {
-            if (pivotDistance < 0.005) { // Very close to pivot (within 0.5%)
+            const belowStrength = pivotDistance < 0.005
+                ? 70  // When very close, still generate "Below Pivot" but with same strength as "At Pivot Point"
+                : 35 + Math.min(25, (1 / pivotDistance) * 0.05);
+            signals.push({
+                type: 'pivot',
+                value: 'Below Pivot',
+                strength: belowStrength,
+                details: `Price below pivot point at ${pivot.toFixed(2)}`,
+                priority: 5
+            });
+            
+            // Also generate "At Pivot Point" if very close
+            if (pivotDistance < 0.005) {
                 signals.push({
                     type: 'pivot',
                     value: 'At Pivot Point',
-                    strength: 60,
+                    strength: 70,
                     details: `Price very close to pivot point at ${pivot.toFixed(2)}`,
                     priority: 7
-                });
-            } else {
-                const strength = 35 + Math.min(25, (1 / pivotDistance) * 0.05);
-                signals.push({
-                    type: 'pivot',
-                    value: 'Below Pivot',
-                    strength: strength,
-                    details: `Price below pivot point at ${pivot.toFixed(2)}`,
-                    priority: 5
                 });
             }
         }
@@ -897,52 +1152,105 @@ export const evaluatePivotCondition = (candle, indicators, index, signalSettings
     // 2. Support/Resistance Level Proximity
     const levels = [];
     
-    // Safely extract all pivot levels
-    if (currentPivots.s1 && typeof currentPivots.s1 === 'number') levels.push({ level: currentPivots.s1, type: 'S1' });
-    if (currentPivots.s2 && typeof currentPivots.s2 === 'number') levels.push({ level: currentPivots.s2, type: 'S2' });
-    if (currentPivots.s3 && typeof currentPivots.s3 === 'number') levels.push({ level: currentPivots.s3, type: 'S3' });
-    if (currentPivots.r1 && typeof currentPivots.r1 === 'number') levels.push({ level: currentPivots.r1, type: 'R1' });
-    if (currentPivots.r2 && typeof currentPivots.r2 === 'number') levels.push({ level: currentPivots.r2, type: 'R2' });
-    if (currentPivots.r3 && typeof currentPivots.r3 === 'number') levels.push({ level: currentPivots.r3, type: 'R3' });
+    // Safely extract all pivot levels - check nested structure first
+    // Traditional pivot levels
+    const traditional = currentPivots.traditional || {};
+    if (traditional.s1 && typeof traditional.s1 === 'number') levels.push({ level: traditional.s1, type: 'S1' });
+    if (traditional.s2 && typeof traditional.s2 === 'number') levels.push({ level: traditional.s2, type: 'S2' });
+    if (traditional.s3 && typeof traditional.s3 === 'number') levels.push({ level: traditional.s3, type: 'S3' });
+    if (traditional.r1 && typeof traditional.r1 === 'number') levels.push({ level: traditional.r1, type: 'R1' });
+    if (traditional.r2 && typeof traditional.r2 === 'number') levels.push({ level: traditional.r2, type: 'R2' });
+    if (traditional.r3 && typeof traditional.r3 === 'number') levels.push({ level: traditional.r3, type: 'R3' });
+    
+    // Fallback to flat structure if nested not found
+    if (levels.length === 0) {
+        if (currentPivots.s1 && typeof currentPivots.s1 === 'number') levels.push({ level: currentPivots.s1, type: 'S1' });
+        if (currentPivots.s2 && typeof currentPivots.s2 === 'number') levels.push({ level: currentPivots.s2, type: 'S2' });
+        if (currentPivots.s3 && typeof currentPivots.s3 === 'number') levels.push({ level: currentPivots.s3, type: 'S3' });
+        if (currentPivots.r1 && typeof currentPivots.r1 === 'number') levels.push({ level: currentPivots.r1, type: 'R1' });
+        if (currentPivots.r2 && typeof currentPivots.r2 === 'number') levels.push({ level: currentPivots.r2, type: 'R2' });
+        if (currentPivots.r3 && typeof currentPivots.r3 === 'number') levels.push({ level: currentPivots.r3, type: 'R3' });
+    }
+    
+    if (debugMode && onLog) {
+        //onLog(`[PIVOT_EVAL] Index ${index}: Extracted ${levels.length} levels: ${levels.map(l => `${l.type}=${l.level.toFixed(2)}`).join(', ') || 'none'}`, 'debug');
+    }
 
-    // Find nearest pivot level
-    let nearestLevel = null;
-    let nearestDistance = Infinity;
+    // Generate signals for ALL nearby levels (within 3%), not just the nearest one
+    // This allows strategies to match multiple pivot signals simultaneously (e.g., "Near R1" AND "Near R3")
+    const nearbyLevels = [];
     
     for (const levelData of levels) {
         const distance = Math.abs(currentPrice - levelData.level);
-        if (distance < nearestDistance) {
-            nearestDistance = distance;
-            nearestLevel = levelData;
+        const proximityRatio = distance / currentPrice;
+        
+        if (proximityRatio < 0.03) { // Within 3% of this level
+            nearbyLevels.push({
+                ...levelData,
+                distance,
+                proximityRatio
+            });
         }
     }
-
-    if (nearestLevel) {
-        const proximityRatio = nearestDistance / currentPrice;
+    
+    // Sort by distance (nearest first) to prioritize closer levels
+    nearbyLevels.sort((a, b) => a.distance - b.distance);
+    
+    // Generate signals for all nearby levels
+    for (const levelData of nearbyLevels) {
+        const { type, level, proximityRatio } = levelData;
         
-        if (proximityRatio < 0.01) { // Very close to pivot level (within 1%)
-            const strength = 65 + Math.min(25, (0.01 - proximityRatio) * 5000);
+        if (proximityRatio < 0.01) { // Very close (within 1%)
+            // Generate both "At" and "Near" signals
+            const atStrength = 65 + Math.min(25, (0.01 - proximityRatio) * 5000);
             signals.push({
                 type: 'pivot',
-                value: `At ${nearestLevel.type} Level`,
-                strength: strength,
-                details: `Price very close to ${nearestLevel.type} level at ${nearestLevel.level.toFixed(2)}`,
+                value: `At ${type}`,
+                strength: atStrength,
+                details: `Price very close to ${type} level at ${level.toFixed(2)}`,
                 priority: 8
             });
-        } else if (proximityRatio < 0.03) { // Near pivot level (within 3%)
+            
+            // Also generate "Near" signal with slightly lower strength
+            const nearStrength = 60 + Math.min(15, (0.01 - proximityRatio) * 3000);
+            signals.push({
+                type: 'pivot',
+                value: `Near ${type}`,
+                strength: nearStrength,
+                details: `Price approaching ${type} level at ${level.toFixed(2)}`,
+                priority: 6
+            });
+        } else { // Near but not very close (1-3%)
             const strength = 45 + Math.min(20, (0.03 - proximityRatio) * 1000);
             signals.push({
                 type: 'pivot',
-                value: `Near ${nearestLevel.type} Level`,
+                value: `Near ${type}`,
                 strength: strength,
-                details: `Price approaching ${nearestLevel.type} level at ${nearestLevel.level.toFixed(2)}`,
+                details: `Price approaching ${type} level at ${level.toFixed(2)}`,
                 priority: 6
             });
-        } else {
+        }
+    }
+    
+    // If no nearby levels, generate "Away from" signal for the nearest level
+    if (nearbyLevels.length === 0 && levels.length > 0) {
+        let nearestLevel = null;
+        let nearestDistance = Infinity;
+        
+        for (const levelData of levels) {
+            const distance = Math.abs(currentPrice - levelData.level);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestLevel = levelData;
+            }
+        }
+        
+        if (nearestLevel) {
+            const proximityRatio = nearestDistance / currentPrice;
             const strength = 25 + Math.min(15, (1 / proximityRatio) * 0.1);
             signals.push({
                 type: 'pivot',
-                value: `Away from ${nearestLevel.type} Level`,
+                value: `Away from ${nearestLevel.type}`,
                 strength: strength,
                 details: `Price away from ${nearestLevel.type} level at ${nearestLevel.level.toFixed(2)}`,
                 priority: 4
@@ -1020,6 +1328,22 @@ export const evaluatePivotCondition = (candle, indicators, index, signalSettings
 
     // --- Event-Based Signals (Existing Logic) ---
     // Preserve ALL existing event-based signals for backtesting compatibility
+
+    // Calculate nearestLevel for event-based signals (use first from nearbyLevels if available, or find from all levels)
+    let nearestLevel = null;
+    if (nearbyLevels.length > 0) {
+        nearestLevel = nearbyLevels[0]; // Already sorted by distance, nearest first
+    } else if (levels.length > 0) {
+        // Find nearest level from all levels
+        let nearestDistance = Infinity;
+        for (const levelData of levels) {
+            const distance = Math.abs(currentPrice - levelData.level);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestLevel = levelData;
+            }
+        }
+    }
 
     // Pivot Level Touch Events
     if (nearestLevel && Math.abs(currentPrice - nearestLevel.level) / currentPrice < 0.005) {

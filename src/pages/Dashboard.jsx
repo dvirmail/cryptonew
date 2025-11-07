@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, TrendingUp, TrendingDown } from "lucide-react";
 import PerformanceMetrics from "@/components/dashboard/PerformanceMetrics";
@@ -27,22 +27,35 @@ export default function Dashboard() {
     });
 
     // --- Data Fetching ---
-    useEffect(() => {
-        const fetchRecentTrades = async () => {
-            try {
-                setTradesLoading(true);
-                const tradesData = await queueEntityCall('Trade', 'list', '-exit_timestamp', 10);
-                setRecentTrades(tradesData || []);
-            } catch (err) {
-                console.error("Error fetching recent trades:", err);
-                setError("Failed to load recent trades.");
-            } finally {
-                setTradesLoading(false);
-            }
-        };
-
-        fetchRecentTrades();
+    const fetchRecentTrades = useCallback(async () => {
+        try {
+            setTradesLoading(true);
+            const tradesData = await queueEntityCall('Trade', 'list', '-exit_timestamp', 10);
+            setRecentTrades(tradesData || []);
+        } catch (err) {
+            console.error("Error fetching recent trades:", err);
+            setError("Failed to load recent trades.");
+        } finally {
+            setTradesLoading(false);
+        }
     }, []);
+
+    useEffect(() => {
+        fetchRecentTrades();
+    }, [fetchRecentTrades]);
+
+    // Listen for global trade data refresh events
+    useEffect(() => {
+        const handleTradeRefresh = () => {
+            console.log('[Dashboard] 🔄 Received tradeDataRefresh event, refreshing recent trades...');
+            fetchRecentTrades();
+        };
+        
+        window.addEventListener('tradeDataRefresh', handleTradeRefresh);
+        return () => {
+            window.removeEventListener('tradeDataRefresh', handleTradeRefresh);
+        };
+    }, [fetchRecentTrades]);
 
     // --- Memoized Values & Calculations ---
     const overallPnl = (totalRealizedPnl || 0) + (unrealizedPnl || 0);

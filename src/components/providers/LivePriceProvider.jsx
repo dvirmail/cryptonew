@@ -51,12 +51,14 @@ export const LivePriceProvider = ({ children }) => {
 
             if (priceArray) {
                 const newPricesForState = {}; // This is for the new 'prices' state variable
+                const missingSymbols = [];
+                
                 setPriceData(prevData => {
                     const updatedPriceData = { ...prevData }; // Start with existing data
                     priceArray.forEach(item => {
                         const symbol = item.symbol.replace('/', '');
                         const price = parseFloat(item.price);
-                        if (price !== null && !isNaN(price)) {
+                        if (price !== null && !isNaN(price) && price > 0) {
                             // This structure is explicitly defined by the outline for newPriceData.
                             // Now includes 24h change data from Binance API
                             updatedPriceData[symbol] = {
@@ -68,9 +70,27 @@ export const LivePriceProvider = ({ children }) => {
                             newPricesForState[symbol] = price;
                         }
                     });
+                    
+                    // Check for missing symbols (subscribed but not in response)
+                    subscribedSymbolsRef.current.forEach(subscribedSymbol => {
+                        if (!newPricesForState[subscribedSymbol] && !updatedPriceData[subscribedSymbol]?.price) {
+                            missingSymbols.push(subscribedSymbol);
+                        }
+                    });
+                    
                     setPrices(prev => ({ ...prev, ...newPricesForState })); // Update the new `prices` state
                     return updatedPriceData; // Update the `priceData` state
                 });
+                
+                // Log missing symbols for debugging (especially KSM and AAVE)
+                if (missingSymbols.length > 0) {
+                    const ksmAaveMissing = missingSymbols.filter(s => s.includes('KSM') || s.includes('AAVE'));
+                    if (ksmAaveMissing.length > 0) {
+                        console.warn(`[LivePriceProvider] ⚠️ Missing prices for KSM/AAVE symbols:`, ksmAaveMissing);
+                        console.warn(`[LivePriceProvider] ⚠️ Subscribed symbols:`, Array.from(subscribedSymbolsRef.current));
+                        console.warn(`[LivePriceProvider] ⚠️ Received prices:`, priceArray.map(i => i.symbol));
+                    }
+                }
             } else {
                 console.warn('[LivePriceProvider] Invalid response format:', response?.data);
             }

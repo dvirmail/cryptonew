@@ -1,6 +1,7 @@
 
 import { get, isNumber, isNil } from 'lodash';
 import { getUniqueSignals, applyRegimeAdjustment } from './signalUtils';
+import { detectAdvancedDivergence } from './divergenceUtils';
 
 // --- START: GENERIC UTILITIES ---
 
@@ -237,6 +238,70 @@ export const evaluateMacdCondition = (candle, indicators, index, signalSettings,
             details: `MACD line crossed below Signal line`,
             priority: 9
         });
+    }
+
+    // ✅ Phase 1: MACD Histogram Divergence Detection
+    try {
+        if (index >= 50 && indicators.data && indicators.macd) {
+            // Extract price data (close prices)
+            const priceData = indicators.data.slice(0, index + 1).map(c => c.close);
+            
+            // Extract histogram data
+            const histogramData = indicators.macd.slice(0, index + 1).map(m => {
+                if (m && typeof m === 'object' && isNumber(m.histogram)) {
+                    return m.histogram;
+                }
+                return null;
+            }).filter(v => v !== null && isNumber(v));
+            
+            if (priceData.length >= 50 && histogramData.length >= 50 && histogramData.length === priceData.length) {
+                const divergence = detectAdvancedDivergence(
+                    priceData,
+                    histogramData,
+                    index,
+                    {
+                        lookbackPeriod: 50,
+                        minPeakDistance: 5,
+                        maxPeakDistance: 60,
+                        pivotLookback: 5,
+                        minPriceMove: 0.02, // 2% minimum price move
+                        minOscillatorMove: 0.0001 // MACD histogram uses very small values
+                    }
+                );
+                
+                if (divergence) {
+                    // Map divergence type to canonical signal value
+                    // Note: detectAdvancedDivergence returns type like "Regular Bullish Divergence" (with spaces)
+                    let signalValue = '';
+                    if (divergence.type === 'Regular Bullish Divergence' || divergence.type?.includes('Regular Bullish')) {
+                        signalValue = 'MACD Histogram Regular Bullish Divergence';
+                    } else if (divergence.type === 'Regular Bearish Divergence' || divergence.type?.includes('Regular Bearish')) {
+                        signalValue = 'MACD Histogram Regular Bearish Divergence';
+                    } else if (divergence.type === 'Hidden Bullish Divergence' || divergence.type?.includes('Hidden Bullish')) {
+                        signalValue = 'MACD Histogram Hidden Bullish Divergence';
+                    } else if (divergence.type === 'Hidden Bearish Divergence' || divergence.type?.includes('Hidden Bearish')) {
+                        signalValue = 'MACD Histogram Hidden Bearish Divergence';
+                    }
+                    
+                    if (signalValue) {
+                        signals.push({
+                            type: 'MACD',
+                            value: signalValue,
+                            strength: applyRegimeAdjustment(divergence.strength + 5, marketRegime, 'macd'),
+                            details: divergence.description || `MACD Histogram ${divergence.type} divergence detected`,
+                            priority: 10, // High priority for divergence signals
+                            isEvent: true,
+                            candle: index
+                        });
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        // Silently fail - divergence detection is optional enhancement
+        if (debugMode && onLog) {
+            onLog(`[MACD] Divergence detection error: ${error.message}`, 'warning');
+        }
     }
 
     return getUniqueSignals(signals).map(s => ({ ...s, type: 'MACD', strength: Math.min(100, Math.max(0, s.strength)), candle: index }));
@@ -709,7 +774,7 @@ export const evaluateAdxCondition = (candle, indicators, index, signalSettings, 
 
     // 1. Trend Strength State
     if (ADX >= 25) {
-        const strength = 50 + Math.min(30, (ADX - 25) * 2);
+        const strength = 60 + Math.min(30, (ADX - 25) * 2);
         signals.push({
             type: 'adx',
             value: 'Strong Trend',

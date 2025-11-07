@@ -29,7 +29,7 @@ import {
   Globe // NEW: Import icon for "All" filter
 } from "lucide-react";
 import { format } from "date-fns";
-import { processMatches, filterMatchesByBestCombination } from '@/components/backtesting/core/backtestProcessor';
+import { processMatches, filterMatchesByBestCombination, classifyStrategyAsEventDriven } from '@/components/backtesting/core/backtestProcessor';
 import { runBacktestForCoin } from '@/components/backtesting/core/BacktestRunner'; // New import
 
 import BacktestSummary from "../components/backtesting/BacktestSummary";
@@ -52,6 +52,7 @@ import {
 import { validateCombinationSignals, logValidationIssues } from '../components/utils/signalValidation';
 import { evaluateSignalCondition, initializeRegimeTracker, logRegimeStatistics } from '@/components/utils/signalLogic';
 import { queueEntityCall } from "@/components/utils/apiQueue";
+// import { saveBacktestTradesBatch } from '@/components/backtesting/core/backtestTradeSaver'; // Disabled - backtest trades not saved to database
 import {
   Dialog,
   DialogContent,
@@ -67,7 +68,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Switch } from "@/components/ui/switch"; // NEW: Import Switch
+import { Switch } from "@/components/ui/switch";
 
 // FIX: Import the canonical signal settings to ensure all signals are available.
 import { defaultSignalSettings as defaultInternalSignalSettings } from '@/components/utils/signalSettings';
@@ -547,16 +548,65 @@ export default function Backtesting() {
     );
 
     logCallback(`[BACKTESTING] Identified ${processedCombinations.length} unique combinations.`, 'info');
+    
+    // DEBUG: Check if analytics fields are present in processedCombinations
+    if (processedCombinations.length > 0) {
+      const firstCombo = processedCombinations[0];
+      console.log('[Backtesting.jsx] 🔍 CHECK - First processedCombo analytics fields:', {
+        hasMaxDrawdownPercent: firstCombo.maxDrawdownPercent !== undefined,
+        maxDrawdownPercent: firstCombo.maxDrawdownPercent,
+        hasAvgWinPercent: firstCombo.avgWinPercent !== undefined,
+        avgWinPercent: firstCombo.avgWinPercent,
+        hasMaxConsecutiveWins: firstCombo.maxConsecutiveWins !== undefined,
+        maxConsecutiveWins: firstCombo.maxConsecutiveWins,
+        hasRegimePerformance: firstCombo.regimePerformance !== undefined,
+        regimePerformanceType: typeof firstCombo.regimePerformance,
+        allAnalyticsKeys: Object.keys(firstCombo).filter(k => 
+          k.includes('Drawdown') || k.includes('Win') || k.includes('Consecutive') || 
+          k.includes('regime') || k.includes('Performance') || k.includes('Time') || k.includes('Trades')
+        )
+      });
+    }
 
     // Step 2: Filter combinations by minProfitFactor
     const combinationsMeetingProfitFactor = processedCombinations.filter(combo =>
       typeof combo.profitFactor === 'number' && combo.profitFactor >= minProfitFactor
     );
+    
+    // DIAGNOSTIC: Log PF distribution to understand why many strategies hit the cap
+    const pfDistribution = {
+      capped: combinationsMeetingProfitFactor.filter(c => c.profitFactor >= 20.0).length,
+      high: combinationsMeetingProfitFactor.filter(c => c.profitFactor >= 15.0 && c.profitFactor < 20.0).length,
+      medium: combinationsMeetingProfitFactor.filter(c => c.profitFactor >= 5.0 && c.profitFactor < 15.0).length,
+      low: combinationsMeetingProfitFactor.filter(c => c.profitFactor >= minProfitFactor && c.profitFactor < 5.0).length,
+      zeroLoss: combinationsMeetingProfitFactor.filter(c => c.grossLoss === 0).length
+    };
+    console.log('[PF_DISTRIBUTION] 📊 Profit Factor Distribution:');
+    console.log('[PF_DISTRIBUTION]   - Capped at 20.0:', pfDistribution.capped, `(${(pfDistribution.capped / combinationsMeetingProfitFactor.length * 100).toFixed(1)}%)`);
+    console.log('[PF_DISTRIBUTION]   - High (15-20):', pfDistribution.high);
+    console.log('[PF_DISTRIBUTION]   - Medium (5-15):', pfDistribution.medium);
+    console.log('[PF_DISTRIBUTION]   - Low (1-5):', pfDistribution.low);
+    console.log('[PF_DISTRIBUTION]   - Zero Loss Strategies:', pfDistribution.zeroLoss);
+    
     logCallback(`[BACKTESTING] ${combinationsMeetingProfitFactor.length} combinations meet min profit factor (${minProfitFactor}).`, 'info');
+    
+    console.log('[PROCESS_ALL_DEBUG] 📊 After processMatches:');
+    console.log('[PROCESS_ALL_DEBUG]   - Total processed combinations:', processedCombinations.length);
+    console.log('[PROCESS_ALL_DEBUG]   - Combinations meeting profit factor:', combinationsMeetingProfitFactor.length);
+    console.log('[PROCESS_ALL_DEBUG]   - Raw matches count:', allRawMatches.length);
+    console.log('[PROCESS_ALL_DEBUG]   - Reduction from raw matches:', `${((1 - processedCombinations.length / allRawMatches.length) * 100).toFixed(1)}%`);
+    console.log('[PROCESS_ALL_DEBUG]   - Reduction from processed to profit factor:', `${((1 - combinationsMeetingProfitFactor.length / processedCombinations.length) * 100).toFixed(1)}%`);
 
     // Step 3: Identify the best combination for each raw match point
     const finalFilteredMatches = filterMatchesByBestCombination(allRawMatches, combinationsMeetingProfitFactor);
     logCallback(`[BACKTESTING] Final filtered optimal strategy events: ${finalFilteredMatches.length}`, 'info');
+    
+    console.log('[PROCESS_ALL_DEBUG] 📊 After filterMatchesByBestCombination:');
+    console.log('[PROCESS_ALL_DEBUG]   - Final filtered matches:', finalFilteredMatches.length);
+    
+    // Count unique combination names in finalFilteredMatches
+    const uniqueInFiltered = new Set(finalFilteredMatches.map(m => m.combinationName));
+    console.log('[PROCESS_ALL_DEBUG]   - Unique combination names in filtered matches:', uniqueInFiltered.size);
 
     // Step 4: Align combinations to only include those present in finalFilteredMatches
     const optimalCombinationNames = new Set(finalFilteredMatches.map(match => match.combinationName));
@@ -567,7 +617,7 @@ export default function Backtesting() {
     logCallback(`[BACKTESTING] DEBUG: optimalCombinationNames size: ${optimalCombinationNames.size}`, 'debug');
     
     // FIX: Handle regime-aware mode where combination names have (DOWNTREND) suffixes
-    const finalCombinationsWithMeta = combinationsMeetingProfitFactor.filter(combo => {
+    let finalCombinationsWithMeta = combinationsMeetingProfitFactor.filter(combo => {
       // Check exact match first
       if (optimalCombinationNames.has(combo.combinationName)) {
         return true;
@@ -578,7 +628,22 @@ export default function Backtesting() {
       return optimalCombinationNames.has(baseName);
     });
     
+    // OPTIONAL: Limit results if desired - higher filters might find more diverse strategies
+    // This is actually GOOD (more diverse = better), but if you want fewer results, uncomment:
+    // const MAX_RESULTS = 100; // Adjust as needed
+    // if (finalCombinationsWithMeta.length > MAX_RESULTS) {
+    //   finalCombinationsWithMeta = finalCombinationsWithMeta
+    //     .sort((a, b) => (b.profitabilityScore || 0) - (a.profitabilityScore || 0))
+    //     .slice(0, MAX_RESULTS);
+    //   logCallback(`[BACKTESTING] Limited results to top ${MAX_RESULTS} strategies by profitability score.`, 'info');
+    // }
+    
     logCallback(`[BACKTESTING] Final unique high-quality strategies: ${finalCombinationsWithMeta.length}`, 'success');
+    
+    console.log('[PROCESS_ALL_DEBUG] 🎯 FINAL processAllResults output:');
+    console.log('[PROCESS_ALL_DEBUG]   - finalCombinationsWithMeta count:', finalCombinationsWithMeta.length);
+    console.log('[PROCESS_ALL_DEBUG]   - finalMatches count:', finalFilteredMatches.length);
+    console.log('[PROCESS_ALL_DEBUG]   - This is what gets returned to Backtesting.jsx');
 
     return {
       finalCombinations: finalCombinationsWithMeta,
@@ -595,27 +660,45 @@ export default function Backtesting() {
     }
 
     let filtered = [...signalCombinations];
+    const initialCount = filtered.length;
 
     // Apply signal type filter
     if (signalTypeFilter === 'events') {
+      const beforeCount = filtered.length;
       filtered = filtered.filter(combo => combo.signals && combo.signals.some(signal => classifySignalType(signal)));
+      if (beforeCount !== filtered.length) {
+        console.log('[FILTER_SIGNAL_TYPE] 📊 Signal type filter (events):', beforeCount, '→', filtered.length);
+      }
     } else if (signalTypeFilter === 'states') {
+      const beforeCount = filtered.length;
       filtered = filtered.filter(combo => combo.signals && combo.signals.every(signal => !classifySignalType(signal)));
+      if (beforeCount !== filtered.length) {
+        console.log('[FILTER_SIGNAL_TYPE] 📊 Signal type filter (states):', beforeCount, '→', filtered.length);
+      }
     }
 
     // NEW: Apply dominant regime filter
     if (regimeFilter !== 'all') {
+      const beforeCount = filtered.length;
       filtered = filtered.filter(combo => combo.dominantMarketRegime === regimeFilter);
+      if (beforeCount !== filtered.length) {
+        console.log('[FILTER_REGIME] 📊 Regime filter:', beforeCount, '→', filtered.length, `(filter: ${regimeFilter})`);
+      }
+    }
+
+    if (initialCount !== filtered.length) {
+      console.log('[FILTER_SUMMARY] 📊 Total filtering summary:', initialCount, '→', filtered.length);
     }
 
     return filtered;
   }, [signalCombinations, signalTypeFilter, regimeFilter, classifySignalType]);
 
+  // Removed automatic filtering - only user-configured filters apply
+  // This now returns all combinations that passed user filters (minProfitFactor, minAveragePriceMove, signalType, regime)
   const profitableCombinations = useMemo(() => {
     if (!filteredSignalCombinations) return [];
-    return filteredSignalCombinations.filter(combo =>
-      combo.successRate > 50 && combo.occurrences > 1
-    );
+    // Return all filtered combinations - no additional automatic filtering
+    return filteredSignalCombinations;
   }, [filteredSignalCombinations]);
 
   // NEW: Safe formatter to prevent toFixed errors
@@ -927,14 +1010,50 @@ export default function Backtesting() {
 
     try {
       const combinationsToCreate = [];
+      
       for (const result of signalCombinations) {
+        const combinationName = result.combinationName || generateCombinationName(result.signals);
+        // Determine if strategy is event-driven based on signals
+        // Use the classification from the result if available, otherwise calculate it
+        const isEventDriven = (result.isEventDrivenStrategy !== undefined)
+          ? result.isEventDrivenStrategy
+          : (result.is_event_driven_strategy !== undefined)
+          ? result.is_event_driven_strategy
+          : classifyStrategyAsEventDriven(result.signals || []);
+        
+        // ✅ Phase 1: Normalize signals before saving
+        const normalizeSignalsForSave = (signals) => {
+            return (signals || []).map(signal => {
+                // Ensure consistent structure
+                return {
+                    type: signal.type || '',
+                    value: signal.value || signal.type || '',
+                    strength: signal.strength || 0,
+                    isEvent: signal.isEvent !== undefined ? signal.isEvent : 
+                             (signal.value && signal.value.toLowerCase().includes('divergence'))
+                };
+            }).filter(s => s.type && s.value); // Remove invalid signals
+        };
+
+        // Ensure occurrences is properly captured and validated
+        const occurrences = result.occurrences !== undefined && result.occurrences !== null
+          ? parseInt(result.occurrences)
+          : (result.matches && Array.isArray(result.matches) ? result.matches.length : 0);
+        
+        console.log('[Backtesting] 💾 Saving combination:', {
+          combinationName: combinationName,
+          occurrences: occurrences,
+          occurrencesSource: result.occurrences !== undefined ? 'direct' : result.matches ? 'from matches.length' : 'default (0)',
+          successRate: result.successRate || 0
+        });
+        
         const combinationData = {
-          coin: result.coin, timeframe: result.timeframe, signals: result.signals || [],
+          coin: result.coin, timeframe: result.timeframe, signals: normalizeSignalsForSave(result.signals),
           signalCount: result.signals?.length || 0, combinedStrength: result.combinedStrength || (result.signals?.reduce((sum, signal) => sum + (signal.strength || 0), 0) || 0),
-          successRate: result.successRate || 0, occurrences: result.occurrences || 0,
+          successRate: result.successRate || 0, occurrences: occurrences,
           occurrenceDates: result.matches?.map(m => m.time) || [], avgPriceMove: result.netAveragePriceMove || 0,
           recommendedTradingStrategy: '', includedInScanner: false,
-          combinationName: result.combinationName || generateCombinationName(result.signals),
+          combinationName: combinationName,
           takeProfitPercentage: 5,
           stopLossPercentage: 2,
           positionSizePercentage: 1,
@@ -942,6 +1061,7 @@ export default function Backtesting() {
           strategyDirection: "long",
           enableTrailingTakeProfit: false,
           trailingStopPercentage: 0,
+          is_event_driven_strategy: isEventDriven,
         };
 
         const validation = validateCombinationSignals(combinationData);
@@ -1151,6 +1271,11 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
     // Global processing of all collected results
     setBacktestOverallProgress({ overall: 90, currentCoin: "", coinProgress: 0, stage: "Consolidating and processing all results..." });
     const { finalCombinations: allFinalCombinations, finalMatches, historicalDataForChart, debugData } = processAllResults(allCoinResults, logCallback);
+    
+    console.log('[UI_COUNT_DEBUG] 📊 After processAllResults:');
+    console.log('[UI_COUNT_DEBUG]   - minCombinedStrength setting:', minCombinedStrength);
+    console.log('[UI_COUNT_DEBUG]   - Final combinations count:', allFinalCombinations.length);
+    console.log('[UI_COUNT_DEBUG]   - Final matches count:', finalMatches.length);
 
     // NEW: Apply Minimum Average Price Move filter
     logCallback(`[BACKTESTING] Applying Minimum Average Price Move filter (>= ${minAveragePriceMove}%)`, 'info');
@@ -1172,6 +1297,12 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
         }
         return passes;
     });
+    
+    console.log('[FILTER_AVG_MOVE] 📊 minAveragePriceMove filter:');
+    console.log('[FILTER_AVG_MOVE]   - Input combinations:', allFinalCombinations.length);
+    console.log('[FILTER_AVG_MOVE]   - minAveragePriceMove threshold:', minAveragePriceMove);
+    console.log('[FILTER_AVG_MOVE]   - Passed filter:', finalCombinations.length);
+    console.log('[FILTER_AVG_MOVE]   - Filtered out:', allFinalCombinations.length - finalCombinations.length);
     
     if (allFinalCombinations.length !== finalCombinations.length) {
         logCallback(`[BACKTESTING] ${finalCombinations.length}/${allFinalCombinations.length} combinations passed the avg. move filter.`, 'success');
@@ -1220,7 +1351,20 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
       setSignalCombinations(finalCombinations);
       setAllRawMatchesFromEngine(finalMatches);
       setSignalMatches(finalMatches);
+      
+      console.log('[UI_COUNT_DEBUG] 🎯 FINAL UI STATE:');
+      console.log('[UI_COUNT_DEBUG]   - minCombinedStrength:', minCombinedStrength);
+      console.log('[UI_COUNT_DEBUG]   - signalCombinations count (setSignalCombinations):', finalCombinations.length);
+      console.log('[UI_COUNT_DEBUG]   - This is what gets passed to filteredSignalCombinations useMemo');
+      console.log('[UI_COUNT_DEBUG]   - Note: Additional filtering will happen in useMemo hooks (signal type, regime, profitable)');
 
+      // Backtest trades are NOT saved to database - results are shown in UI only
+      // To enable saving, uncomment the code below and import saveBacktestTradesBatch
+      /*
+      if (finalMatches.length > 0 && finalCombinations.length > 0) {
+        // Save backtest trades code would go here
+      }
+      */
 
       let initialFilteredCount = finalCombinations.length;
       if (signalTypeFilter === 'events') {
@@ -1842,6 +1986,7 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
                     </div>
                   </div>
                 </div>
+
             </CardContent>
           </Card>
 
@@ -1893,6 +2038,7 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
                 getPandasTaSignalType={getPandasTaSignalType}
                 minProfitFactor={minProfitFactor}
                 selectedCoins={selectedCoins}
+                isBacktestRunning={loading}
               />
             </div>
             {signalCombinations.length > 0 && !loading && (
@@ -2003,14 +2149,14 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
                   />
                   <Card>
                       <CardHeader>
-                          <CardTitle>Profitable Combinations ({profitableCombinations.length})</CardTitle>
+                          <CardTitle>Filtered Combinations ({profitableCombinations.length})</CardTitle>
                           <CardDescription>
-                              Combinations with over 50% success rate and more than 1 occurrence.
+                              Combinations that passed all configured filters (minProfitFactor, minAveragePriceMove, signal type, regime).
                           </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-4 max-h-[600px] overflow-y-auto">
                           {profitableCombinations.length === 0 ? (
-                            <p className="text-center text-muted-foreground py-4">No profitable combinations found based on current criteria (success rate &gt; 50%, occurrences &gt; 1).</p>
+                            <p className="text-center text-muted-foreground py-4">No combinations found that pass all configured filters.</p>
                           ) : (
                               profitableCombinations.map((combo, index) => (
                                   <div key={index} className="border p-4 rounded-lg space-y-2">
@@ -2063,6 +2209,7 @@ Memory Cleanup Hint: Every ~${(PERFORMANCE_CONFIG.MEMORY_CLEANUP_INTERVAL / 1000
                               getPandasTaSignalType={getPandasTaSignalType}
                               minProfitFactor={minProfitFactor}
                               selectedCoins={selectedCoins}
+                              isBacktestRunning={loading}
                           />
                       </CardFooter>
                   </Card>

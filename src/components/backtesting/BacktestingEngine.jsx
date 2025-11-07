@@ -3,7 +3,7 @@ import { calculateAllIndicators } from '../utils/indicatorManager';
 import { get } from 'lodash';
 import MarketRegimeDetector from '@/components/utils/MarketRegimeDetector';
 import SignalWeightCalculator from './core/SignalWeightCalculator';
-import { AdvancedSignalStrengthCalculator } from './core/AdvancedSignalStrengthCalculator';
+import { calculateUnifiedCombinedStrength } from '../utils/unifiedStrengthCalculator';
 
 class BacktestingEngine {
   constructor({
@@ -51,9 +51,6 @@ class BacktestingEngine {
     
     // Initialize signal weight calculator
     this.signalWeightCalculator = new SignalWeightCalculator();
-    
-    // Initialize advanced signal strength calculator for Step 4
-    this.advancedSignalStrengthCalculator = new AdvancedSignalStrengthCalculator();
     
     
     this.allMatches = []; 
@@ -184,18 +181,26 @@ class BacktestingEngine {
     
     while (true) {
         const combination = indices.map(i => signals[i]);
-        // Use advanced signal strength calculator for comprehensive scoring
-        const advancedResult = this.advancedSignalStrengthCalculator.calculateAdvancedCombinedStrength(
+        // Use unified calculator for consistent scoring (same as autoscanner)
+        const result = calculateUnifiedCombinedStrength(
           combination, 
-          regimeType, 
-          regimeConfidence,
-          { 
-            marketVolatility: this.getMarketVolatility(),
-            trendStrength: this.getTrendStrength(),
-            volumeProfile: this.getVolumeProfile()
+          {
+            marketRegime: regimeType,
+            regimeConfidence: regimeConfidence,
+            marketContext: { 
+              marketVolatility: this.getMarketVolatility(),
+              trendStrength: this.getTrendStrength(),
+              volumeProfile: this.getVolumeProfile()
+            },
+            useAdvancedFeatures: true,
+            useSimpleRegimeMultiplier: false,
+            context: 'BACKTEST' // Explicitly mark as backtest for correlation logging
           }
         );
-        const combinedStrength = advancedResult.totalStrength;
+        const combinedStrength = result.totalStrength;
+        
+        // DEBUG: Only log summary stats, not individual combinations
+        // (Removed per-combination logging to prevent console flooding)
         
         if (combinedStrength >= this.settings.minCombinedStrength) {
             const candle = this.historicalData[candleIndex];
@@ -227,8 +232,12 @@ class BacktestingEngine {
         
         if (i < 0) break;
 
-        if (combinations.length > 100) break;
-
+        // REMOVED: 100 combination limit was causing incorrect filtering behavior
+        // When minCombinedStrength was lower, it hit the limit early and stopped exploring
+        // When minCombinedStrength was higher, it explored more combinations before hitting limit
+        // This caused higher filters to find MORE strategies, which is backwards
+        // Now we explore all combinations and let the minCombinedStrength filter do its job properly
+        
         indices[i]++;
         for (let j = i + 1; j < size; j++) {
             indices[j] = indices[j - 1] + 1;
@@ -277,9 +286,17 @@ class BacktestingEngine {
               if (i === j) continue;
 
               const combo2 = combinations[j];
+              // FIX: Only filter out subset if the larger combination has EQUAL or HIGHER combinedStrength
+              // This prevents smaller but stronger combinations from being incorrectly filtered out
               if (this.isProperSubset(combo1.signals, combo2.signals)) {
-                  isSubsetOfAnother = true;
-                  break;
+                  // Check if the larger combination (combo2) has equal or higher strength
+                  const combo1Strength = combo1.combinedStrength || 0;
+                  const combo2Strength = combo2.combinedStrength || 0;
+                  if (combo2Strength >= combo1Strength) {
+                      isSubsetOfAnother = true;
+                      break;
+                  }
+                  // If combo1 (subset) has higher strength, keep it instead
               }
           }
 
@@ -498,6 +515,11 @@ class BacktestingEngine {
             });
             
             let combinations = this.generateSignalCombinations(effectiveSignals, i, currentMarketRegime, regimeConfidence); 
+            
+            // DEBUG: Only log summary every 1000 candles to prevent console flooding
+            if (i % 1000 === 0) {
+                console.log(`[FILTER_SUMMARY] Candle ${i}: Generated ${combinations.length} combinations passing minCombinedStrength=${this.settings.minCombinedStrength}, Total matches so far: ${this.allMatches.length}`);
+            }
             
             if (combinations.length > 1) {
                 combinations = this.filterSubsetCombinations(combinations);

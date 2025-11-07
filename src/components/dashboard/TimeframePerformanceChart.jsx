@@ -72,7 +72,7 @@ export default function TimeframePerformanceChart({ trades = [], backtestCombina
       const stats = acc[timeframe];
       stats.tradeCount++;
       stats.totalPnl += trade.pnl_usdt || 0;
-      stats.totalDurationHours += (trade.duration_seconds || 0) / 3600;
+      stats.totalDurationHours += trade.duration_hours !== undefined && trade.duration_hours !== null ? trade.duration_hours : ((trade.duration_seconds || 0) / 3600);
 
       if ((trade.pnl_usdt || 0) > 0) {
         stats.grossProfit += trade.pnl_usdt;

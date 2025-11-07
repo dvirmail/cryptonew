@@ -1,8 +1,9 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Card, CardContent } from "@/components/ui/card";
 import { Wallet, Loader2, AlertCircle } from 'lucide-react';
 import { useWallet } from '@/components/providers/WalletProvider';
 import { useTradingMode } from '@/components/providers/TradingModeProvider';
+import { queueEntityCall } from '@/components/utils/apiQueue';
 
 export default function WalletStatusWidget() {
     const loggedWalletStatusValues = useRef(false);
@@ -14,10 +15,101 @@ export default function WalletStatusWidget() {
         lifetimePnl,
         unrealizedPnl,
         totalRealizedPnl,
+        pnl24h,
         loading,
         error
     } = walletData;
     const recentTrades = walletData?.recentTrades || [];
+    const { isLiveMode } = useTradingMode();
+    
+    // CRITICAL: Fetch P&L directly from database (same as activity log) to ensure accuracy
+    const [directDbPnl, setDirectDbPnl] = useState(null);
+    const [dbPnlLoading, setDbPnlLoading] = useState(false);
+    
+    useEffect(() => {
+        const fetchDirectDbPnl = async () => {
+            try {
+                setDbPnlLoading(true);
+                const tradingMode = isLiveMode ? 'live' : 'testnet';
+                
+                // Use same query as ScanEngineService._logWalletSummary
+                const allTrades = await queueEntityCall('Trade', 'filter', 
+                    { trading_mode: tradingMode }, 
+                    '-exit_timestamp', 
+                    10000
+                ).catch(() => []);
+                
+                if (allTrades && allTrades.length > 0) {
+                    // CRITICAL FIX: Deduplicate trades BEFORE calculating P&L to prevent inflated totals
+                    // This matches the DailyPerformanceChart logic and ensures accuracy
+                    const closedTrades = allTrades.filter(t => t?.exit_timestamp != null);
+                    
+                    // Deduplicate trades based on unique characteristics
+                    const seen = new Map();
+                    const uniqueTrades = [];
+                    
+                    closedTrades.forEach(trade => {
+                        if (!trade?.exit_timestamp) return;
+                        
+                        // Create a unique key based on trade characteristics
+                        // Using entry_price, exit_price, quantity, entry_timestamp, symbol, and strategy_name
+                        // Rounded values to handle floating point precision issues
+                        const entryPrice = Math.round((Number(trade.entry_price) || 0) * 10000) / 10000;
+                        const exitPrice = Math.round((Number(trade.exit_price) || 0) * 10000) / 10000;
+                        const quantity = Math.round((Number(trade.quantity_crypto) || Number(trade.quantity) || 0) * 1000000) / 1000000;
+                        const entryTs = trade.entry_timestamp ? new Date(trade.entry_timestamp).toISOString() : '';
+                        const symbol = trade.symbol || '';
+                        const strategy = trade.strategy_name || '';
+                        
+                        // Create unique key (allow 1 second tolerance for entry_timestamp)
+                        const entryDate = entryTs ? new Date(entryTs) : null;
+                        const entryDateRounded = entryDate ? new Date(Math.floor(entryDate.getTime() / 1000) * 1000).toISOString() : '';
+                        const uniqueKey = `${symbol}|${strategy}|${entryPrice}|${exitPrice}|${quantity}|${entryDateRounded}`;
+                        
+                        // Keep the first occurrence (earliest by exit_timestamp)
+                        if (!seen.has(uniqueKey)) {
+                            seen.set(uniqueKey, trade);
+                            uniqueTrades.push(trade);
+                        } else {
+                            const existing = seen.get(uniqueKey);
+                            const existingExit = existing?.exit_timestamp ? new Date(existing.exit_timestamp).getTime() : 0;
+                            const currentExit = trade?.exit_timestamp ? new Date(trade.exit_timestamp).getTime() : 0;
+                            if (currentExit > 0 && (existingExit === 0 || currentExit < existingExit)) {
+                                // Remove old and add new
+                                const index = uniqueTrades.indexOf(existing);
+                                if (index >= 0) uniqueTrades.splice(index, 1);
+                                seen.set(uniqueKey, trade);
+                                uniqueTrades.push(trade);
+                            }
+                        }
+                    });
+                    
+                    // Calculate P&L from deduplicated trades only
+                    const computedPnl = uniqueTrades.reduce((sum, t) => sum + (Number(t?.pnl_usdt) || 0), 0);
+                    
+                    // CRITICAL: Also calculate WITHOUT deduplication to compare with SQL query
+                    const computedPnlWithoutDedup = closedTrades.reduce((sum, t) => sum + (Number(t?.pnl_usdt) || 0), 0);
+                    
+                    // CRITICAL: Check for invalid/null/NaN pnl_usdt values
+                    const invalidPnlTrades = closedTrades.filter(t => {
+                        const pnl = Number(t?.pnl_usdt);
+                        return isNaN(pnl) || t?.pnl_usdt === null || t?.pnl_usdt === undefined;
+                    });
+                    
+                    setDirectDbPnl(computedPnl);
+                }
+            } catch (error) {
+                console.error('[WalletStatusWidget] Error fetching direct DB P&L:', error);
+            } finally {
+                setDbPnlLoading(false);
+            }
+        };
+        
+        // Fetch on mount and periodically (every 30 seconds)
+        fetchDirectDbPnl();
+        const interval = setInterval(fetchDirectDbPnl, 30000);
+        return () => clearInterval(interval);
+    }, [isLiveMode]);
 
     // Debug: Log the raw wallet data to see what we're getting (only when values change)
     const prevWalletData = React.useRef({});
@@ -36,10 +128,8 @@ export default function WalletStatusWidget() {
     );
     
     if (walletDataHasChanged) {
-        console.log('[WalletStatusWidget] 🔍 Raw wallet data:', currentWalletData);
         prevWalletData.current = currentWalletData;
     }
-    const { isLiveMode } = useTradingMode();
 
     const [cachedSummary, setCachedSummary] = React.useState(null);
 
@@ -49,20 +139,9 @@ export default function WalletStatusWidget() {
         try {
             const mode = isLiveMode ? 'live' : 'testnet';
             
-            // Only log once per mode change
-            if (!window._walletCacheLogged || window._lastWalletMode !== mode) {
-                console.log('[WalletStatusWidget] 🔍 Loading cache for mode:', mode);
-                window._walletCacheLogged = true;
-                window._lastWalletMode = mode;
-            }
-            
             const raw = localStorage.getItem(`walletSummaryCache_${mode}`);
             if (raw) {
                 const snap = JSON.parse(raw);
-                if (!window._walletCacheLoaded) {
-                    console.log('[WalletStatusWidget] ✅ Loaded from localStorage:', snap);
-                    window._walletCacheLoaded = true;
-                }
                 
                 // Parse balance_in_trades from database field only
                 const balanceInTradesValue = parseFloat(snap.balance_in_trades || 0);
@@ -75,16 +154,7 @@ export default function WalletStatusWidget() {
                     balanceInTrades: balanceInTradesValue,
                 });
             } else if (typeof window !== 'undefined' && window.__walletSummaryCache) {
-                if (!window._walletCacheLoaded) {
-                    console.log('[WalletStatusWidget] ✅ Loaded from window.__walletSummaryCache:', window.__walletSummaryCache);
-                    window._walletCacheLoaded = true;
-                }
                 setCachedSummary(window.__walletSummaryCache);
-            } else {
-                if (!window._walletCacheNotFound) {
-                    console.log('[WalletStatusWidget] ⚠️ No cache found for mode:', mode);
-                    window._walletCacheNotFound = true;
-                }
             }
         } catch (_e) {
             console.error("[WalletStatusWidget] Failed to load cached wallet summary:", _e);
@@ -108,13 +178,6 @@ export default function WalletStatusWidget() {
                 const lastCached = localStorage.getItem(cacheKey);
                 const lastCachedData = lastCached ? JSON.parse(lastCached) : null;
                 
-                if (!lastCachedData || 
-                    lastCachedData.totalEquity !== summaryToCache.totalEquity ||
-                    lastCachedData.availableBalance !== summaryToCache.availableBalance ||
-                    lastCachedData.lifetimePnl !== summaryToCache.lifetimePnl ||
-                    lastCachedData.unrealizedPnl !== summaryToCache.unrealizedPnl) {
-                    console.log('[WalletStatusWidget] 💾 Saving to cache:', { mode, summaryToCache });
-                }
                 localStorage.setItem(`walletSummaryCache_${mode}`, JSON.stringify(summaryToCache));
             } catch (e) {
                 console.error("[WalletStatusWidget] Failed to save wallet summary to cache:", e);
@@ -132,21 +195,56 @@ export default function WalletStatusWidget() {
     // CRITICAL FIX: Always use live data when available, never fall back to stale cache
     const displayTotalEquity = isLiveTotalEquityValid ? totalEquity : (cachedSummary?.totalEquity ?? 0);
     const displayAvailableBalance = isLiveAvailableBalanceValid ? availableBalance : (cachedSummary?.availableBalance ?? 0);
-    // Prefer totalRealizedPnl if provider exposes it, fallback to lifetimePnl, then cache
-    let normalizedRealized = (typeof totalRealizedPnl === 'number' && !isNaN(totalRealizedPnl))
-        ? totalRealizedPnl
-        : (isLiveLifetimePnlValid ? lifetimePnl : (cachedSummary?.lifetimePnl ?? 0));
-    // Fallback: if realized is zero or undefined but we have recent trades, sum realized from trades as a best-effort estimate
-    if ((!normalizedRealized || !Number.isFinite(normalizedRealized)) && Array.isArray(recentTrades) && recentTrades.length > 0) {
-        try {
-            const sumTrades = recentTrades.reduce((sum, t) => sum + (Number(t?.pnl_usdt) || 0), 0);
-            if (Number.isFinite(sumTrades)) normalizedRealized = sumTrades;
-        } catch (_e) {}
+    
+    // CRITICAL FIX: Use direct DB query result (same as activity log) as PRIMARY source
+    // This ensures 100% accuracy match with the activity log
+    let normalizedRealized = null;
+    let pnlSource = 'fallback';
+    
+    // PRIORITY 1: Use direct DB query result (matches activity log exactly)
+    if (directDbPnl !== null && Number.isFinite(directDbPnl)) {
+        normalizedRealized = directDbPnl;
+        pnlSource = 'directDbQuery';
     }
+    // PRIORITY 2: Fallback to recentTrades if direct DB query hasn't loaded yet
+    else if (Array.isArray(recentTrades) && recentTrades.length > 0) {
+        try {
+            // Match scanner log calculation: sum all closed trades' pnl_usdt
+            const closedTrades = recentTrades.filter(t => t?.exit_timestamp != null);
+            const computedPnl = closedTrades.reduce((sum, t) => sum + (Number(t?.pnl_usdt) || 0), 0);
+            
+            
+            if (Number.isFinite(computedPnl)) {
+                normalizedRealized = computedPnl;
+                pnlSource = 'recentTrades';
+            }
+        } catch (_e) {
+            console.error('[WalletStatusWidget] Error calculating P&L from trades:', _e);
+        }
+    }
+    
+    // PRIORITY 3: Fallback to central state if both above failed
+    if (normalizedRealized === null || !Number.isFinite(normalizedRealized)) {
+        if (typeof totalRealizedPnl === 'number' && !isNaN(totalRealizedPnl)) {
+            normalizedRealized = totalRealizedPnl;
+            pnlSource = 'totalRealizedPnl';
+        } else if (isLiveLifetimePnlValid) {
+            normalizedRealized = lifetimePnl;
+            pnlSource = 'lifetimePnl';
+        } else {
+            normalizedRealized = cachedSummary?.lifetimePnl ?? 0;
+            pnlSource = 'cache';
+        }
+    }
+    
+    // Ensure we always have a number (but preserve negative values!)
+    normalizedRealized = (normalizedRealized === null || normalizedRealized === undefined) ? 0 : normalizedRealized;
+    
     const displayLifetimePnl = normalizedRealized;
     const displayUnrealizedPnl = isLiveUnrealizedPnlValid ? unrealizedPnl : (cachedSummary?.unrealizedPnl ?? 0);
-    // Display only realized P&L (exclude unrealized)
-    const displayTotalPnl = (displayLifetimePnl || 0);
+    // CRITICAL FIX: Use calculated P&L from trades (matches scanner log)
+    // Preserve negative values (don't use || 0 which would convert -0.5 to 0)
+    const displayTotalPnl = displayLifetimePnl; // Always show total realized P&L from trades
     const displayBalanceInTrades = balanceInTrades; // ALWAYS use live data, never cache for balanceInTrades
 
     // Debug: Log display values (only when values change)
@@ -167,17 +265,6 @@ export default function WalletStatusWidget() {
     );
     
     if (displayValuesHaveChanged) {
-        console.log('[WalletStatusWidget] 📊 Display values:', {
-            ...currentDisplayValues,
-            rawValues: {
-                totalEquity,
-                availableBalance,
-                lifetimePnl,
-                unrealizedPnl,
-                balanceInTrades
-            },
-            cachedValues: cachedSummary
-        });
         prevDisplayValues.current = currentDisplayValues;
     }
 

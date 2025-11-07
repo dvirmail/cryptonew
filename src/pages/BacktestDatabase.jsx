@@ -67,7 +67,8 @@ export default function BacktestDatabase() {
         try {
             // Load combinations from PostgreSQL database
             // This ensures toggle states (includedInScanner, includedInLiveScanner) persist across page refreshes
-            const data = await BacktestCombination.list();
+            // Use a high limit to load all strategies (1700+)
+            const data = await BacktestCombination.list('-created_date', 10000);
             
             // Validate that IDs are UUIDs, not composite IDs
             const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -340,6 +341,7 @@ export default function BacktestDatabase() {
             
             const databaseResult = result?.databaseResult || {};
             const actuallyDeleted = databaseResult.deleted || 0;
+            const requestedCount = idsArray.length; // Save before clearing
             
             console.log('[BacktestDatabase] Deleted count determined:', deletedCount);
             console.log('[BacktestDatabase] Database result:', databaseResult);
@@ -352,19 +354,19 @@ export default function BacktestDatabase() {
             await fetchCombinations();
             
             // Check if deletion actually worked
-            if (actuallyDeleted === 0 && selectedIds.size > 0) {
+            if (actuallyDeleted === 0 && requestedCount > 0) {
                 toast({
                     title: "Delete Failed",
                     description: `No strategies were deleted from the database. This usually means the page needs to be refreshed to load correct IDs. Please refresh the page and try again.`,
                     variant: "destructive",
                 });
-            } else if (actuallyDeleted < selectedIds.size) {
+            } else if (actuallyDeleted < requestedCount) {
                 toast({
                     title: "Partial Delete",
-                    description: `Only ${actuallyDeleted} of ${selectedIds.size} strategies were deleted. Some IDs may be invalid - please refresh the page.`,
+                    description: `Only ${actuallyDeleted} of ${requestedCount} strategies were deleted. Some IDs may be invalid - please refresh the page.`,
                     variant: "destructive",
                 });
-            } else {
+            } else if (actuallyDeleted > 0) {
                 toast({
                     title: "Bulk Delete Successful",
                     description: `${actuallyDeleted} strategies have been deleted from the database.`,

@@ -16,6 +16,7 @@ import {
 import { TrendingUp } from 'lucide-react';
 import { useTradingMode } from '@/components/providers/TradingModeProvider';
 import { useWallet } from "@/components/providers/WalletProvider";
+import { queueEntityCall } from '@/components/utils/apiQueue';
 
 // Add a robust debug logger that writes to console and window.__HP_CHART_LOGS
 const hpDebug = {
@@ -38,7 +39,7 @@ const hpDebug = {
   }
 };
 
-// FIXED: Prefer explicit period fields, fallback to cumulative using a baseline when missing.
+// DEPRECATED: No longer used - calculations now done directly from trades
 const normalizeWithBaseline = (recordsAsc = [], baselineCum = null, preferPeriodFields = true) => {
   const num = (v) => (typeof v === 'number' && isFinite(v) ? v : 0);
   if (!Array.isArray(recordsAsc) || recordsAsc.length === 0) return [];
@@ -134,161 +135,243 @@ const normalizeWithBaseline = (recordsAsc = [], baselineCum = null, preferPeriod
   return out;
 };
 
-// Helper: supplement any missing buckets from raw trades aggregation
-const supplementBucketsFromTrades = (buckets, trades, groupBy) => {
-  if (!buckets || !trades || trades.length === 0) return;
-  const keys = Object.keys(buckets);
-  if (keys.length === 0) {
-    return;
-  }
-
-  const zeroOrEmpty = new Set(
-    keys.filter((k) => {
-      const b = buckets[k];
-      return !b || (
-        (Number(b.totalPnl) === 0) &&
-        (Number(b.tradeCount) === 0) &&
-        (Number(b.winningTrades) === 0) &&
-        (Number(b.grossProfit) === 0) &&
-        (Number(b.grossLoss) === 0)
-      );
-    })
-  );
-
-  if (zeroOrEmpty.size === 0) {
-    return;
-  }
-
-  trades.forEach((trade) => {
-    if (!trade?.exit_timestamp) return;
-    const d = new Date(trade.exit_timestamp);
-    let key;
-    if (groupBy === 'hour') {
-      key = new Date(Date.UTC(
-        d.getUTCFullYear(),
-        d.getUTCMonth(),
-        d.getUTCDate(),
-        d.getUTCHours()
-      )).toISOString();
-    } else {
-      key = new Date(Date.UTC(
-        d.getUTCFullYear(),
-        d.getUTCMonth(),
-        d.getUTCDate()
-      )).toISOString().split('T')[0];
-    }
-    
-    if (!buckets[key] || !zeroOrEmpty.has(key)) return;
-
-    const b = buckets[key];
-    const pnl = Number(trade.pnl_usdt || 0);
-    
-    b.tradeCount = (b.tradeCount || 0) + 1;
-    b.totalPnl = (b.totalPnl || 0) + pnl;
-    if (pnl > 0) {
-      b.winningTrades = (b.winningTrades || 0) + 1;
-      b.grossProfit = (b.grossProfit || 0) + pnl;
-    } else if (pnl < 0) {
-      b.grossLoss = (b.grossLoss || 0) + Math.abs(pnl);
-    }
-  });
-};
 
 export default function DailyPerformanceChart({
   trades = [],
   timeframe,
   onTimeframeChange,
-  dailyPerformanceHistory = [],
-  hourlyPerformanceHistory = [],
+  dailyPerformanceHistory = [], // DEPRECATED: no longer used
+  hourlyPerformanceHistory = [], // DEPRECATED: no longer used
   walletSummary = null,
   onSummaryStatsChange 
 }) {
   const { isLiveMode } = useTradingMode();
   const { loading: walletLoading } = useWallet();
 
-  // Debug logging for props
-  console.log('[DailyPerformanceChart] 🔍 Props received:', {
-    walletLoading,
-    dailyPerformanceHistoryLength: dailyPerformanceHistory?.length || 0,
-    hourlyPerformanceHistoryLength: hourlyPerformanceHistory?.length || 0,
-    dailyPerformanceHistorySample: dailyPerformanceHistory?.slice(0, 2),
-    hourlyPerformanceHistorySample: hourlyPerformanceHistory?.slice(0, 2),
-    walletSummary: walletSummary ? 'present' : 'null',
-    timestamp: new Date().toISOString()
-  });
-
-  const dailyHP = React.useMemo(
-    () => (Array.isArray(dailyPerformanceHistory) ? dailyPerformanceHistory : []),
-    [dailyPerformanceHistory]
-  );
-  const hourlyHP = React.useMemo(
-    () => (Array.isArray(hourlyPerformanceHistory) ? hourlyPerformanceHistory : []),
-    [hourlyPerformanceHistory]
-  );
-
-  // Debug logging for processed data
-  console.log('[DailyPerformanceChart] 🔍 Processed data:', {
-    dailyHPLength: dailyHP?.length || 0,
-    hourlyHPLength: hourlyHP?.length || 0,
-    dailyHPSample: dailyHP?.slice(0, 2),
-    hourlyHPSample: hourlyHP?.slice(0, 2),
-    timestamp: new Date().toISOString()
-  });
-
+  // Filter trades by mode and ensure they have exit_timestamp (closed trades)
   const modeTrades = useMemo(() => {
     const mode = isLiveMode ? 'live' : 'testnet';
-    const arr = Array.isArray(trades) ? trades.filter(t => (t?.trading_mode || 'testnet') === mode) : [];
+    const arr = Array.isArray(trades) 
+      ? trades.filter(t => {
+          const tradeMode = t?.trading_mode || 'testnet';
+          const hasExit = t?.exit_timestamp != null;
+          return tradeMode === mode && hasExit;
+        })
+      : [];
     return arr;
   }, [trades, isLiveMode]);
 
-  const dedupeByBucket = useCallback((records, bucket) => {
-    if (!Array.isArray(records)) return [];
-    const map = new Map();
-    for (const rec of records) {
-      if (!rec?.snapshot_timestamp) continue;
-      const d = new Date(rec.snapshot_timestamp);
-      const y = d.getUTCFullYear();
-      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-      const day = String(d.getUTCDate()).padStart(2, '0');
-      const hh = String(d.getUTCHours()).padStart(2, '0');
-      const key = bucket === 'hour' ? `${y}-${m}-${day}T${hh}:00Z` : `${y}-${m}-${day}`;
-      
-      const existing = map.get(key);
-      if (!existing || new Date(rec.snapshot_timestamp).getTime() > new Date(existing.snapshot_timestamp).getTime()) {
-        map.set(key, rec);
-      }
-    }
-    const out = Array.from(map.values()).sort((a, b) =>
-      new Date(a.snapshot_timestamp).getTime() - new Date(b.snapshot_timestamp).getTime()
-    );
-    return out;
-  }, []);
-
-  const dataReadyForTimeframe = useMemo(() => {
-    const ready =
-      !walletLoading &&
-      ((timeframe === '24h' && (hourlyHP?.length || 0) > 0) ||
-       ((timeframe === '7d' || timeframe === '30d' || timeframe === 'lifetime') && (dailyHP?.length || 0) > 0));
+  // Helper to deduplicate trades based on unique characteristics
+  const deduplicateTrades = useCallback((tradesArray) => {
+    const seen = new Map();
+    const uniqueTrades = [];
     
-    // Debug logging to help troubleshoot data loading
-    console.log('[DailyPerformanceChart] Data readiness check:', {
-      walletLoading,
-      timeframe,
-      dailyHPLength: dailyHP?.length || 0,
-      hourlyHPLength: hourlyHP?.length || 0,
-      ready,
-      dailyHP: dailyHP?.slice(0, 2), // First 2 records for debugging
-      hourlyHP: hourlyHP?.slice(0, 2) // First 2 records for debugging
+    tradesArray.forEach(trade => {
+      if (!trade?.exit_timestamp) return;
+      
+      // Create a unique key based on trade characteristics
+      // Using entry_price, exit_price, quantity, entry_timestamp, symbol, and strategy_name
+      // Rounded values to handle floating point precision issues
+      const entryPrice = Math.round((Number(trade.entry_price) || 0) * 10000) / 10000;
+      const exitPrice = Math.round((Number(trade.exit_price) || 0) * 10000) / 10000;
+      const quantity = Math.round((Number(trade.quantity_crypto) || Number(trade.quantity) || 0) * 1000000) / 1000000;
+      const entryTs = trade.entry_timestamp ? new Date(trade.entry_timestamp).toISOString() : '';
+      const symbol = trade.symbol || '';
+      const strategy = trade.strategy_name || '';
+      
+      // Create unique key (allow 1 second tolerance for entry_timestamp to handle minor timing differences)
+      const entryDate = entryTs ? new Date(entryTs) : null;
+      const entryDateRounded = entryDate ? new Date(Math.floor(entryDate.getTime() / 1000) * 1000).toISOString() : '';
+      const uniqueKey = `${symbol}|${strategy}|${entryPrice}|${exitPrice}|${quantity}|${entryDateRounded}`;
+      
+      // Keep the first occurrence (earliest by exit_timestamp, then by id if same)
+      if (!seen.has(uniqueKey)) {
+        seen.set(uniqueKey, trade);
+        uniqueTrades.push(trade);
+      } else {
+        const existing = seen.get(uniqueKey);
+        // If this trade has an earlier exit timestamp, replace it (this shouldn't happen often, but handle it)
+        const existingExit = existing?.exit_timestamp ? new Date(existing.exit_timestamp).getTime() : 0;
+        const currentExit = trade?.exit_timestamp ? new Date(trade.exit_timestamp).getTime() : 0;
+        if (currentExit > 0 && (existingExit === 0 || currentExit < existingExit)) {
+          // Remove old and add new
+          const index = uniqueTrades.indexOf(existing);
+          if (index >= 0) uniqueTrades.splice(index, 1);
+          seen.set(uniqueKey, trade);
+          uniqueTrades.push(trade);
+        }
+      }
     });
     
-    return ready;
-  }, [walletLoading, timeframe, dailyHP.length, hourlyHP.length]);
+    if (seen.size < tradesArray.length) {
+      // Deduplication complete
+    }
+    
+    return uniqueTrades;
+  }, []);
+
+  // Helper to aggregate trades into time buckets
+  const aggregateTradesIntoBuckets = useCallback((tradesArray, groupBy) => {
+    // CRITICAL FIX: Deduplicate trades before aggregation to prevent inflated P&L
+    const uniqueTrades = deduplicateTrades(tradesArray);
+    const buckets = new Map();
+    
+    uniqueTrades.forEach(trade => {
+      if (!trade?.exit_timestamp) return;
+      
+      const exitDate = new Date(trade.exit_timestamp);
+      if (isNaN(exitDate.getTime())) return;
+      
+      let key;
+      let timeKey;
+      let displayLabel;
+      
+      if (groupBy === 'hour') {
+        const hourStart = new Date(Date.UTC(
+          exitDate.getUTCFullYear(),
+          exitDate.getUTCMonth(),
+          exitDate.getUTCDate(),
+          exitDate.getUTCHours()
+        ));
+        key = hourStart.toISOString();
+        timeKey = key;
+        displayLabel = hourStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) + ' ' +
+                      hourStart.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true, timeZone: 'UTC' });
+      } else { // 'day'
+        // CRITICAL: Use UTC date components to ensure consistent day grouping
+        // This prevents the same day from appearing as multiple bars due to timezone issues
+        const year = exitDate.getUTCFullYear();
+        const month = exitDate.getUTCMonth();
+        const date = exitDate.getUTCDate();
+        
+        const dayStart = new Date(Date.UTC(year, month, date));
+        // Use ISO date string as key to ensure uniqueness (YYYY-MM-DD format)
+        key = `${year}-${String(month + 1).padStart(2, '0')}-${String(date).padStart(2, '0')}`;
+        timeKey = key;
+        
+        // Use the normalized dayStart for display to ensure consistency
+        // Always use UTC to prevent timezone-based splitting
+        displayLabel = dayStart.toLocaleDateString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          timeZone: 'UTC' 
+        });
+      }
+      
+      // CRITICAL: Ensure we don't create duplicate buckets for the same day
+      // If a bucket already exists for this key, use it (don't create a new one)
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          timeKey,
+          displayLabel,
+          totalPnl: 0,
+          tradeCount: 0,
+          winningTrades: 0,
+          grossProfit: 0,
+          grossLoss: 0,
+        });
+      }
+      
+      const bucket = buckets.get(key);
+      const pnl = Number(trade.pnl_usdt || 0);
+      
+      // Validate bucket exists (should always be true, but safety check)
+      if (!bucket) {
+        console.error(`[DailyPerformanceChart] ⚠️ Bucket missing for key: ${key}, trade: ${trade.id || 'unknown'}`);
+        return; // Skip this trade if bucket is missing
+      }
+      
+      bucket.tradeCount++;
+      bucket.totalPnl += pnl;
+      
+      if (pnl > 0) {
+        bucket.winningTrades++;
+        bucket.grossProfit += pnl;
+      } else if (pnl < 0) {
+        bucket.grossLoss += Math.abs(pnl);
+      }
+    });
+    
+    const sortedBuckets = Array.from(buckets.values()).sort((a, b) => {
+      // For day buckets, parse YYYY-MM-DD format, for hour buckets use ISO string
+      const aTime = groupBy === 'hour' ? new Date(a.timeKey).getTime() : new Date(a.timeKey + 'T00:00:00Z').getTime();
+      const bTime = groupBy === 'hour' ? new Date(b.timeKey).getTime() : new Date(b.timeKey + 'T00:00:00Z').getTime();
+      return aTime - bTime;
+    });
+    
+    // CRITICAL: Log bucket information to debug duplicate day issue
+    if (groupBy === 'day' && sortedBuckets.length > 0) {
+      const dayCounts = new Map();
+      sortedBuckets.forEach(b => {
+        const count = dayCounts.get(b.displayLabel) || 0;
+        dayCounts.set(b.displayLabel, count + 1);
+      });
+      
+      const duplicates = Array.from(dayCounts.entries()).filter(([_, count]) => count > 1);
+      if (duplicates.length > 0) {
+        console.error(`[DailyPerformanceChart] 🚨 DUPLICATE DAYS DETECTED:`, duplicates);
+        console.error(`[DailyPerformanceChart] 🚨 This indicates a day grouping bug - same day appearing as multiple bars`);
+        console.error(`[DailyPerformanceChart] 🚨 Bucket details:`, sortedBuckets.map(b => ({ 
+          displayLabel: b.displayLabel, 
+          timeKey: b.timeKey, 
+          totalPnl: b.totalPnl 
+        })));
+      }
+    }
+    
+    return sortedBuckets;
+  }, []);
+
+  // CRITICAL: Fetch ALL trades directly from database (same as activity log) for accurate calculations
+  const [directDbTrades, setDirectDbTrades] = useState(null);
+  const [dbTradesLoading, setDbTradesLoading] = useState(false);
+  
+  useEffect(() => {
+    const fetchDirectDbTrades = async () => {
+      try {
+        setDbTradesLoading(true);
+        const tradingMode = isLiveMode ? 'live' : 'testnet';
+        
+        // Use same query as ScanEngineService._logWalletSummary - fetch ALL trades
+        const allTrades = await queueEntityCall('Trade', 'filter', 
+          { trading_mode: tradingMode }, 
+          '-exit_timestamp', 
+          10000
+        ).catch(() => []);
+        
+        if (allTrades && allTrades.length > 0) {
+          setDirectDbTrades(allTrades);
+        }
+      } catch (error) {
+        console.error('[DailyPerformanceChart] Error fetching direct DB trades:', error);
+      } finally {
+        setDbTradesLoading(false);
+      }
+    };
+    
+    // Fetch on mount and periodically (every 30 seconds)
+    fetchDirectDbTrades();
+    const interval = setInterval(fetchDirectDbTrades, 30000);
+    return () => clearInterval(interval);
+  }, [isLiveMode]);
+
+  // Use direct DB trades if available, otherwise fall back to modeTrades
+  const tradesForCalculation = useMemo(() => {
+    if (directDbTrades !== null && Array.isArray(directDbTrades) && directDbTrades.length > 0) {
+      return directDbTrades;
+    }
+    return modeTrades || [];
+  }, [directDbTrades, modeTrades]);
+
+  const dataReadyForTimeframe = useMemo(() => {
+    return !walletLoading && !dbTradesLoading && Array.isArray(tradesForCalculation) && tradesForCalculation.length > 0;
+  }, [walletLoading, dbTradesLoading, tradesForCalculation]);
 
   // Add a timeout mechanism to prevent infinite loading
   const [loadingTimeout, setLoadingTimeout] = useState(false);
   
   useEffect(() => {
-    if (walletLoading) {
+    if (walletLoading || dbTradesLoading) {
       setLoadingTimeout(false);
       const timeout = setTimeout(() => {
         console.warn('[DailyPerformanceChart] ⚠️ Loading timeout reached - showing no data state');
@@ -299,295 +382,174 @@ export default function DailyPerformanceChart({
     } else {
       setLoadingTimeout(false);
     }
-  }, [walletLoading]);
+  }, [walletLoading, dbTradesLoading]);
 
   const chartData = useMemo(() => {
-    
-    const now = new Date();
-
-    if (!dataReadyForTimeframe) {
+    if (!dataReadyForTimeframe || !tradesForCalculation || tradesForCalculation.length === 0) {
       return [];
     }
 
-    const makeHourlyBuckets = (endUtcHour, hours) => {
-      const buckets = {};
-      const startMs = endUtcHour.getTime() - (hours * 60 * 60 * 1000);
-      for (let i = 0; i < hours; i++) {
-        const currentHourMs = startMs + i * 60 * 60 * 1000;
-        const hour = new Date(currentHourMs);
-        const key = new Date(Date.UTC(
-          hour.getUTCFullYear(),
-          hour.getUTCMonth(),
-          hour.getUTCDate(),
-          hour.getUTCHours()
-        )).toISOString();
-        buckets[key] = {
-          timeKey: key,
-          displayLabel: hour.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
-                        hour.toLocaleTimeString('en-US', { hour: 'numeric', hour12: true }),
-          totalPnl: 0,
-          tradeCount: 0,
-          winningTrades: 0,
-          grossProfit: 0,
-          grossLoss: 0,
-        };
-      }
-      return buckets;
-    };
-
-    const makeDailyBuckets = (endUtcMidnight, days) => {
-      const buckets = {};
-      // Ensure startMs calculates correctly for the number of days, including the end day
-      const startMs = endUtcMidnight.getTime() - (days - 1) * 24 * 60 * 60 * 1000;
-      for (let i = 0; i < days; i++) {
-        const currentDayMs = startMs + i * 24 * 60 * 60 * 1000;
-        const day = new Date(currentDayMs);
-        const key = new Date(Date.UTC(
-          day.getUTCFullYear(),
-          day.getUTCMonth(),
-          day.getUTCDate()
-        )).toISOString().split('T')[0];
-        buckets[key] = {
-          timeKey: key,
-          displayLabel: day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          totalPnl: 0,
-          tradeCount: 0,
-          winningTrades: 0,
-          grossProfit: 0,
-          grossLoss: 0,
-        };
-      }
-      return buckets;
-    };
-
-    const shouldUseHistorical =
-      (timeframe === '24h' && hourlyHP.length > 0) ||
-      ((timeframe === '7d' || timeframe === '30d' || timeframe === 'lifetime') && dailyHP.length > 0);
-
-
-    if (shouldUseHistorical) {
-      if (timeframe === '24h') {
-        const endUtcHour = new Date(now);
-        endUtcHour.setUTCMilliseconds(0);
-        endUtcHour.setUTCSeconds(0);
-        endUtcHour.setUTCMinutes(0);
-
-        const buckets = makeHourlyBuckets(endUtcHour, 24);
-        const windowStartMs = endUtcHour.getTime() - 23 * 60 * 60 * 1000;
-
-        const allDeduped = dedupeByBucket(hourlyHP, 'hour');
-        let baseline = null;
-        for (let i = allDeduped.length - 1; i >= 0; i--) {
-          const ts = new Date(allDeduped[i].snapshot_timestamp).getTime();
-          if (ts < windowStartMs) {
-            baseline = allDeduped[i];
-            break;
-          }
-        }
-        
-        const inWindow = allDeduped.filter(rec => {
-          const ts = new Date(rec.snapshot_timestamp).getTime();
-          return ts >= windowStartMs && ts <= endUtcHour.getTime();
-        });
-
-        const normalized = normalizeWithBaseline(inWindow, baseline, true);
-
-        normalized.forEach((rec) => {
-          if (!rec?.snapshot_timestamp) return;
-          const d = new Date(rec.snapshot_timestamp);
-          const key = new Date(Date.UTC(
-            d.getUTCFullYear(),
-            d.getUTCMonth(),
-            d.getUTCDate(),
-            d.getUTCHours()
-          )).toISOString();
-          if (buckets[key]) {
-            buckets[key].totalPnl = Number(rec.period_pnl || 0);
-            buckets[key].tradeCount = Number(rec.period_trade_count || 0);
-            buckets[key].winningTrades = Number(rec.period_winning_trades || 0);
-            buckets[key].grossProfit = Number(rec.period_gross_profit || 0);
-            buckets[key].grossLoss = Number(rec.period_gross_loss || 0);
-          }
-        });
-
-        supplementBucketsFromTrades(buckets, modeTrades, 'hour');
-
-        const final = Object.values(buckets).sort((a, b) => new Date(a.timeKey).getTime() - new Date(b.timeKey).getTime());
-        
-        return final;
-      }
-
-      // NEW: Handle lifetime timeframe
+    const now = new Date();
+    let startDate;
+    
+    // Determine the time window based on timeframe
+    // CRITICAL: Use tradesForCalculation (direct DB trades) instead of modeTrades
       if (timeframe === 'lifetime') {
-        const allDeduped = dedupeByBucket(dailyHP, 'day');
-        
-        if (allDeduped.length === 0) {
-          return [];
-        }
-
-        const oldestRecord = allDeduped[0];
-        const newestRecord = allDeduped[allDeduped.length - 1];
-        
-        const oldestDate = new Date(oldestRecord.snapshot_timestamp);
-        const newestDate = new Date(newestRecord.snapshot_timestamp);
-        
-        const oldestUtcMidnight = new Date(Date.UTC(
-          oldestDate.getUTCFullYear(),
-          oldestDate.getUTCMonth(),
-          oldestDate.getUTCDate()
-        ));
-        
-        const newestUtcMidnight = new Date(Date.UTC(
-          newestDate.getUTCFullYear(),
-          newestDate.getUTCMonth(),
-          newestDate.getUTCDate()
-        ));
-        
-        const totalDays = Math.ceil((newestUtcMidnight.getTime() - oldestUtcMidnight.getTime()) / (24 * 60 * 60 * 1000)) + 1;
-        
-        const buckets = makeDailyBuckets(newestUtcMidnight, totalDays);
-        
-        const normalized = normalizeWithBaseline(allDeduped, null, false);
-        
-        normalized.forEach((rec) => {
-          if (!rec?.snapshot_timestamp) return;
-          const d = new Date(rec.snapshot_timestamp);
-          const key = new Date(Date.UTC(
-            d.getUTCFullYear(),
-            d.getUTCMonth(),
-            d.getUTCDate()
-          )).toISOString().split('T')[0];
-          if (buckets[key]) {
-            buckets[key].totalPnl = Number(rec.period_pnl || 0);
-            buckets[key].tradeCount = Number(rec.period_trade_count || 0);
-            buckets[key].winningTrades = Number(rec.period_winning_trades || 0);
-            buckets[key].grossProfit = Number(rec.period_gross_profit || 0);
-            buckets[key].grossLoss = Number(rec.period_gross_loss || 0);
-          }
-        });
-
-        supplementBucketsFromTrades(buckets, modeTrades, 'day');
-
-        const final = Object.values(buckets).sort((a, b) => new Date(a.timeKey).getTime() - new Date(b.timeKey).getTime());
-        
-        return final;
-      }
-
-      // 7d or 30d (daily)
-      const days = timeframe === '7d' ? 7 : 30;
-      const endUtcMidnight = new Date(Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(), 
-        now.getUTCDate()
-      ));
-      const buckets = makeDailyBuckets(endUtcMidnight, days);
-
-      const windowStartMs = endUtcMidnight.getTime() - (days - 1) * 24 * 60 * 60 * 1000;
-
-      const allDeduped = dedupeByBucket(dailyHP, 'day');
-
-      let baseline = null;
-      for (let i = allDeduped.length - 1; i >= 0; i--) {
-        const d = new Date(allDeduped[i].snapshot_timestamp);
-        const tsKey = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).getTime();
-        if (tsKey < windowStartMs) {
-          baseline = allDeduped[i];
-          break;
-        }
-      }
-
-      const inWindow = allDeduped.filter(rec => {
-        const d = new Date(rec.snapshot_timestamp);
-        const tsKey = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).getTime();
-        return tsKey >= windowStartMs && tsKey <= endUtcMidnight.getTime();
+      // Use all trades (no date filter) - group by day for lifetime view
+      return aggregateTradesIntoBuckets(tradesForCalculation, 'day');
+    } else if (timeframe === '24h') {
+      startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const tradesInWindow = tradesForCalculation.filter(t => {
+        if (!t?.exit_timestamp) return false;
+        const exitDate = new Date(t.exit_timestamp);
+        return exitDate.getTime() >= startDate.getTime();
       });
-
-      hpDebug.log('dailyHP stats', {
-        original: dailyHP.length,
-        deduped: allDeduped.length,
-        inWindow: inWindow.length,
-        baselineTs: baseline?.snapshot_timestamp || null,
-        windowStart: new Date(windowStartMs).toISOString()
+      return aggregateTradesIntoBuckets(tradesInWindow, 'hour');
+    } else if (timeframe === '7d') {
+      startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const tradesInWindow = tradesForCalculation.filter(t => {
+        if (!t?.exit_timestamp) return false;
+        const exitDate = new Date(t.exit_timestamp);
+        return exitDate.getTime() >= startDate.getTime();
       });
-
-      const normalizedDaily = normalizeWithBaseline(inWindow, baseline, false);
-
-      normalizedDaily.forEach((rec) => {
-        if (!rec?.snapshot_timestamp) return;
-        const d = new Date(rec.snapshot_timestamp);
-        const key = new Date(Date.UTC(
-          d.getUTCFullYear(),
-          d.getUTCMonth(),
-          d.getUTCDate()
-        )).toISOString().split('T')[0];
-        if (buckets[key]) {
-          buckets[key].totalPnl = Number(rec.period_pnl || 0);
-          buckets[key].tradeCount = Number(rec.period_trade_count || 0);
-          buckets[key].winningTrades = Number(rec.period_winning_trades || 0);
-          buckets[key].grossProfit = Number(rec.period_gross_profit || 0);
-          buckets[key].grossLoss = Number(rec.period_gross_loss || 0);
-        }
+      return aggregateTradesIntoBuckets(tradesInWindow, 'day');
+    } else if (timeframe === '30d') {
+      startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const tradesInWindow = tradesForCalculation.filter(t => {
+        if (!t?.exit_timestamp) return false;
+        const exitDate = new Date(t.exit_timestamp);
+        return exitDate.getTime() >= startDate.getTime();
       });
-
-      supplementBucketsFromTrades(buckets, modeTrades, 'day');
-
-      const final = Object.values(buckets).sort((a, b) => new Date(a.timeKey).getTime() - new Date(b.timeKey).getTime());
-      
-      return final;
+      return aggregateTradesIntoBuckets(tradesInWindow, 'day');
     }
 
     return [];
-
-  }, [
-    timeframe,
-    dailyHP,
-    hourlyHP,
-    modeTrades,
-    dedupeByBucket,
-    dataReadyForTimeframe
-  ]);
+  }, [timeframe, tradesForCalculation, aggregateTradesIntoBuckets, dataReadyForTimeframe]);
 
   const summaryStats = useMemo(() => {
-
-    // CRITICAL FIX: For lifetime view, use WalletSummary as source of truth
-    if (timeframe === 'lifetime') {
-      if (walletSummary) {
-        
-        const result = {
-          totalPnl: walletSummary.totalRealizedPnl || 0,
-          profitFactor: walletSummary.profitFactor || 0,
-          avgPeriodPnl: chartData.length > 0 ? (walletSummary.totalRealizedPnl || 0) / chartData.length : 0,
-          bestPeriodPnl: chartData.length > 0 ? Math.max(...chartData.map(d => (d.totalPnl || 0))) : 0,
-          totalGrossProfit: walletSummary.totalGrossProfit || 0,
-          totalGrossLoss: walletSummary.totalGrossLoss || 0
-        };
+    // CRITICAL FIX: For ALL timeframes (lifetime, 30d, 7d, 24h), calculate total P&L directly from ALL trades (not aggregated buckets)
+    // This ensures accuracy and matches the header widget calculation
+    const shouldCalculateFromTrades = (timeframe === 'lifetime' || timeframe === '7d' || timeframe === '30d' || timeframe === '24h');
+    
+    // CRITICAL: For timeframes that should use direct trade calculation, wait for tradesForCalculation to be ready
+    // Do NOT fall back to chartData for these timeframes
+    if (shouldCalculateFromTrades) {
+      // If trades are not ready yet, return zero stats (don't use chartData fallback)
+      if (!tradesForCalculation || tradesForCalculation.length === 0) {
+        const result = { totalPnl: 0, profitFactor: 0, avgPeriodPnl: 0, bestPeriodPnl: 0, totalGrossProfit: 0, totalGrossLoss: 0 };
         return result;
-      } else {
-        console.warn('[DailyPerformanceChart] Lifetime view but no walletSummary available, falling back to chartData');
       }
+      const now = new Date();
+      let startDate;
+      
+      // Determine time window
+      // CRITICAL: Use UTC time to match database timestamps (typically stored in UTC)
+      if (timeframe === 'lifetime') {
+        startDate = new Date(0); // Beginning of time
+      } else if (timeframe === '24h') {
+        startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      } else if (timeframe === '7d') {
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      } else if (timeframe === '30d') {
+        startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      }
+      
+      // Filter trades within the time window
+      // CRITICAL: Ensure proper date parsing and comparison
+      const tradesInWindow = tradesForCalculation.filter(t => {
+        if (!t?.exit_timestamp) return false;
+        
+        // Parse exit_timestamp (handles both string and Date objects)
+        const exitDate = new Date(t.exit_timestamp);
+        if (isNaN(exitDate.getTime())) {
+          console.warn(`[DailyPerformanceChart] Invalid exit_timestamp for trade:`, t.id, t.exit_timestamp);
+          return false;
+        }
+        
+        // Compare timestamps (both should be in UTC if database stores UTC)
+        return exitDate.getTime() >= startDate.getTime();
+      });
+      
+      // CRITICAL FIX: Deduplicate trades BEFORE calculating P&L to prevent inflated totals
+      // This ensures the summary stats match the chart data (which also deduplicates)
+      const uniqueTradesInWindow = deduplicateTrades(tradesInWindow);
+      
+      // Calculate directly from closed trades in the window (same as activity log)
+      // Note: uniqueTradesInWindow already filtered for exit_timestamp != null
+      const closedTrades = uniqueTradesInWindow;
+      
+      // CRITICAL: Filter out trades with invalid/null/NaN pnl_usdt values
+      const validTrades = closedTrades.filter(t => {
+        const pnl = Number(t?.pnl_usdt);
+        return !isNaN(pnl) && t?.pnl_usdt != null;
+      });
+      
+      // Sum P&L from valid trades only
+      const totalPnl = validTrades.reduce((sum, t) => {
+        const pnl = Number(t.pnl_usdt);
+        return sum + (isNaN(pnl) ? 0 : pnl);
+      }, 0);
+      
+      // Calculate gross profit and loss from valid trades only
+      const totalGrossProfit = validTrades
+        .filter(t => {
+          const pnl = Number(t?.pnl_usdt);
+          return !isNaN(pnl) && pnl > 0;
+        })
+        .reduce((sum, t) => {
+          const pnl = Number(t.pnl_usdt);
+          return sum + (isNaN(pnl) ? 0 : pnl);
+        }, 0);
+        
+      const totalGrossLoss = Math.abs(validTrades
+        .filter(t => {
+          const pnl = Number(t?.pnl_usdt);
+          return !isNaN(pnl) && pnl < 0;
+        })
+        .reduce((sum, t) => {
+          const pnl = Number(t.pnl_usdt);
+          return sum + (isNaN(pnl) ? 0 : pnl);
+        }, 0));
+      
+      // Calculate profit factor
+      const profitFactor = totalGrossLoss > 0 ? totalGrossProfit / totalGrossLoss : (totalGrossProfit > 0 ? Infinity : 0);
+      
+      // Calculate averages from chartData (buckets for display)
+      const avgPeriodPnl = chartData && chartData.length > 0 ? chartData.reduce((acc, data) => acc + (data.totalPnl || 0), 0) / chartData.length : 0;
+      const bestPeriodPnl = chartData && chartData.length > 0 ? Math.max(...chartData.map(d => (d.totalPnl || 0))) : 0;
+
+      const result = { totalPnl, profitFactor, avgPeriodPnl, bestPeriodPnl, totalGrossProfit, totalGrossLoss };
+      
+      return result;
     }
 
-    // For non-lifetime views, calculate from chartData (or if walletSummary was missing for lifetime)
+    // Fallback: Only for timeframes that don't use direct trade calculation (shouldn't happen with current timeframes)
+    // But if chartData is empty, return zero stats
     if (!chartData || chartData.length === 0) {
       const result = { totalPnl: 0, profitFactor: 0, avgPeriodPnl: 0, bestPeriodPnl: 0, totalGrossProfit: 0, totalGrossLoss: 0 };
       return result;
     }
 
+    // Calculate totals from chartData (aggregated buckets) - fallback only for non-standard timeframes
+    // NOTE: This should NOT be used for lifetime, 30d, 7d, or 24h as they use direct trade calculation above
     const totalPnl = chartData.reduce((acc, data) => acc + (data.totalPnl || 0), 0);
     const totalGrossProfit = chartData.reduce((acc, data) => acc + (data.grossProfit || 0), 0);
     const totalGrossLoss = chartData.reduce((acc, data) => acc + (data.grossLoss || 0), 0);
 
+    // Calculate profit factor
     const profitFactor = totalGrossLoss > 0 ? totalGrossProfit / totalGrossLoss : (totalGrossProfit > 0 ? Infinity : 0);
 
+    // Calculate averages
     const avgPeriodPnl = chartData.length > 0 ? totalPnl / chartData.length : 0;
     const bestPeriodPnl = chartData.length > 0 ? Math.max(...chartData.map(d => (d.totalPnl || 0))) : 0;
 
     const result = { totalPnl, profitFactor, avgPeriodPnl, bestPeriodPnl, totalGrossProfit, totalGrossLoss };
     
     return result;
-  }, [chartData, timeframe, walletSummary]);
+  }, [chartData, timeframe, tradesForCalculation]);
 
-  const recentTrades = modeTrades;
+  // CRITICAL: Use tradesForCalculation (direct DB trades) for period stats to ensure accuracy
+  const recentTrades = tradesForCalculation;
   const chartTimeframe = timeframe;
 
   const periodTradeStats = useMemo(() => {
@@ -678,11 +640,10 @@ export default function DailyPerformanceChart({
       timeframe,
       'props', // These 'props' strings seem like placeholders or historical key parts. Keeping them for consistency.
       'props',
-      dailyHP?.length || 0,
-      hourlyHP?.length || 0,
+      modeTrades?.length || 0,
       walletLoading ? 'WL' : 'RD'
     ].join('|');
-  }, [timeframe, dailyHP, hourlyHP, walletLoading]);
+  }, [timeframe, modeTrades, walletLoading]);
 
 
   if (isLoadingForTimeframe) {
@@ -847,7 +808,7 @@ export default function DailyPerformanceChart({
               ${summaryStats.totalPnl.toFixed(2)}
             </div>
             {timeframe === 'lifetime' && (
-              <p className="text-xs text-gray-500 mt-1">Source: Wallet Summary</p>
+              <p className="text-xs text-gray-500 mt-1">Source: Direct DB Query (all trades)</p>
             )}
           </div>
           <div className="p-4 rounded-lg bg-gray-50 dark:bg-gray-700/50">

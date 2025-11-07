@@ -59,21 +59,12 @@ export class WalletStateService {
      * @returns {number} Available USDT balance.
      */
     _getAvailableUsdt() {
-        console.log(`[WalletStateService] 🔍 _getAvailableUsdt() called - checking balance...`);
-        
         const currentWalletState = this._getCurrentWalletState();
-        console.log(`[WalletStateService] 🔍 _getAvailableUsdt() - CurrentWalletState:`, {
-            hasCurrentState: !!currentWalletState,
-            currentStateId: currentWalletState?.id,
-            availableBalance: currentWalletState?.available_balance,
-            balancesCount: currentWalletState?.balances?.length || 0
-        });
         
         if (currentWalletState) {
             // CentralWalletState stores balance directly in available_balance
             const availableBalance = parseFloat(currentWalletState.available_balance || '0');
             if (Number.isFinite(availableBalance)) {
-                console.log(`[WalletStateService] 💰 Using CentralWalletState available_balance: $${availableBalance.toFixed(2)}`);
                 return availableBalance;
             }
             

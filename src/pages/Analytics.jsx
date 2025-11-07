@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Trade } from '@/api/entities';
-import { HistoricalPerformance } from '@/api/entities';
+// NOTE: HistoricalPerformance removed - analytics now use trades directly
 import { BacktestCombination } from '@/api/entities';
 import { Loader2 } from 'lucide-react';
 import AnalyticsMetrics from '@/components/dashboard/AnalyticsMetrics';
@@ -14,10 +14,12 @@ import StrengthProfitChart from '@/components/dashboard/StrengthProfitChart';
 import ConvictionProfitChart from '@/components/dashboard/ConvictionProfitChart';
 import TimeframePerformanceChart from '@/components/dashboard/TimeframePerformanceChart';
 import FearGreedBitcoinChart from '@/components/dashboard/FearGreedBitcoinChart';
+import TradeAnalyticsDashboard from '@/components/analytics/TradeAnalyticsDashboard';
+import TradeAdvisorChat from '@/components/ai/TradeAdvisorChat';
 import { useTradingMode } from '@/components/providers/TradingModeProvider';
 import { queueEntityCall } from '@/components/utils/apiQueue';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
@@ -240,7 +242,7 @@ export default function Analytics() {
         error: null
     });
 
-    // NEW: State for all-time summary metrics from HistoricalPerformance
+    // State for all-time summary metrics (calculated from trades)
     const [summaryMetrics, setSummaryMetrics] = useState({
         totalTrades: 0,
         winRate: 0,
@@ -251,42 +253,7 @@ export default function Analytics() {
     const [isBackfilling, setIsBackfilling] = useState(false);
     const [backtestCombinations, setBacktestCombinations] = useState([]);
 
-    // Add state for HistoricalPerformance and fetch it
-    const [hpDaily, setHpDaily] = useState([]);
-    const [hpHourly, setHpHourly] = useState([]);
-
-    useEffect(() => {
-        let mounted = true;
-        const fetchHistoricalPerformance = async () => {
-            try {
-                const mode = isLiveMode ? 'live' : 'testnet';
-                const daily = await HistoricalPerformance.filter(
-                    { mode: mode, period_type: 'daily' },
-                    '-snapshot_timestamp',
-                    60
-                );
-                const hourly = await HistoricalPerformance.filter(
-                    { mode: mode, period_type: 'hourly' },
-                    '-snapshot_timestamp',
-                    72
-                );
-
-                if (mounted) {
-                    setHpDaily((daily || []).sort((a, b) => new Date(a.snapshot_timestamp).getTime() - new Date(b.snapshot_timestamp).getTime()));
-                    setHpHourly((hourly || []).sort((a, b) => new Date(a.snapshot_timestamp).getTime() - new Date(b.snapshot_timestamp).getTime()));
-                }
-            } catch (error) {
-                console.error("[DEBUG_FRONTEND] Error fetching HistoricalPerformance data:", error);
-                if (mounted) {
-                    setHpDaily([]);
-                    setHpHourly([]);
-                }
-            }
-        };
-
-        fetchHistoricalPerformance();
-        return () => { mounted = false; };
-    }, [isLiveMode]);
+    // NOTE: HistoricalPerformance snapshots removed - all analytics now use trades directly
 
     const fetchAllAnalyticsData = useCallback(async () => {
         setAnalyticsData(prev => ({ ...prev, isLoading: true, error: null }));
@@ -517,6 +484,25 @@ export default function Analytics() {
                         </Card>
                     </div>
 
+                    {/* NEW: Trade Analytics Dashboard with Exit Metrics */}
+                    <TradeAnalyticsDashboard tradingMode={isLiveMode ? 'live' : 'testnet'} />
+
+                    {/* NEW: AI Trade Advisor Chat */}
+                    <Card className="h-[600px] mb-6">
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2">
+                                <Sparkles className="h-5 w-5 text-primary" />
+                                AI Trade Advisor
+                            </CardTitle>
+                            <CardDescription>
+                                Ask AI about your trading performance, strategies, and get personalized recommendations based on your trade analytics
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="p-0 h-[calc(100%-120px)]">
+                            <TradeAdvisorChat tradingMode={isLiveMode ? 'live' : 'testnet'} />
+                        </CardContent>
+                    </Card>
+
                     <Card>
                         <CardHeader>
                             <CardTitle>Detailed Analytics</CardTitle>
@@ -527,8 +513,8 @@ export default function Analytics() {
                         <CardContent className="pt-6">
                              {/* Performance charts */}
                             <div className="grid gap-6">
-                                {/* When rendering FearGreedBitcoinChart, pass the HistoricalPerformance arrays */}
-                                <FearGreedBitcoinChart dailyPerformanceHistory={hpDaily} hourlyPerformanceHistory={hpHourly} />
+                                {/* NOTE: HistoricalPerformance snapshots removed - FearGreedBitcoinChart should be updated to use trades */}
+                                <FearGreedBitcoinChart dailyPerformanceHistory={[]} hourlyPerformanceHistory={[]} />
                                 <RegimePerformanceChart regimeData={regimeData} />
                                 <StrategyTypePerformance data={strategyTypeData} />
                                 <MomentumPerformanceChart trades={analyticsData.trades} />

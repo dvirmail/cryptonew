@@ -72,16 +72,24 @@ const formatDate = (dateString) => {
   }
 };
 
-// UPDATED: Safe duration formatting
-const formatDuration = (durationSeconds) => {
-  if (durationSeconds === null || durationSeconds === undefined || isNaN(durationSeconds)) return 'N/A';
+// UPDATED: Safe duration formatting - accepts hours (decimal) or seconds (for backwards compatibility)
+const formatDuration = (durationHoursOrSeconds) => {
+  if (durationHoursOrSeconds === null || durationHoursOrSeconds === undefined || isNaN(durationHoursOrSeconds)) return 'N/A';
 
-  const minutes = Math.floor(durationSeconds / 60);
-  const hours = Math.floor(minutes / 60);
+  // Convert to hours if value is likely in seconds (large values > 1000 are probably seconds)
+  let hours = durationHoursOrSeconds;
+  if (durationHoursOrSeconds > 1000) {
+    // Likely seconds, convert to hours
+    hours = durationHoursOrSeconds / 3600;
+  }
+
+  const totalMinutes = Math.floor(hours * 60);
   const days = Math.floor(hours / 24);
+  const hoursPart = Math.floor(hours % 24);
+  const minutes = totalMinutes % 60;
 
-  if (days > 0) return `${days}d ${hours % 24}h`;
-  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (days > 0) return `${days}d ${hoursPart}h`;
+  if (hoursPart > 0) return `${hoursPart}h ${minutes}m`;
   return `${minutes}m`;
 };
 
@@ -99,8 +107,12 @@ const formatPercentage = (value) => {
 };
 
 export default function TradeHistory() {
+  //console.log('[debug_save] TradeHistory: ==========================================');
+  //console.log('[debug_save] TradeHistory: COMPONENT MOUNTED/RENDERED');
+  //console.log('[debug_save] TradeHistory: ==========================================');
+  
   const { toast } = useToast();
-  const { isLiveMode } = useTradingMode();
+  const { isLiveMode, tradingMode } = useTradingMode();
   const [trades, setTrades] = useState([]);
   const [filteredTrades, setFilteredTrades] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -123,24 +135,57 @@ export default function TradeHistory() {
   const [refreshError, setRefreshError] = useState(null);
 
   const fetchTrades = useCallback(async () => {
+    //console.log('[debug_save] TradeHistory: fetchTrades called');
     setIsLoading(true);
     try {
       // OPTIMIZATION: Fetch trades directly from API instead of through queueEntityCall
       // This makes trade fetching independent of scanner initialization
-      const response = await fetch('http://localhost:3003/api/trades?orderBy=-exit_timestamp&limit=1000');
+      // Limit to last 100 trades for better performance
+      // Only fetch closed trades (exit_timestamp IS NOT NULL)
+      // Also filter by trading_mode if available (helps with performance and ensures correct data)
+      const exitTimestampFilter = encodeURIComponent(JSON.stringify({ $ne: null }));
+      const tradingModeParam = tradingMode ? `&trading_mode=${tradingMode}` : '';
+      const url = `http://localhost:3003/api/trades?exit_timestamp=${exitTimestampFilter}&orderBy=-exit_timestamp&limit=100${tradingModeParam}`;
+      //console.log('[debug_save] TradeHistory: Using trading_mode:', tradingMode || 'none (fetching all)');
+      //console.log('[debug_save] TradeHistory: Fetching from URL:', url);
+      
+      const response = await fetch(url);
+      console.log('[debug_save] TradeHistory: Response status:', response.status, 'ok:', response.ok);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
       
       const result = await response.json();
-      const allTrades = result.success ? result.data : [];
+      //console.log('[debug_save] TradeHistory: Response JSON keys:', Object.keys(result));
+      //console.log('[debug_save] TradeHistory: Response.success:', result.success);
+      //console.log('[debug_save] TradeHistory: Response.data type:', Array.isArray(result.data) ? 'array' : typeof result.data);
+      //console.log('[debug_save] TradeHistory: Response.data length:', Array.isArray(result.data) ? result.data.length : 'N/A');
+      
+      // Handle both result.data and direct result array
+      const allTrades = result.success && result.data ? result.data : (Array.isArray(result) ? result : []);
+      //console.log('[debug_save] TradeHistory: Parsed allTrades length:', allTrades.length);
+      
+      if (allTrades.length > 0) {
+        /*console.log('[debug_save] TradeHistory: First trade sample:', {
+          id: allTrades[0].id,
+          trade_id: allTrades[0].trade_id,
+          position_id: allTrades[0].position_id,
+          symbol: allTrades[0].symbol,
+          exit_timestamp: allTrades[0].exit_timestamp,
+          duration_hours: allTrades[0].duration_hours,
+          exit_reason: allTrades[0].exit_reason
+        });*/
+      }
       
       console.log('[TradeHistory] 📊 Fetched trades directly from API:', allTrades.length);
+      //console.log('[debug_save] TradeHistory: About to call setTrades with', allTrades.length, 'trades');
       setTrades(allTrades || []);
+      //console.log('[debug_save] TradeHistory: setTrades called successfully');
       setLastRefreshTime(new Date());
       setRefreshError(null);
     } catch (error) {
+      console.error("[debug_save] TradeHistory: ❌ Error fetching trades:", error);
       console.error("[TradeHistory] ❌ Error fetching trades:", error);
       setRefreshError(error.message);
       toast({
@@ -151,8 +196,9 @@ export default function TradeHistory() {
       setTrades([]);
     } finally {
       setIsLoading(false);
+      //console.log('[debug_save] TradeHistory: fetchTrades completed, isLoading set to false');
     }
-  }, [toast]);
+  }, [toast, tradingMode]);
 
   // Manual refresh function
   const handleRefresh = useCallback(async () => {
@@ -161,11 +207,56 @@ export default function TradeHistory() {
   }, [fetchTrades]);
 
   useEffect(() => {
+    //console.log('[debug_save] TradeHistory: Initial useEffect - calling fetchTrades');
     fetchTrades();
   }, [fetchTrades]);
 
+  // Listen for global trade data refresh events
   useEffect(() => {
+    //console.log('[debug_save] TradeHistory: Setting up tradeDataRefresh event listener');
+    const handleTradeRefresh = (event) => {
+      //console.log('[debug_save] TradeHistory: ==========================================');
+      //console.log('[debug_save] TradeHistory: Received tradeDataRefresh event!');
+      //console.log('[debug_save] TradeHistory: Event type:', event.type);
+      //console.log('[debug_save] TradeHistory: Event timestamp:', new Date().toISOString());
+      //console.log('[debug_save] TradeHistory: Calling fetchTrades...');
+      //console.log('[debug_save] TradeHistory: ==========================================');
+      //console.log('[TradeHistory] 🔄 Received tradeDataRefresh event, refreshing...');
+      fetchTrades();
+    };
+    
+    //console.log('[debug_save] TradeHistory: Adding event listener to window');
+    window.addEventListener('tradeDataRefresh', handleTradeRefresh);
+    //console.log('[debug_save] TradeHistory: ✅ Event listener added successfully');
+    //console.log('[debug_save] TradeHistory: window.addEventListener exists:', typeof window.addEventListener === 'function');
+    //console.log('[debug_save] TradeHistory: Testing if event listener is working by dispatching a test event...');
+    
+    // Test event dispatch to verify listener works
+    setTimeout(() => {
+      const testEvent = new CustomEvent('tradeDataRefresh');
+      //console.log('[debug_save] TradeHistory: Dispatching test tradeDataRefresh event...');
+      window.dispatchEvent(testEvent);
+      //console.log('[debug_save] TradeHistory: Test event dispatched');
+    }, 1000);
+    
+    // Also listen for any custom events to debug
+    const debugHandler = (event) => {
+      //console.log('[debug_save] TradeHistory: Received window event:', event.type);
+    };
+    window.addEventListener('tradeDataRefresh', debugHandler);
+    
+    return () => {
+      //console.log('[debug_save] TradeHistory: Removing event listeners');
+      window.removeEventListener('tradeDataRefresh', handleTradeRefresh);
+      window.removeEventListener('tradeDataRefresh', debugHandler);
+    };
+  }, [fetchTrades]);
+
+  useEffect(() => {
+    //console.log('[debug_save] TradeHistory: Filtering useEffect triggered');
+    //console.log('[debug_save] TradeHistory: Current trades.length:', trades.length);
     let currentFiltered = [...trades];
+    //console.log('[debug_save] TradeHistory: currentFiltered.length after copy:', currentFiltered.length);
 
     if (filters.tradingMode !== 'all') {
       currentFiltered = currentFiltered.filter(t => t.trading_mode === filters.tradingMode);
@@ -207,7 +298,21 @@ export default function TradeHistory() {
       }
     }
 
-    setFilteredTrades(currentFiltered);
+    // Limit to last 100 trades (already sorted by exit_timestamp descending from API)
+    const limitedFiltered = currentFiltered.slice(0, 100);
+    //console.log('[debug_save] TradeHistory: Final filtered count:', limitedFiltered.length);
+    //console.log('[debug_save] TradeHistory: About to call setFilteredTrades with', limitedFiltered.length, 'trades');
+    if (limitedFiltered.length > 0) {
+      /*console.log('[debug_save] TradeHistory: First filtered trade sample:', {
+        id: limitedFiltered[0].id,
+        trade_id: limitedFiltered[0].trade_id,
+        position_id: limitedFiltered[0].position_id,
+        symbol: limitedFiltered[0].symbol,
+        exit_timestamp: limitedFiltered[0].exit_timestamp
+      });*/
+    }
+    setFilteredTrades(limitedFiltered);
+    //console.log('[debug_save] TradeHistory: setFilteredTrades called successfully');
   }, [trades, filters]);
 
   const refreshData = () => {
@@ -609,7 +714,7 @@ export default function TradeHistory() {
                           <TradeExitReason reason={trade.exit_reason} />
                         </TableCell>
                         <TableCell className="text-sm">
-                          {formatDuration(trade.duration_seconds)}
+                          {formatDuration(trade.duration_hours !== undefined && trade.duration_hours !== null ? trade.duration_hours : trade.duration_seconds)}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-1">

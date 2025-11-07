@@ -36,12 +36,14 @@ export class PerformanceMetricsService {
      */
     async loadInitialMomentumTrades() {
         try {
-            // Use queueEntityCall with 'Trade' entity name string
-            const initialTrades = await queueEntityCall('Trade', 'filter', {}, '-exit_timestamp', this.maxMomentumTrades);
+            // CRITICAL FIX: Filter trades by current trading mode
+            const tradingMode = this.scannerService.getTradingMode?.() || this.scannerService.state?.tradingMode || 'testnet';
+            // Use queueEntityCall with 'Trade' entity name string, filtered by trading mode
+            const initialTrades = await queueEntityCall('Trade', 'filter', { trading_mode: tradingMode }, '-exit_timestamp', this.maxMomentumTrades);
             this.recentTradesForMomentum = initialTrades || [];
             // Update the main scanner's state with the loaded trades for reactivity
             this.scannerService.state.recentTradesForMomentum = [...this.recentTradesForMomentum];
-            this.addLog(`[Performance Momentum] ✅ Loaded ${this.recentTradesForMomentum.length} initial trades.`, 'success');
+            this.addLog(`[Performance Momentum] ✅ Loaded ${this.recentTradesForMomentum.length} initial trades for ${tradingMode} mode.`, 'success');
         } catch (e) {
             console.error(`[Performance Momentum] ⚠️ Could not load initial trades: ${e.message}`, 'warning');
             this.addLog(`[Performance Momentum] ⚠️ Could not load initial trades: ${e.message}`, 'warning');
@@ -155,8 +157,24 @@ export class PerformanceMetricsService {
             }
 
             // 2. Realized P&L Component - IMPROVED with recency weighting
-            const recentTrades = this.recentTradesForMomentum;
+            const tradingMode = state.tradingMode || 'testnet';
+            // CRITICAL FIX: Filter trades by trading mode AND only include closed trades (with exit_timestamp)
+            // Also limit to exactly 100 most recent closed trades
+            const recentTrades = this.recentTradesForMomentum
+                .filter(t => {
+                    // Must be same trading mode
+                    if ((t.trading_mode || 'testnet') !== tradingMode) return false;
+                    // Must be closed (have exit_timestamp)
+                    if (!t.exit_timestamp) return false;
+                    // Must have valid entry_value_usdt (required for percentage calculation)
+                    if (!t.entry_value_usdt || Number(t.entry_value_usdt) <= 0) return false;
+                    return true;
+                })
+                .slice(0, this.maxMomentumTrades); // Ensure exactly 100 (or fewer if less available)
+            
             let realizedComponent = 50;
+            let realizedPnlDetails = 'No recent trades';
+            
             if (recentTrades.length >= 5) {
                 // IMPROVED: Apply recency weighting (more recent trades have higher weight)
                 const now = Date.now();
@@ -177,6 +195,47 @@ export class PerformanceMetricsService {
                 const pnlScore = 50 + (weightedAvgPnl * conservativeScaling * tradeCountFactor);
                 const winRateBonus = (winRate - 50) * 0.2; // Reduced from 0.3
                 realizedComponent = Math.max(0, Math.min(100, pnlScore + winRateBonus));
+                
+                // CRITICAL FIX: Calculate total realized P&L and percentage for details
+                // Sum P&L from last 100 CLOSED trades only (with valid entry_value_usdt)
+                const totalRealizedPnl = recentTrades.reduce((sum, t) => {
+                    const pnl = Number(t.pnl_usdt);
+                    return sum + (isNaN(pnl) ? 0 : pnl);
+                }, 0);
+                
+                // Calculate percentage based on total entry value of those trades (not total equity)
+                // This gives a meaningful ROI percentage for the last 100 trades
+                const totalEntryValue = recentTrades.reduce((sum, t) => {
+                    const entryValue = Number(t.entry_value_usdt);
+                    return sum + (isNaN(entryValue) || entryValue <= 0 ? 0 : entryValue);
+                }, 0);
+                
+                const realizedPnlPercentage = totalEntryValue > 0 ? (totalRealizedPnl / totalEntryValue) * 100 : 0;
+                
+                // Realized P&L calculated
+                
+                // Format the details string similar to unrealized P&L
+                const sign = totalRealizedPnl >= 0 ? '' : '-';
+                const absPnl = Math.abs(totalRealizedPnl);
+                realizedPnlDetails = `${sign}$${absPnl.toFixed(2)} (${realizedPnlPercentage >= 0 ? '+' : ''}${realizedPnlPercentage.toFixed(1)}%)`;
+            } else if (recentTrades.length > 0) {
+                // Show basic info even if we have fewer than 5 trades
+                const totalRealizedPnl = recentTrades.reduce((sum, t) => {
+                    const pnl = Number(t.pnl_usdt);
+                    return sum + (isNaN(pnl) ? 0 : pnl);
+                }, 0);
+                
+                // Calculate percentage based on total entry value of those trades
+                const totalEntryValue = recentTrades.reduce((sum, t) => {
+                    const entryValue = Number(t.entry_value_usdt);
+                    return sum + (isNaN(entryValue) || entryValue <= 0 ? 0 : entryValue);
+                }, 0);
+                
+                const realizedPnlPercentage = totalEntryValue > 0 ? (totalRealizedPnl / totalEntryValue) * 100 : 0;
+                
+                const sign = totalRealizedPnl >= 0 ? '' : '-';
+                const absPnl = Math.abs(totalRealizedPnl);
+                realizedPnlDetails = `${sign}$${absPnl.toFixed(2)} (${realizedPnlPercentage >= 0 ? '+' : ''}${realizedPnlPercentage.toFixed(1)}%)`;
             }
 
             // 3. Market Regime Component - REFINED LOGIC
@@ -297,7 +356,11 @@ export class PerformanceMetricsService {
 
             const breakdown = {
                 unrealized: { score: Math.round(unrealizedComponent), weight: MOMENTUM_WEIGHTS.unrealizedPnl },
-                realized: { score: Math.round(realizedComponent), weight: MOMENTUM_WEIGHTS.realizedPnl },
+                realized: { 
+                    score: Math.round(realizedComponent), 
+                    weight: MOMENTUM_WEIGHTS.realizedPnl,
+                    details: realizedPnlDetails // CRITICAL FIX: Add details for realized P&L display
+                },
                 regime: {
                     score: Math.round(regimeComponent),
                     weight: MOMENTUM_WEIGHTS.regime,

@@ -148,7 +148,7 @@ export const evaluateChartPatternCondition = (candle, indicators, index, signalS
     const signals = [];
     const chartPatternSettings = signalSettings.chartpattern || {};
 
-    if (!indicators.chartpattern || index < 1) {
+    if (!indicators.chartpattern || index < 1 || index >= indicators.chartpattern.length) {
         return signals;
     }
 
@@ -156,6 +156,36 @@ export const evaluateChartPatternCondition = (candle, indicators, index, signalS
     
     // SAFETY CHECK: Ensure currentPatterns is valid
     if (!currentPatterns || typeof currentPatterns !== 'object') {
+        return signals;
+    }
+    
+    // CRITICAL: Check if currentPatterns is actually the expected object structure
+    if (Array.isArray(currentPatterns)) {
+        const errorMsg = `[CHART_PATTERN_EVAL] ❌ CRITICAL: currentPatterns is an ARRAY, not an OBJECT at index ${index}. Expected object with pattern flags.`;
+        console.error(errorMsg);
+        if (onLog) onLog(errorMsg, 'error');
+        return signals;
+    }
+    
+    // DEFENSIVE: Ensure pattern flags exist, add defaults if missing
+    if (typeof currentPatterns === 'object' && currentPatterns !== null) {
+        const hasPatternFlags = 'inverseHeadAndShoulders' in currentPatterns || 'doubleBottom' in currentPatterns || 'headAndShoulders' in currentPatterns;
+        
+        if (!hasPatternFlags) {
+            // Add default flags if missing
+            if (!('inverseHeadAndShoulders' in currentPatterns)) currentPatterns.inverseHeadAndShoulders = false;
+            if (!('doubleBottom' in currentPatterns)) currentPatterns.doubleBottom = false;
+            if (!('headAndShoulders' in currentPatterns)) currentPatterns.headAndShoulders = false;
+            if (!('doubleTop' in currentPatterns)) currentPatterns.doubleTop = false;
+            if (!('triangleAscending' in currentPatterns)) currentPatterns.triangleAscending = false;
+            if (!('triangleDescending' in currentPatterns)) currentPatterns.triangleDescending = false;
+            if (!('triangleSymmetrical' in currentPatterns)) currentPatterns.triangleSymmetrical = false;
+            if (!('wedgeRising' in currentPatterns)) currentPatterns.wedgeRising = false;
+            if (!('wedgeFalling' in currentPatterns)) currentPatterns.wedgeFalling = false;
+            if (!('flag' in currentPatterns)) currentPatterns.flag = false;
+            if (!('pennant' in currentPatterns)) currentPatterns.pennant = false;
+        }
+    } else {
         return signals;
     }
 
@@ -318,6 +348,7 @@ export const evaluateChartPatternCondition = (candle, indicators, index, signalS
     
     // Individual pattern completion events (these are what the backtest engine expects)
     if (currentPatterns.headAndShoulders) {
+        // Head and Shoulders pattern detected
         signals.push({
             type: 'chartpattern',
             value: 'Head and Shoulders',
@@ -486,18 +517,47 @@ export const evaluateCandlestickCondition = (candle, indicators, index, signalSe
     const candlestickSettings = signalSettings.candlestick || {};
 
     if (!candlestickSettings.enabled) {
+        if (debugMode) {
+            console.warn(`[CANDLESTICK_EVAL] Candlestick signals disabled in settings`);
+        }
         return signals;
     }
 
-    if (!indicators.candlestickPatterns || !indicators.data || index < 1) {
+    if (!indicators.candlestickPatterns || !indicators.data || index < 1 || index >= indicators.candlestickPatterns.length) {
+        if (debugMode) {
+            console.warn(`[CANDLESTICK_EVAL] Missing data: candlestickPatterns=${!!indicators.candlestickPatterns}, data=${!!indicators.data}, index=${index}, length=${indicators.candlestickPatterns?.length || 0}`);
+        }
         return signals;
     }
 
     const currentCandle = candle;
     const prevCandle = indicators.data[index - 1];
-    const patterns = indicators.candlestickPatterns[index]; // Assuming pre-computed patterns are stored here
+    const patterns = indicators.candlestickPatterns[index];
+    
+    // CRITICAL: Check if patterns is actually the expected object structure
+    if (Array.isArray(patterns)) {
+        const errorMsg = `[CANDLESTICK_EVAL] ❌ CRITICAL: patterns is an ARRAY, not an OBJECT at index ${index}. Expected object with readyForAnalysis.`;
+        console.error(errorMsg);
+        if (onLog) onLog(errorMsg, 'error');
+        return signals;
+    }
+    
+    // DEFENSIVE: Ensure readyForAnalysis exists
+    if (patterns && typeof patterns === 'object') {
+        if (!('readyForAnalysis' in patterns)) {
+            patterns.readyForAnalysis = index >= 1;
+        }
+    } else if (!patterns) {
+        if (debugMode) {
+            console.warn(`[CANDLESTICK_EVAL] patterns is null/undefined at index ${index}`);
+        }
+        return signals;
+    }
 
     if (!currentCandle || !prevCandle) {
+        if (debugMode) {
+            console.warn(`[CANDLESTICK_EVAL] Missing candle data: currentCandle=${!!currentCandle}, prevCandle=${!!prevCandle}`);
+        }
         return signals;
     }
 
@@ -601,57 +661,74 @@ export const evaluateCandlestickCondition = (candle, indicators, index, signalSe
 
     // --- Event-Based Signals ---
     // These patterns are checked dynamically based on current and previous candle data.
-    if (patterns && typeof patterns === 'object') {
-        if (patterns.readyForAnalysis) {
-            // Check for specific patterns based on the current system
-            const patternChecks = {
-                'Hammer': () => {
-                    return lowerShadow > bodySize * 2 && upperShadow < bodySize * 0.5 && 
-                           lowerShadow > (candleRange * 0.6) && currentCandle.close > currentCandle.open;
-                },
-                'Doji': () => {
-                    return bodyRatio < 0.1;
-                },
-                'Shooting Star': () => {
-                    return upperShadow > bodySize * 2 && lowerShadow < bodySize * 0.5 && 
-                           upperShadow > (candleRange * 0.6) && currentCandle.close < currentCandle.open;
-                },
-                'Bullish Engulfing': () => {
-                    return currentIsBullish && !prevIsBullish && 
-                           currentCandle.close > prevCandle.open && 
-                           currentCandle.open < prevCandle.close;
-                },
-                'Bearish Engulfing': () => {
-                    return !currentIsBullish && prevIsBullish && 
-                           currentCandle.close < prevCandle.open && 
-                           currentCandle.open > prevCandle.close;
-                }
-            };
-
-            // Define categories for each pattern for easier assignment
-            const patternCategories = {
-                'Hammer': 'bullish',
-                'Doji': 'neutral',
-                'Shooting Star': 'bearish',
-                'Bullish Engulfing': 'bullish',
-                'Bearish Engulfing': 'bearish',
-            };
-
-            Object.entries(patternChecks).forEach(([patternName, checkFunction]) => {
-                if (checkFunction()) {
-                    signals.push({
-                        type: 'candlestick',
-                        value: patternName,
-                        strength: 75, // High strength for specific patterns
-                        details: `${patternName} pattern detected`,
-                        priority: 8,
-                        category: patternCategories[patternName],
-                    });
-                }
-            });
+    if (!patterns || typeof patterns !== 'object') {
+        if (debugMode) {
+            console.warn(`[CANDLESTICK_EVAL] patterns is not an object at index ${index}`);
         }
+    } else if (!patterns.readyForAnalysis) {
+        if (debugMode) {
+            console.warn(`[CANDLESTICK_EVAL] readyForAnalysis is false at index ${index}`);
+        }
+    }
+    
+    if (patterns && typeof patterns === 'object' && patterns.readyForAnalysis) {
+        // Check for specific patterns based on the current system
+        const patternChecks = {
+            'Hammer': () => {
+                const condition1 = lowerShadow > bodySize * 2;
+                const condition2 = upperShadow < bodySize * 0.5;
+                const condition3 = lowerShadow > (candleRange * 0.6);
+                const condition4 = currentCandle.close > currentCandle.open;
+                return condition1 && condition2 && condition3 && condition4;
+            },
+            'Doji': () => {
+                return bodyRatio < 0.1;
+            },
+            'Shooting Star': () => {
+                const condition1 = upperShadow > bodySize * 2;
+                const condition2 = lowerShadow < bodySize * 0.5;
+                const condition3 = upperShadow > (candleRange * 0.6);
+                const condition4 = currentCandle.close < currentCandle.open;
+                return condition1 && condition2 && condition3 && condition4;
+            },
+            'Bullish Engulfing': () => {
+                const condition1 = currentIsBullish && !prevIsBullish;
+                const condition2 = currentCandle.close > prevCandle.open;
+                const condition3 = currentCandle.open < prevCandle.close;
+                return condition1 && condition2 && condition3;
+            },
+            'Bearish Engulfing': () => {
+                const condition1 = !currentIsBullish && prevIsBullish;
+                const condition2 = currentCandle.close < prevCandle.open;
+                const condition3 = currentCandle.open > prevCandle.close;
+                return condition1 && condition2 && condition3;
+            }
+        };
+
+        // Define categories for each pattern for easier assignment
+        const patternCategories = {
+            'Hammer': 'bullish',
+            'Doji': 'neutral',
+            'Shooting Star': 'bearish',
+            'Bullish Engulfing': 'bullish',
+            'Bearish Engulfing': 'bearish',
+        };
+
+        Object.entries(patternChecks).forEach(([patternName, checkFunction]) => {
+            if (checkFunction()) {
+                signals.push({
+                    type: 'candlestick',
+                    value: patternName,
+                    strength: 75, // High strength for specific patterns
+                    details: `${patternName} pattern detected`,
+                    priority: 8,
+                    category: patternCategories[patternName],
+                });
+            }
+        });
     }
 
     // Return unique signals by value to avoid duplicates
     return signals.filter((v, idx, a) => a.findIndex(t => t.value === v.value) === idx);
 };
+

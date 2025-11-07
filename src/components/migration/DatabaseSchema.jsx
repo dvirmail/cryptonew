@@ -88,7 +88,8 @@ CREATE TABLE backtest_combinations (
     real_profit_factor DECIMAL(10,4) DEFAULT 0,
     opted_out_globally BOOLEAN DEFAULT false,
     opted_out_for_coin BOOLEAN DEFAULT false,
-    opted_out_date TIMESTAMP
+    opted_out_date TIMESTAMP,
+    is_event_driven_strategy BOOLEAN DEFAULT false
 );
 
 -- Virtual Wallet State table

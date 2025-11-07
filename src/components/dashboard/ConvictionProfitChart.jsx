@@ -74,19 +74,27 @@ export default function ConvictionProfitChart({ trades = [], backtestCombination
 
     if (tradesWithConviction.length === 0) return { convictionData: [], analyzedTradesCount: 0 };
 
-    // Create conviction ranges (0-100 scale)
-    const convictionRanges = [
-      { min: 0, max: 20, label: '0-20' },
-      { min: 20, max: 40, label: '20-40' },
-      { min: 40, max: 60, label: '40-60' },
-      { min: 60, max: 80, label: '60-80' },
-      { min: 80, max: 100, label: '80-100' }
-    ];
+    // Create conviction ranges in increments of 5 (0-100 scale)
+    const convictionRanges = [];
+    for (let i = 0; i < 100; i += 5) {
+      const min = i;
+      const max = i + 5;
+      convictionRanges.push({
+        min,
+        max,
+        label: `${min}-${max}`
+      });
+    }
 
     const rangeStats = convictionRanges.map(range => {
-      const rangedTrades = tradesWithConviction.filter(t => 
-        t.conviction_score >= range.min && t.conviction_score < range.max
-      );
+      // For the last range (95-100), include the max value, otherwise use < max
+      const rangedTrades = tradesWithConviction.filter(t => {
+        const score = t.conviction_score;
+        if (range.max === 100) {
+          return score >= range.min && score <= range.max;
+        }
+        return score >= range.min && score < range.max;
+      });
 
       if (rangedTrades.length === 0) {
         return {

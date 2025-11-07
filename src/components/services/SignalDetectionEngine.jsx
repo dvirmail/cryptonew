@@ -52,7 +52,8 @@ function calculateMaxRequiredKlineLimit(signalSettings) {
 
     // Handle the case where signalSettings might be undefined or not an object
     if (!signalSettings || typeof signalSettings !== 'object') {
-        return maxPeriod + 20;
+        // CRITICAL FIX: Return at least 50 candles to meet minimum requirement (line 999, 1595)
+        return Math.max(50, maxPeriod + 20);
     }
 
     for (const signalKey in signalSettings) {
@@ -135,7 +136,9 @@ function calculateMaxRequiredKlineLimit(signalSettings) {
 
     const finalLimit = maxPeriod + buffer;
 
-    return finalLimit;
+    // CRITICAL FIX: Ensure minimum of 50 candles to meet requirement (line 999, 1595)
+    // This ensures even state-based signals without explicit periods get enough data
+    return Math.max(50, finalLimit);
 }
 
 /**
@@ -290,11 +293,27 @@ export class SignalDetectionEngine {
             }
 
             const symbolNoSlash = (strategy.coin || '').replace('/', '');
-            const priceAtMatch = currentPrices.get(symbolNoSlash);
+            let priceAtMatch = currentPrices.get(symbolNoSlash);
+
+            // FALLBACK: If price not in cache, try to fetch it on-demand
+            if ((typeof priceAtMatch !== 'number' || isNaN(priceAtMatch)) && this.scannerService.priceManagerService) {
+                try {
+                    const fetchedPrice = await this.scannerService.priceManagerService.getCurrentPrice(strategy.coin);
+                    if (fetchedPrice && typeof fetchedPrice === 'number' && !isNaN(fetchedPrice) && fetchedPrice > 0) {
+                        priceAtMatch = fetchedPrice;
+                        // Update the Map so subsequent strategies can use it
+                        currentPrices.set(symbolNoSlash, fetchedPrice);
+                        // console.log(`[SignalDetectionEngine] ✅ Fetched on-demand price for ${strategy.coin}: ${fetchedPrice}`);
+                    }
+                } catch (fetchError) {
+                    console.warn(`[SignalDetectionEngine] ⚠️ Failed to fetch on-demand price for ${strategy.coin}:`, fetchError.message);
+                }
+            }
 
             if (typeof priceAtMatch !== 'number' || isNaN(priceAtMatch)) {
                 result.noMatchReason = `Current price for ${strategy.coin} is not available or invalid.`;
                 this.addLog(`❌ ${result.noMatchReason} Skipping strategy.`, 'warning', { strategyName: strategy.combinationName, level: 1 });
+                console.error(`❌ ${result.noMatchReason} Skipping strategy.`, 'warning', { strategyName: strategy.combinationName, level: 1 });
                 return result;
             }
 
@@ -310,6 +329,7 @@ export class SignalDetectionEngine {
             let combinedStrength = evaluationResult.strength;
             let triggerSignals = evaluationResult.matchedSignals;
             let convictionResult = evaluationResult.convictionResult;
+            let strengthBreakdown = evaluationResult.strengthBreakdown || null; // Capture breakdown for analytics
 
             result.convictionScoreAtBlock = convictionResult.score;
 
@@ -451,6 +471,10 @@ export class SignalDetectionEngine {
                 regime_confidence: marketRegime.confidence,
                 trigger_signals: triggerSignals,
                 combined_strength: combinedStrength,
+                // NEW: Include strength breakdown for analytics (regime and correlation impacts)
+                strength_breakdown: strengthBreakdown,
+                regime_impact_on_strength: strengthBreakdown?.regimeAdjustment || null,
+                correlation_impact_on_strength: strengthBreakdown?.correlationAdjustment || null,
 
                 klines: klines,
                 indicators: indicators,
@@ -505,21 +529,22 @@ export class SignalDetectionEngine {
      */
     async _evaluateSignalAndConviction(strategy, klineData, indicators, marketRegime) {
         if (!strategy || !klineData || !indicators) {
-            return { isMatch: false, strength: 0, matchedSignals: [], failedConditions: ['Missing strategy, klineData, or indicators'], convictionResult: { score: 0, multiplier: 1, breakdown: {} }, priceAtMatch: null, signalLog: [], noMatchReason: 'Missing strategy, klineData, or indicators' };
+            return { isMatch: false, strength: 0, matchedSignals: [], failedConditions: ['Missing strategy, klineData, or indicators'], convictionResult: { score: 0, multiplier: 1, breakdown: {} }, priceAtMatch: null, signalLog: [], noMatchReason: 'Missing strategy, klineData, or indicators', strengthBreakdown: null };
         }
 
         const { klines, priceAtMatch } = klineData;
         if (!klines || klines.length === 0) {
-            return { isMatch: false, strength: 0, matchedSignals: [], failedConditions: ['Kline data is empty'], convictionResult: { score: 0, multiplier: 1, breakdown: {} }, priceAtMatch: null, signalLog: [], noMatchReason: 'Kline data is empty' };
+            return { isMatch: false, strength: 0, matchedSignals: [], failedConditions: ['Kline data is empty'], convictionResult: { score: 0, multiplier: 1, breakdown: {} }, priceAtMatch: null, signalLog: [], noMatchReason: 'Kline data is empty', strengthBreakdown: null };
         }
 
         const signalConditionsResult = evaluateSignalConditions(
             strategy,
             indicators,
-            klines
+            klines,
+            marketRegime // Pass actual market regime and confidence
         );
 
-        const { isMatch, combinedStrength: strength, matchedSignals, failedConditions: rawFailedConditions, log: signalLog } = signalConditionsResult;
+        const { isMatch, combinedStrength: strength, matchedSignals, failedConditions: rawFailedConditions, log: signalLog, strengthBreakdown } = signalConditionsResult;
 
         // Sample log: print one combined-strength evaluation per session
         try {
@@ -528,12 +553,12 @@ export class SignalDetectionEngine {
                 const signalBrief = Array.isArray(matchedSignals)
                     ? matchedSignals.map(s => ({ type: s.type || s.name, strength: s.strength }))
                     : [];
-                console.log('[COMBINED_STRENGTH_SAMPLE] Strategy:', strategy?.combinationName, {
-                    combinedStrength: strength,
-                    matchedSignals: signalBrief,
-                    regime: marketRegime?.regime,
-                    regimeConfidence: marketRegime?.confidence
-                });
+                // console.log('[COMBINED_STRENGTH_SAMPLE] Strategy:', strategy?.combinationName, {
+                //     combinedStrength: strength,
+                //     matchedSignals: signalBrief,
+                //     regime: marketRegime?.regime,
+                //     regimeConfidence: marketRegime?.confidence
+                // });
             }
         } catch (_e) {}
         const failedConditions = rawFailedConditions || [];
@@ -547,7 +572,8 @@ export class SignalDetectionEngine {
                 convictionResult: { score: 0, multiplier: 1, breakdown: {} },
                 priceAtMatch,
                 signalLog,
-                noMatchReason: failedConditions.length > 0 ? failedConditions.join('; ') : 'No signal conditions met'
+                noMatchReason: failedConditions.length > 0 ? failedConditions.join('; ') : 'No signal conditions met',
+                strengthBreakdown: null
             };
         }
 
@@ -570,14 +596,14 @@ export class SignalDetectionEngine {
                     volatility: convictionResult?.breakdown?.volatility?.score,
                     demoPerformance: convictionResult?.breakdown?.demoPerformance?.score
                 };
-                console.log('[CONVICTION_SAMPLE] Strategy:', strategy?.combinationName, {
-                    score: convictionResult?.score,
-                    multiplier: convictionResult?.multiplier,
-                    breakdown: breakdownSummary,
-                    matchedSignalsCount: matchedSignals?.length || 0,
-                    regime: marketRegime?.regime,
-                    priceAtMatch
-                });
+                // console.log('[CONVICTION_SAMPLE] Strategy:', strategy?.combinationName, {
+                //     score: convictionResult?.score,
+                //     multiplier: convictionResult?.multiplier,
+                //     breakdown: breakdownSummary,
+                //     matchedSignalsCount: matchedSignals?.length || 0,
+                //     regime: marketRegime?.regime,
+                //     priceAtMatch
+                // });
             }
         } catch (_e) {}
 
@@ -589,7 +615,8 @@ export class SignalDetectionEngine {
             convictionResult,
             priceAtMatch,
             signalLog,
-            noMatchReason: null
+            noMatchReason: null,
+            strengthBreakdown: strengthBreakdown || null // Include breakdown for analytics
         };
     }
 
@@ -693,9 +720,16 @@ export class SignalDetectionEngine {
     updateTrailingStop(position, currentPrice) {
         if (!position.enableTrailingTakeProfit) return;
 
+        // CRITICAL FIX: Convert entry_price to number (may be string from DB/JSON)
+        const entryPrice = Number(position.entry_price) || 0;
+        if (entryPrice <= 0) {
+            console.warn(`[updateTrailingStop] Invalid entry_price for position ${position.position_id}: ${position.entry_price}`);
+            return;
+        }
+
         const activationPriceChange = position.direction === 'long'
-            ? (currentPrice - position.entry_price) / position.entry_price
-            : (position.entry_price - currentPrice) / position.entry_price;
+            ? (currentPrice - entryPrice) / entryPrice
+            : (entryPrice - currentPrice) / entryPrice;
 
         if (!position.is_trailing && activationPriceChange > 0.005) { // 0.5% profit threshold to activate
             position.is_trailing = true;
@@ -711,23 +745,30 @@ export class SignalDetectionEngine {
         }
 
         if (position.is_trailing) {
-            this.addLog(`[POS_MON] 📊 Checking trailing stop for ${position.position_id.slice(-8)}: current $${currentPrice.toFixed(6)}, trailing stop $${position.trailing_stop_price.toFixed(6)}`, 'debug');
+            // CRITICAL FIX: Convert trailing_stop_price to number for logging
+            const currentTrailingStopForLog = Number(position.trailing_stop_price) || 0;
+            this.addLog(`[POS_MON] 📊 Checking trailing stop for ${position.position_id.slice(-8)}: current $${currentPrice.toFixed(6)}, trailing stop $${currentTrailingStopForLog.toFixed(6)}`, 'debug');
 
+            // CRITICAL FIX: Convert trailing_peak_price to number
+            const trailingPeakPrice = Number(position.trailing_peak_price) || entryPrice;
+            
             const shouldUpdatePeak = position.direction === 'long'
-                ? currentPrice > (position.trailing_peak_price || position.entry_price)
-                : currentPrice < (position.trailing_peak_price || position.entry_price);
+                ? currentPrice > trailingPeakPrice
+                : currentPrice < trailingPeakPrice;
 
             if (shouldUpdatePeak) {
-                const oldPeak = position.trailing_peak_price || position.entry_price; // For logging old peak
+                const oldPeak = trailingPeakPrice; // For logging old peak
                 position.trailing_peak_price = currentPrice;
                 const trailingDistance = currentPrice * (position.trailingStopPercentage || 0.01);
                 const newTrailingStop = position.direction === 'long'
                     ? currentPrice - trailingDistance
                     : currentPrice + trailingDistance;
 
+                // CRITICAL FIX: Convert trailing_stop_price to number
+                const currentTrailingStop = Number(position.trailing_stop_price) || 0;
                 const isBetterStop = position.direction === 'long'
-                    ? newTrailingStop > (position.trailing_stop_price || 0)
-                    : newTrailingStop < (position.trailing_stop_price || Infinity);
+                    ? newTrailingStop > currentTrailingStop
+                    : newTrailingStop < currentTrailingStop;
 
                 if (isBetterStop) {
                     position.trailing_stop_price = newTrailingStop;
@@ -749,52 +790,60 @@ export class SignalDetectionEngine {
         const timeElapsedHours = (1.0 * Date.now() - entryTime) / (1000 * 3600);
         this.addLog(`[POS_MON] Position ${position.position_id.slice(-8)} age: ${timeElapsedHours.toFixed(2)} hours`, 'debug');
 
-        // 1. Time-based Exit
-        if (position.time_exit_hours && typeof position.time_exit_hours === 'number') {
-            const timeExitMilliseconds = position.time_exit_hours * 60 * 60 * 1000;
+        // CRITICAL FIX: Convert numeric fields to numbers (may be strings from DB/JSON)
+        const timeExitHours = Number(position.time_exit_hours) || 0;
+        const trailingStopPrice = Number(position.trailing_stop_price) || 0;
+        const stopLossPrice = Number(position.stop_loss_price) || 0;
+        const takeProfitPrice = Number(position.take_profit_price) || 0;
+
+        // PRIORITY 1: Stop Loss (protect capital first) - ALWAYS check before timeout
+        // Check initial stop loss if not using trailing stop
+        if (!position.is_trailing && stopLossPrice > 0) {
+            if (position.direction === 'long' && currentPrice <= stopLossPrice) {
+                this.addLog(`[POS_MON] 🛑 STOP LOSS HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} vs SL $${stopLossPrice.toFixed(6)}`, 'debug');
+                return { shouldClose: true, reason: 'stop_loss' };
+            }
+            if (position.direction === 'short' && currentPrice >= stopLossPrice) {
+                this.addLog(`[POS_MON] 🛑 STOP LOSS HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} vs SL $${stopLossPrice.toFixed(6)}`, 'debug');
+                return { shouldClose: true, reason: 'stop_loss' };
+            }
+        }
+
+        // PRIORITY 2: Take Profit (lock profits) - Check before timeout
+        // Fixed Take Profit Hit (only for non-trailing trades)
+        if (!position.enableTrailingTakeProfit && takeProfitPrice > 0) {
+            if (position.direction === 'long' && currentPrice >= takeProfitPrice) {
+                this.addLog(`[POS_MON] 🎯 TAKE PROFIT HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} vs TP $${takeProfitPrice.toFixed(6)}`, 'debug');
+                return { shouldClose: true, reason: 'take_profit' };
+            }
+            if (position.direction === 'short' && currentPrice <= takeProfitPrice) {
+                this.addLog(`[POS_MON] 🎯 TAKE PROFIT HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} vs TP $${takeProfitPrice.toFixed(6)}`, 'debug');
+                return { shouldClose: true, reason: 'take_profit' };
+            }
+        }
+
+        // PRIORITY 3: Trailing Stop Loss (protect profits) - Check before timeout
+        if (position.is_trailing && trailingStopPrice > 0) {
+            if (position.direction === 'long' && currentPrice <= trailingStopPrice) {
+                this.addLog(`[POS_MON] 🎯 TRAILING STOP HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} <= $${trailingStopPrice.toFixed(6)}`, 'debug');
+                return { shouldClose: true, reason: 'trailing_stop_hit' };
+            }
+            if (position.direction === 'short' && currentPrice >= trailingStopPrice) {
+                this.addLog(`[POS_MON] 🎯 TRAILING STOP HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} >= $${trailingStopPrice.toFixed(6)}`, 'debug');
+                return { shouldClose: true, reason: 'trailing_stop_hit' };
+            }
+        }
+
+        // PRIORITY 4: Time-based Exit (last resort)
+        // Timeout exits are checked last, after SL/TP have been checked
+        if (timeExitHours > 0) {
+            const timeExitMilliseconds = timeExitHours * 60 * 60 * 1000;
             const exitTimestamp = entryTime + timeExitMilliseconds;
             const now = Date.now();
-            const timeRemainingMinutes = (exitTimestamp - now) / (60 * 1000);
 
             if (now >= exitTimestamp) {
-                this.addLog(`[POS_MON] ⏰ TIMEOUT DETECTED for ${position.position_id.slice(-8)}: ${timeElapsedHours.toFixed(2)}h >= ${position.time_exit_hours}h`, 'debug');
+                this.addLog(`[POS_MON] ⏰ TIMEOUT DETECTED for ${position.position_id.slice(-8)}: ${timeElapsedHours.toFixed(2)}h >= ${timeExitHours}h`, 'debug');
                 return { shouldClose: true, reason: position.is_trailing ? 'timeout_after_trailing' : 'timeout_no_trailing' };
-            }
-        }
-
-        // 2. Trailing Stop Loss Hit
-        if (position.is_trailing && position.trailing_stop_price) {
-            if (position.direction === 'long' && currentPrice <= position.trailing_stop_price) {
-                this.addLog(`[POS_MON] 🎯 TRAILING STOP HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} <= $${position.trailing_stop_price.toFixed(6)}`, 'debug');
-                return { shouldClose: true, reason: 'trailing_stop_hit' };
-            }
-            if (position.direction === 'short' && currentPrice >= position.trailing_stop_price) {
-                this.addLog(`[POS_MON] 🎯 TRAILING STOP HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} >= $${position.trailing_stop_price.toFixed(6)}`, 'debug');
-                return { shouldClose: true, reason: 'trailing_stop_hit' };
-            }
-        }
-
-        // 3. Initial Stop Loss Hit (only if not trailing)
-        if (!position.is_trailing && position.stop_loss_price) {
-            if (position.direction === 'long' && currentPrice <= position.stop_loss_price) {
-                this.addLog(`[POS_MON] 🛑 STOP LOSS HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} vs SL $${position.stop_loss_price.toFixed(6)}`, 'debug');
-                return { shouldClose: true, reason: 'stop_loss' };
-            }
-            if (position.direction === 'short' && currentPrice >= position.stop_loss_price) {
-                this.addLog(`[POS_MON] 🛑 STOP LOSS HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} vs SL $${position.stop_loss_price.toFixed(6)}`, 'debug');
-                return { shouldClose: true, reason: 'stop_loss' };
-            }
-        }
-
-        // 4. Fixed Take Profit Hit (only for non-trailing trades)
-        if (!position.enableTrailingTakeProfit && position.take_profit_price) {
-            if (position.direction === 'long' && currentPrice >= position.take_profit_price) {
-                this.addLog(`[POS_MON] 🎯 TAKE PROFIT HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} vs TP $${position.take_profit_price.toFixed(6)}`, 'debug');
-                return { shouldClose: true, reason: 'take_profit' };
-            }
-            if (position.direction === 'short' && currentPrice <= position.take_profit_price) {
-                this.addLog(`[POS_MON] 🎯 TAKE PROFIT HIT for ${position.position_id.slice(-8)}: $${currentPrice.toFixed(6)} vs TP $${position.take_profit_price.toFixed(6)}`, 'debug');
-                return { shouldClose: true, reason: 'take_profit' };
             }
         }
 
@@ -976,13 +1025,41 @@ export class SignalDetectionEngine {
             strategiesInGroup.forEach(s => {
                 (s.signals || []).forEach(signalDef => {
                     const signalTypeLower = signalDef.type.toLowerCase();
-                    indicatorSettingsForCalculation[signalTypeLower] = {
+                    
+                    // Normalize TTM Squeeze variations (handle ALL cases)
+                    let normalizedType = signalTypeLower.trim();
+                    if (normalizedType === 'ttmsqueeze' || normalizedType === 'ttm_squeeze' || normalizedType === 'ttm-squeeze') {
+                        normalizedType = 'ttm_squeeze';
+                        if (signalDef.type.toLowerCase().trim() !== 'ttm_squeeze') {
+                            //console.log(`[SIGNAL_EXTRACTION] 🔄 Normalizing "${signalDef.type}" → "ttm_squeeze" for strategy "${s.combinationName}"`);
+                        }
+                    }
+                    
+                    indicatorSettingsForCalculation[normalizedType] = {
                         enabled: true,
-                        ...(indicatorSettingsForCalculation[signalTypeLower] || {}),
+                        ...(indicatorSettingsForCalculation[normalizedType] || {}),
                         ...(signalDef.parameters || {})
                     };
+                    
+                    // Log TTM Squeeze extraction
+                    if (signalDef.type.toLowerCase().includes('squeeze') || signalDef.type.toLowerCase().includes('ttm')) {
+                        //console.log(`[SIGNAL_EXTRACTION] ✅ Extracted TTM Squeeze signal: type="${signalDef.type}" → normalized="${normalizedType}", value="${signalDef.value || 'N/A'}"`);
+                    }
                 });
             });
+            
+            // Log all extracted signal types for debugging
+            //console.log(`[SIGNAL_EXTRACTION] 📋 Extracted ${Object.keys(indicatorSettingsForCalculation).length} signal types:`, Object.keys(indicatorSettingsForCalculation));
+            if (indicatorSettingsForCalculation.ttm_squeeze) {
+                //console.log(`[SIGNAL_EXTRACTION] ✅✅✅ TTM_SQUEEZE FOUND IN EXTRACTION! ✅✅✅`);
+            } else {
+                //console.log(`[SIGNAL_EXTRACTION] ❌❌❌ TTM_SQUEEZE NOT FOUND IN EXTRACTION ❌❌❌`);
+                // Debug: Check if it's there under different name
+                const squeezeKeys = Object.keys(indicatorSettingsForCalculation).filter(k => k.includes('squeeze') || k.includes('ttm'));
+                if (squeezeKeys.length > 0) {
+                    console.log(`[SIGNAL_EXTRACTION] ⚠️ Found similar keys:`, squeezeKeys);
+                }
+            }
 
             if (!indicatorSettingsForCalculation.atr) {
                 indicatorSettingsForCalculation.atr = { enabled: true, period: 14 };
@@ -1178,19 +1255,46 @@ export class SignalDetectionEngine {
         for (const position of openPositions) {
             this.addLog(`[POS_MON] Checking position ${position.position_id.slice(-8)} (${position.symbol}, ${position.strategy_name})`, 'debug');
             const symbolNoSlash = (position.symbol || '').replace('/', '');
-            const currentPrice = priceCache.get(symbolNoSlash);
+            let currentPrice = priceCache.get(symbolNoSlash);
 
-            if (typeof currentPrice !== 'number') {
+            // FALLBACK: If price not in cache, try to fetch it on-demand
+            if ((typeof currentPrice !== 'number' || isNaN(currentPrice)) && this.scannerService?.priceManagerService) {
+                try {
+                    const fetchedPrice = await this.scannerService.priceManagerService.getCurrentPrice(position.symbol);
+                    if (fetchedPrice && typeof fetchedPrice === 'number' && !isNaN(fetchedPrice) && fetchedPrice > 0) {
+                        currentPrice = fetchedPrice;
+                        // Update the cache so subsequent positions can use it
+                        priceCache.set(symbolNoSlash, fetchedPrice);
+                        this.addLog(`[POS_MON] ✅ Fetched on-demand price for ${position.symbol}: $${fetchedPrice.toFixed(6)}`, 'debug');
+                    } else {
+                        this.addLog(`[POS_MON] ⚠️ Invalid price fetched for ${position.symbol}: ${fetchedPrice}`, 'warning');
+                    }
+                } catch (fetchError) {
+                    this.addLog(`[POS_MON] ⚠️ Failed to fetch on-demand price for ${position.symbol}: ${fetchError.message}`, 'warning');
+                }
+            }
+
+            if (typeof currentPrice !== 'number' || isNaN(currentPrice)) {
                 const errorMsg = `[POS_MON] ⚠️ No current price for ${position.symbol}, skipping management for position ${position.position_id.slice(-8)}.`;
-                this.addLog(errorMsg, 'warning');
+                this.addLog(errorMsg, 'warning');              
+                
                 errors.push(errorMsg);
                 continue;
             }
 
-            this.addLog(`[POS_MON] Position ${position.position_id.slice(-8)} current price: $${currentPrice.toFixed(6)}, entry: $${position.entry_price.toFixed(6)}`, 'debug');
+            // CRITICAL FIX: Convert entry_price and other numeric fields to numbers
+            // Database/JSON may store these as strings
+            const entryPrice = Number(position.entry_price) || 0;
+            const peakPrice = Number(position.peak_price) || entryPrice;
+            const troughPrice = Number(position.trough_price) || entryPrice;
+            const stopLossPrice = Number(position.stop_loss_price) || 0;
+            const takeProfitPrice = Number(position.take_profit_price) || 0;
+            const trailingStopPrice = Number(position.trailing_stop_price) || 0;
 
-            position.peak_price = Math.max(position.peak_price || position.entry_price, currentPrice);
-            position.trough_price = Math.min(position.trough_price || position.entry_price, currentPrice);
+            this.addLog(`[POS_MON] Position ${position.position_id.slice(-8)} current price: $${currentPrice.toFixed(6)}, entry: $${entryPrice.toFixed(6)}`, 'debug');
+
+            position.peak_price = Math.max(peakPrice, currentPrice);
+            position.trough_price = Math.min(troughPrice, currentPrice);
 
             this.updateTrailingStop(position, currentPrice);
 
@@ -1200,23 +1304,23 @@ export class SignalDetectionEngine {
                 let determinedExitPrice = currentPrice;
 
                 // Ensure exit price is at least the trigger price, not lower due to slippage for SL/trailing, or higher for TP
-                if (exitCondition.reason === 'stop_loss' && position.stop_loss_price) {
+                if (exitCondition.reason === 'stop_loss' && stopLossPrice > 0) {
                     if (position.direction === 'long') {
-                        determinedExitPrice = Math.min(currentPrice, position.stop_loss_price);
+                        determinedExitPrice = Math.min(currentPrice, stopLossPrice);
                     } else { // short
-                        determinedExitPrice = Math.max(currentPrice, position.stop_loss_price);
+                        determinedExitPrice = Math.max(currentPrice, stopLossPrice);
                     }
-                } else if (exitCondition.reason === 'take_profit' && position.take_profit_price) {
+                } else if (exitCondition.reason === 'take_profit' && takeProfitPrice > 0) {
                     if (position.direction === 'long') {
-                        determinedExitPrice = Math.max(currentPrice, position.take_profit_price);
+                        determinedExitPrice = Math.max(currentPrice, takeProfitPrice);
                     } else { // short
-                        determinedExitPrice = Math.min(currentPrice, position.take_profit_price);
+                        determinedExitPrice = Math.min(currentPrice, takeProfitPrice);
                     }
-                } else if (exitCondition.reason === 'trailing_stop_hit' && position.trailing_stop_price) {
+                } else if (exitCondition.reason === 'trailing_stop_hit' && trailingStopPrice > 0) {
                     if (position.direction === 'long') {
-                        determinedExitPrice = Math.min(currentPrice, position.trailing_stop_price);
+                        determinedExitPrice = Math.min(currentPrice, trailingStopPrice);
                     } else { // short
-                        determinedExitPrice = Math.max(currentPrice, position.trailing_stop_price);
+                        determinedExitPrice = Math.max(currentPrice, trailingStopPrice);
                     }
                 }
 
@@ -1360,30 +1464,8 @@ export class SignalDetectionEngine {
             const allPositions = (walletState?.positions || []);
             const openPositions = allPositions.filter(pos => pos.status === 'open');
 
-            // Debug logging for strategies
-            console.log(`[SignalDetectionEngine] 🔍 Active strategies:`, {
-                strategyCount: this.scannerService.state.activeStrategies?.length || 0,
-                sampleStrategies: this.scannerService.state.activeStrategies?.slice(0, 3).map(s => ({
-                    coin: s.coin,
-                    combinationName: s.combinationName
-                })) || []
-            });
-            
             const exchangeInfo = this.scannerService.getExchangeInfo();
             
-            // Debug logging for exchange info
-            if (exchangeInfo && Object.keys(exchangeInfo).length > 0) {
-                console.log(`[SignalDetectionEngine] 🔍 Exchange info loaded:`, {
-                    tradingMode: this.scannerService.state.tradingMode,
-                    symbolCount: Object.keys(exchangeInfo).length,
-                    sampleSymbols: Object.keys(exchangeInfo).slice(0, 5),
-                    hasETHUSDT: !!exchangeInfo['ETHUSDT'],
-                    hasXLMUSDT: !!exchangeInfo['XLMUSDT'],
-                    hasBTCUSDT: !!exchangeInfo['BTCUSDT']
-                });
-            } else {
-                console.log(`[SignalDetectionEngine] ⚠️ No exchange info available for trading mode: ${this.scannerService.state.tradingMode}`);
-            }
             if (!exchangeInfo || Object.keys(exchangeInfo).length === 0) {
                 this.addLog('🔴 CRITICAL: Exchange information is not available for symbol validation. Proceeding without validation (risky).', 'error');
             } else {
@@ -1410,6 +1492,8 @@ export class SignalDetectionEngine {
                     const coinDetails = exchangeInfo[formattedCoinSymbol];
 
                     // Debug logging for symbol lookup
+                    // Commented out to reduce console flooding
+                    /*
                     if (!coinDetails) {
                         console.log(`[SignalDetectionEngine] 🔍 Symbol lookup failed:`, {
                             originalCoin: strategy.coin,
@@ -1418,6 +1502,7 @@ export class SignalDetectionEngine {
                             exchangeInfoCount: Object.keys(exchangeInfo).length
                         });
                     }
+                    */
 
                     if (!coinDetails) {
                         scanStats.strategiesSkipped++;
@@ -1526,6 +1611,8 @@ export class SignalDetectionEngine {
                         });
                     });
                     groupMaxKlineLimit = calculateMaxRequiredKlineLimit(signalSettingsForGroup);
+                    // Ensure minimum of 50 even if calculateMaxRequiredKlineLimit returns less
+                    groupMaxKlineLimit = Math.max(50, groupMaxKlineLimit);
 
                     // NEW: Direct call to bypass API queue for better batching
                     const klinePromise = getKlineData({
@@ -1667,6 +1754,89 @@ export class SignalDetectionEngine {
                     totalConvictionFailures: scanStats.totalConvictionFailures,
                     newlyOpenedPositions: scanStats.pendingTradeRequests
                 };
+            }
+
+            // FIX: Calculate indicators for symbols with open positions that aren't being scanned
+            // This ensures ATR is available for position monitoring even if no strategies are active for that symbol
+            const symbolsWithOpenPositions = new Set();
+            openPositions.forEach(pos => {
+                if (pos.symbol) {
+                    const symbolNoSlash = pos.symbol.replace('/', '');
+                    symbolsWithOpenPositions.add(symbolNoSlash);
+                }
+            });
+
+            const symbolsBeingScanned = new Set();
+            for (const groupKey in groupedStrategies) {
+                const [coin] = groupKey.split('-');
+                symbolsBeingScanned.add(coin);
+            }
+
+            const symbolsNeedingIndicators = Array.from(symbolsWithOpenPositions).filter(symbol => !symbolsBeingScanned.has(symbol));
+            
+            if (symbolsNeedingIndicators.length > 0) {
+                this.scannerService.addLog(`[INDICATOR_PRELOAD] Calculating indicators for ${symbolsNeedingIndicators.length} symbols with open positions but no active strategies...`, 'info');
+                
+                const indicatorPreloadPromises = [];
+                
+                for (const symbolNoSlash of symbolsNeedingIndicators) {
+                    // Find the timeframe from any open position for this symbol
+                    const positionForSymbol = openPositions.find(pos => pos.symbol && pos.symbol.replace('/', '') === symbolNoSlash);
+                    const timeframe = positionForSymbol?.timeframe || '15m'; // Default to 15m if not found
+                    
+                    const preloadPromise = getKlineData({
+                        symbols: [symbolNoSlash],
+                        interval: timeframe,
+                        limit: 100 // Enough for ATR calculation
+                    })
+                    .then(response => {
+                        if (response?.success && response?.data?.[symbolNoSlash]?.success && response?.data?.[symbolNoSlash]?.data) {
+                            const klineData = response.data[symbolNoSlash].data.map(kline => ({
+                                timestamp: Array.isArray(kline) ? kline[0] : kline.timestamp || kline.time,
+                                open: parseFloat(Array.isArray(kline) ? kline[1] : kline.open),
+                                high: parseFloat(Array.isArray(kline) ? kline[2] : kline.high),
+                                low: parseFloat(Array.isArray(kline) ? kline[3] : kline.low),
+                                close: parseFloat(Array.isArray(kline) ? kline[4] : kline.close),
+                                volume: parseFloat(Array.isArray(kline) ? kline[5] : kline.volume)
+                            }));
+
+                            if (klineData.length >= 50) {
+                                // Calculate indicators (especially ATR) for this symbol
+                                const indicatorSettingsForCalculation = {
+                                    atr: { enabled: true, period: 14 },
+                                    volume_sma: { enabled: true, period: 20 },
+                                    obv: { enabled: true }
+                                };
+
+                                const allIndicators = calculateAllIndicators(klineData, indicatorSettingsForCalculation, this.scannerService.addLog.bind(this.scannerService));
+                                
+                                // Store indicators in scanner service state
+                                if (!this.scannerService.state.indicators) {
+                                    this.scannerService.state.indicators = {};
+                                }
+                                this.scannerService.state.indicators[symbolNoSlash] = allIndicators;
+                                
+                                this.scannerService.addLog(`[INDICATOR_PRELOAD] ✅ Calculated and stored indicators for ${symbolNoSlash} (${timeframe})`, 'info');
+                                return { symbol: symbolNoSlash, success: true };
+                            }
+                        }
+                        return { symbol: symbolNoSlash, success: false, error: 'Insufficient kline data' };
+                    })
+                    .catch(error => {
+                        this.scannerService.addLog(`[INDICATOR_PRELOAD] ⚠️ Failed to preload indicators for ${symbolNoSlash}: ${error.message}`, 'warning');
+                        return { symbol: symbolNoSlash, success: false, error: error.message };
+                    });
+                    
+                    indicatorPreloadPromises.push(preloadPromise);
+                }
+                
+                const preloadResults = await Promise.allSettled(indicatorPreloadPromises);
+                const successful = preloadResults.filter(r => r.status === 'fulfilled' && r.value?.success).length;
+                const failed = preloadResults.length - successful;
+                
+                if (successful > 0) {
+                    this.scannerService.addLog(`[INDICATOR_PRELOAD] ✅ Successfully preloaded indicators for ${successful} symbol${successful !== 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}`, 'success');
+                }
             }
 
             const { positionsToClose, monitoringErrors } = await this._manageOpenPositions(walletState, settings, currentPricesMap);
@@ -1849,6 +2019,19 @@ export class SignalDetectionEngine {
                             try {
                                 await this.scannerService.positionManager.persistWalletChangesAndWait();
 
+                                // CRITICAL FIX: Delay before dispatching event to ensure position is fully committed and queryable
+                                // This prevents race conditions where syncWithBinance queries before position is visible
+                                await new Promise(resolve => setTimeout(resolve, 200));
+                                
+                                // Dispatch event to refresh wallet page positions AFTER wallet state is persisted
+                                if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && actualExecutedPositions.length > 0) {
+                                    const event = new CustomEvent('positionDataRefresh', { 
+                                        detail: { positionsOpened: actualExecutedPositions.length, source: 'scan_cycle' } 
+                                    });
+                                    window.dispatchEvent(event);
+                                    // console.log(`[SignalDetectionEngine] ✅ Dispatched positionDataRefresh event (${actualExecutedPositions.length} positions)`);
+                                }
+
                                 scanStats.tradesExecuted += actualExecutedPositions.length;
 
                                 for (const position of actualExecutedPositions) {
@@ -1891,6 +2074,8 @@ export class SignalDetectionEngine {
                 this.addLog(`ℹ️ No eligible signals to process after pre-filtering`, 'info'); // Updated log
             }
 
+
+            // Signal quality summary removed - too verbose
 
             const finalResults = {
                 signalsFound: scanStats.signalsFound,

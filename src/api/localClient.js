@@ -101,6 +101,15 @@ class Entity {
   }
 
   async update(id, data) {
+    // For local development, use proxy server for backtestCombinations
+    if (this.name === 'backtestCombinations') {
+      const response = await apiRequest(`/${this.name}/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      });
+      return response.data;
+    }
+    
     const response = await apiRequest(`/entities/${this.name}/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -116,6 +125,15 @@ class Entity {
   }
 
   async bulkDelete(ids) {
+    // For local development, use proxy server for backtestCombinations
+    if (this.name === 'backtestCombinations') {
+      const response = await apiRequest(`/${this.name}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ ids }),
+      });
+      return response;
+    }
+    
     const response = await apiRequest(`/entities/${this.name}`, {
       method: 'DELETE',
       body: JSON.stringify({ ids }),
@@ -128,7 +146,7 @@ class Entity {
     return response.data;
   }
 
-  async list(orderBy = '-created_date', limit = 100) {
+  async list(orderBy = '-created_date', limit = 10000) {
     // For local development, use proxy server for backtestCombinations
     if (this.name === 'backtestCombinations') {
       const response = await apiRequest(`/${this.name}?${new URLSearchParams({ orderBy, limit })}`);
@@ -148,27 +166,106 @@ class Entity {
   }
 
   async filter(conditions = {}, orderBy = '-created_date', limit = 100) {
-    // For local development, use proxy server for backtestCombinations
-    if (this.name === 'backtestCombinations') {
-      const params = new URLSearchParams({ ...conditions, orderBy, limit });
-      const response = await apiRequest(`/${this.name}?${params}`);
-      return response.data;
+    const filterStartTime = performance.now();
+    const filterStartISO = new Date().toISOString();
+    
+    let endpoint = '';
+    let method = 'GET';
+    let requestBody = null;
+    
+    // CRITICAL FIX: Use POST /api/entities/LivePosition/filter instead of GET /livePositions
+    // This ensures we hit the proxy server's filter endpoint which has proper DB reloading logic
+    if (this.name === 'livePositions') {
+      endpoint = `/entities/LivePosition/filter`;
+      method = 'POST';
+      // For POST, send conditions in body
+      requestBody = conditions;
+    } else {
+      // For GET requests, build query params
+      // CRITICAL FIX: Properly serialize conditions, especially nested objects like { exit_timestamp: { $ne: null } }
+      // URLSearchParams doesn't handle nested objects, so we need to JSON.stringify them
+      const params = new URLSearchParams();
+      
+      // Add simple key-value pairs
+      Object.keys(conditions).forEach(key => {
+        const value = conditions[key];
+        if (value !== null && value !== undefined) {
+          if (Array.isArray(value)) {
+            // Array values: append each item separately (query string will be ?status=open&status=trailing)
+            value.forEach(item => {
+              params.append(key, String(item));
+            });
+          } else if (typeof value === 'object') {
+            // Nested object (e.g., { exit_timestamp: { $ne: null } })
+            // Stringify it so the proxy server can parse it
+            params.append(key, JSON.stringify(value));
+          } else {
+            // Simple value
+            params.append(key, String(value));
+          }
+        }
+      });
+      
+      params.append('orderBy', orderBy);
+      params.append('limit', String(limit));
+      
+      // For local development, use proxy server for backtestCombinations
+      if (this.name === 'backtestCombinations') {
+        endpoint = `/${this.name}?${params}`;
+      }
+      // Special handling for entities that use direct API endpoints
+      else if (this.name === 'walletSummaries' || this.name === 'ScanSettings' || this.name === 'trades') {
+        endpoint = `/${this.name}?${params}`;
+      } else {
+        endpoint = `/entities/${this.name}?${params}`;
+      }
     }
     
-    // Special handling for entities that use direct API endpoints
-    if (this.name === 'walletSummaries' || this.name === 'livePositions' || this.name === 'ScanSettings' || this.name === 'trades') {
-      const params = new URLSearchParams({ ...conditions, orderBy, limit });
-      const response = await apiRequest(`/${this.name}?${params}`);
-      return response.data;
+    //console.log(`[POSITION_QUERY] [API_CLIENT] 🔍 Entity.filter() called for ${this.name}`);
+    //console.log(`[POSITION_QUERY] [API_CLIENT] ⏰ Filter start time: ${filterStartISO}`);
+    //console.log(`[POSITION_QUERY] [API_CLIENT] 📝 Filter conditions:`, JSON.stringify(conditions));
+    //console.log(`[POSITION_QUERY] [API_CLIENT] 🌐 Endpoint: ${method} ${endpoint}`);
+    
+    const requestStartTime = performance.now();
+    let response;
+    
+    // CRITICAL FIX: Use POST with body for LivePosition filter
+    if (method === 'POST' && requestBody !== null) {
+      response = await apiRequest(endpoint, {
+        method: 'POST',
+        body: JSON.stringify(requestBody),
+      });
+    } else {
+      // For GET requests, use default method
+      response = await apiRequest(endpoint);
     }
     
-    const params = new URLSearchParams({ ...conditions, orderBy, limit });
-    const response = await apiRequest(`/entities/${this.name}?${params}`);
+    const requestEndTime = performance.now();
+    const requestDuration = requestEndTime - requestStartTime;
+    const filterEndTime = performance.now();
+    const filterDuration = filterEndTime - filterStartTime;
+    const filterEndISO = new Date().toISOString();
+    
+    //console.log(`[POSITION_QUERY] [API_CLIENT] ⏱️ Request completed in ${requestDuration.toFixed(2)}ms`);
+    //console.log(`[POSITION_QUERY] [API_CLIENT] ⏱️ Total filter() time: ${filterDuration.toFixed(2)}ms`);
+    //console.log(`[POSITION_QUERY] [API_CLIENT] ⏰ Filter end time: ${filterEndISO}`);
+    //console.log(`[POSITION_QUERY] [API_CLIENT] 📥 Response data length: ${response?.data?.length || 0}`);
+    
     return response.data;
   }
 
   async bulkCreate(items) {
-    // For local client, create items one by one
+    // For backtestCombinations, use the bulk endpoint
+    if (this.name === 'backtestCombinations') {
+      const response = await apiRequest(`/${this.name}/bulkCreate`, {
+        method: 'POST',
+        body: JSON.stringify(items),
+      });
+      // Return full response so frontend can access databaseResult
+      return response;
+    }
+    
+    // For local client, create items one by one for other entities
     const results = [];
     for (const item of items) {
       try {
@@ -204,13 +301,149 @@ import { updatePerformanceSnapshot as localUpdatePerformanceSnapshot } from './u
 // Global request deduplication for kline data
 const pendingKlineRequests = new Map();
 
+// Response cache with TTL (Time-To-Live) - cache successful responses for 5 seconds
+const klineResponseCache = new Map();
+const CACHE_TTL = 5000; // 5 seconds cache
+
+// Circuit breaker pattern to prevent cascading failures
+const circuitBreaker = {
+  state: 'CLOSED', // CLOSED, OPEN, HALF_OPEN
+  failureCount: 0,
+  successCount: 0,
+  lastFailureTime: null,
+  failureThreshold: 5, // Open circuit after 5 consecutive failures
+  successThreshold: 2, // Close circuit after 2 consecutive successes
+  cooldownPeriod: 30000, // 30 seconds cooldown before attempting half-open
+  requestHistory: [], // Track last 20 requests for failure rate calculation
+  maxHistorySize: 20,
+  
+  recordSuccess() {
+    this.successCount++;
+    this.failureCount = 0;
+    this.requestHistory.push({ success: true, timestamp: Date.now() });
+    if (this.requestHistory.length > this.maxHistorySize) {
+      this.requestHistory.shift();
+    }
+    
+    if (this.state === 'HALF_OPEN' && this.successCount >= this.successThreshold) {
+      this.state = 'CLOSED';
+      console.error('[CIRCUIT_BREAKER] ✅ Circuit CLOSED - requests succeeding again');
+    }
+  },
+  
+  recordFailure() {
+    this.failureCount++;
+    this.successCount = 0;
+    this.lastFailureTime = Date.now();
+    this.requestHistory.push({ success: false, timestamp: Date.now() });
+    if (this.requestHistory.length > this.maxHistorySize) {
+      this.requestHistory.shift();
+    }
+    
+    if (this.failureCount >= this.failureThreshold) {
+      this.state = 'OPEN';
+      console.error(`[CIRCUIT_BREAKER] ⚠️ Circuit OPENED - ${this.failureCount} consecutive failures`);
+    }
+  },
+  
+  canAttemptRequest() {
+    if (this.state === 'CLOSED') {
+      return true;
+    }
+    
+    if (this.state === 'OPEN') {
+      const timeSinceLastFailure = Date.now() - (this.lastFailureTime || 0);
+      if (timeSinceLastFailure >= this.cooldownPeriod) {
+        this.state = 'HALF_OPEN';
+        this.failureCount = 0;
+        this.successCount = 0;
+        console.error('[CIRCUIT_BREAKER] 🔄 Circuit HALF_OPEN - attempting recovery');
+        return true;
+      }
+      return false;
+    }
+    
+    if (this.state === 'HALF_OPEN') {
+      return true;
+    }
+    
+    return false;
+  },
+  
+  getAdaptiveTimeout(baseTimeout) {
+    // Increase timeout if circuit is half-open (being more cautious)
+    if (this.state === 'HALF_OPEN') {
+      return baseTimeout * 1.5;
+    }
+    return baseTimeout;
+  }
+};
+
+// Helper to generate cache key
+function getCacheKey(symbols, interval, limit, endTime) {
+  const sortedSymbols = [...symbols].sort().join(',');
+  return `${sortedSymbols}_${interval}_${limit || 'default'}_${endTime || 'latest'}`;
+}
+
+// Helper to check and get cached response
+function getCachedResponse(symbols, interval, limit, endTime) {
+  const cacheKey = getCacheKey(symbols, interval, limit, endTime);
+  const cached = klineResponseCache.get(cacheKey);
+  
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+    // Return cached response, filtering to requested symbols
+    const filteredData = {};
+    symbols.forEach(symbol => {
+      if (cached.data[symbol]) {
+        filteredData[symbol] = cached.data[symbol];
+      }
+    });
+    return {
+      success: true,
+      data: filteredData,
+      cached: true
+    };
+  }
+  
+  // Remove stale cache entry
+  if (cached) {
+    klineResponseCache.delete(cacheKey);
+  }
+  
+  return null;
+}
+
+// Helper to cache successful response
+function cacheResponse(symbols, interval, limit, endTime, data) {
+  const cacheKey = getCacheKey(symbols, interval, limit, endTime);
+  klineResponseCache.set(cacheKey, {
+    data: data,
+    timestamp: Date.now()
+  });
+  
+  // Clean up old cache entries periodically (keep cache size reasonable)
+  if (klineResponseCache.size > 100) {
+    const now = Date.now();
+    for (const [key, value] of klineResponseCache.entries()) {
+      if (now - value.timestamp > CACHE_TTL) {
+        klineResponseCache.delete(key);
+      }
+    }
+  }
+}
+
         // Global kline coordinator for batching requests
         const globalKlineCoordinator = {
           // NEW: Pre-collection system to bypass sequential API queue
           preCollectionMode: false,
-          preCollectedRequests: new Map(), // Map<symbolTimeframeKey, Array<requests>>
+          preCollectedRequests: new Map(), // Map<batchGroupKey, Array<requests>>
           preCollectionTimeout: null,
-          preCollectionInterval: 500, // Collect requests for 500ms before processing
+          preCollectionInterval: 200, // Collect requests for 200ms before processing (increased to batch more symbols together)
+          maxBatchSize: 50, // Maximum symbols per batch (Binance can handle large batches)
+          maxConcurrentBatches: 3, // Limit concurrent batch requests to avoid connection exhaustion
+          activeBatches: 0, // Track active batch requests
+          batchQueue: [], // Queue for batches when at max concurrency
+          isProcessing: false, // Flag to prevent concurrent processing
           
           // NEW: Start pre-collection mode
           startPreCollection() {
@@ -229,58 +462,133 @@ const pendingKlineRequests = new Map();
           
           // NEW: Process all pre-collected requests in parallel
           async processPreCollectedRequests() {
-            this.preCollectionMode = false;
-            
-            if (this.preCollectedRequests.size === 0) {
+            // Prevent concurrent processing (but allow if no requests are queued)
+            if (this.isProcessing) {
+              // If already processing, wait a bit and check if there are new high-priority requests
+              await new Promise(resolve => setTimeout(resolve, 50));
+              if (this.preCollectedRequests.size === 0) {
+                return;
+              }
+              // If there are still requests, they'll be processed in the next cycle
               return;
             }
             
-            // Process all groups in parallel
-            const processingPromises = [];
+            this.isProcessing = true;
+            this.preCollectionMode = false;
             
-            for (const [symbolTimeframeKey, requests] of this.preCollectedRequests) {
+            // Track which batch groups we process (needed for cleanup in finally block)
+            let batchGroups = [];
+            
+            try {
+              if (this.preCollectedRequests.size === 0) {
+                this.isProcessing = false;
+                return;
+              }
               
-              // Group requests by endTime
-              const requestsByEndTime = new Map();
-              requests.forEach(request => {
-                const endTimeKey = request.endTime || 'latest';
-                if (!requestsByEndTime.has(endTimeKey)) {
-                  requestsByEndTime.set(endTimeKey, []);
-                }
-                requestsByEndTime.get(endTimeKey).push(request);
+              // CRITICAL FIX: Process batches SEQUENTIALLY to avoid connection exhaustion
+              // Even with batching, too many concurrent fetch calls exhaust browser connection pool
+              // Convert Map to Array and sort by priority (high priority first)
+              batchGroups = Array.from(this.preCollectedRequests.entries());
+              
+              // Sort batches by priority: high priority (for open positions) first
+              batchGroups.sort((a, b) => {
+                const aPriority = Math.max(...a[1].map(req => req.priority || 0));
+                const bPriority = Math.max(...b[1].map(req => req.priority || 0));
+                return bPriority - aPriority; // Higher priority first
               });
               
-              // Process each endTime group
-              for (const [endTimeKey, endTimeRequests] of requestsByEndTime) {
-                const processingPromise = this.processRequestGroup(endTimeRequests, endTimeKey);
-                processingPromises.push(processingPromise);
+              // Process each batch group one at a time - await before starting the next
+              for (let i = 0; i < batchGroups.length; i++) {
+                const [batchGroupKey] = batchGroups[i];
+                
+                // CRITICAL FIX: Re-fetch requests for this batch group key right before processing
+                // This ensures we include any new requests that were added to the same batch group during processing
+                const currentRequests = this.preCollectedRequests.get(batchGroupKey) || [];
+                
+                if (currentRequests.length === 0) {
+                  continue;
+                }
+                
+                // Track which requests we're about to process (by reference, since they're objects)
+                const requestsToProcess = [...currentRequests]; // Create a copy to avoid issues if array is modified
+                
+                // All requests in this group have the same interval/limit/endTime, so combine all symbols
+                // CRITICAL: Await here ensures this batch completes before starting the next
+                await this.processRequestGroupWithLimit(requestsToProcess, batchGroupKey);
+                
+                // Remove the requests we just processed from the batch group
+                // New requests may have been added during processing, so we only remove the ones we processed
+                const requestsAfterProcessing = this.preCollectedRequests.get(batchGroupKey) || [];
+                if (requestsAfterProcessing.length > 0) {
+                  // Remove only the requests we processed (by filtering them out)
+                  const processedRequestSet = new Set(requestsToProcess);
+                  const remainingRequests = requestsAfterProcessing.filter(req => !processedRequestSet.has(req));
+                  
+                  if (remainingRequests.length === 0) {
+                    // No remaining requests, delete the batch group
+                    this.preCollectedRequests.delete(batchGroupKey);
+                  } else {
+                    // Update the batch group with remaining requests (new ones added during processing)
+                    this.preCollectedRequests.set(batchGroupKey, remainingRequests);
+                  }
+                }
               }
-            }
-            
-            // Wait for all processing to complete
-            try {
-              await Promise.all(processingPromises);
             } catch (error) {
               console.error(`[KLINE_COORDINATOR] ❌ Error processing pre-collected requests:`, error);
+            } finally {
+              // Check if there are new requests that were queued during processing
+              // (Note: we already handled removal of processed requests inside the loop above)
+              const remainingQueued = Array.from(this.preCollectedRequests.values()).flat().length;
+              
+              this.isProcessing = false;
+              
+              // If new requests were queued while processing, process them now
+              if (remainingQueued > 0) {
+                // Use setTimeout to avoid stack overflow and allow the current call to complete
+                setTimeout(() => {
+                  this.processPreCollectedRequests();
+                }, 0);
+              }
             }
-            
-            // Clear the collection
-            this.preCollectedRequests.clear();
           },
           
-          // NEW: Process a group of requests with the same endTime
-          async processRequestGroup(requests, endTimeKey) {
-            if (requests.length === 0) return;
+          // IMPROVED: Process a group with connection limiting
+          async processRequestGroupWithLimit(requests, batchGroupKey) {
+            // Wait if we're at max concurrency
+            while (this.activeBatches >= this.maxConcurrentBatches) {
+              await new Promise(resolve => setTimeout(resolve, 50)); // Wait 50ms and check again
+            }
             
-            const firstRequest = requests[0];
-            const symbols = [...new Set(requests.flatMap(req => req.symbols))];
+            this.activeBatches++;
             
             try {
-              // Make the actual API call
-              const result = await executeKlineRequest(symbols, firstRequest.interval, firstRequest.limit, firstRequest.endTime);
+              return await this.processRequestGroup(requests, batchGroupKey);
+            } finally {
+              this.activeBatches--;
+            }
+          },
+          
+          // IMPROVED: Process a group of requests - combine ALL symbols from all requests into one batch call
+          async processRequestGroup(requests, batchGroupKey) {
+            if (requests.length === 0) {
+              return;
+            }
+            
+            const firstRequest = requests[0];
+            // IMPROVED: Combine ALL symbols from ALL requests into a single batch call
+            const allSymbols = [...new Set(requests.flatMap(req => req.symbols))];
+            
+            try {
+              // IMPROVED: Make ONE batch API call with ALL symbols combined
+              const result = await executeKlineRequest(allSymbols, firstRequest.interval, firstRequest.limit, firstRequest.endTime);
+              
+              // Cache successful result
+              if (result.success && result.data) {
+                cacheResponse(allSymbols, firstRequest.interval, firstRequest.limit, firstRequest.endTime, result.data);
+              }
               
               // Resolve all requests in this group
-              requests.forEach(request => {
+              requests.forEach((request) => {
                 if (result.success && result.data) {
                   // Filter data for this specific request
                   const filteredData = {};
@@ -298,17 +606,32 @@ const pendingKlineRequests = new Map();
             } catch (error) {
               console.error(`[KLINE_COORDINATOR] ❌ Error processing group:`, error);
               // Reject all requests in this group
-              requests.forEach(request => {
+              requests.forEach((request) => {
                 request.reject(error);
               });
             }
           },
   
-          requestKlineData(symbols, interval, limit, endTime) {
-            return new Promise((resolve, reject) => {
-              const requestKey = `${symbols.join(',')}_${interval}_${limit || 'default'}_${endTime || 'latest'}`;
-              const timeframeKey = `${interval}_${limit || 'default'}`;
-              const symbolTimeframeKey = `${symbols.join(',')}_${interval}`; // Group by symbol+timeframe regardless of endTime
+          requestKlineData(symbols, interval, limit, endTime, priority = 0) {
+            // priority: 0 = normal (scanning), 1 = high (open positions monitoring)
+            
+            // Check cache first
+            const cached = getCachedResponse(symbols, interval, limit, endTime);
+            if (cached) {
+              return Promise.resolve(cached);
+            }
+            
+            // Check for duplicate pending request
+            const requestKey = getCacheKey(symbols, interval, limit, endTime);
+            if (pendingKlineRequests.has(requestKey)) {
+              // Reuse existing pending request
+              return pendingKlineRequests.get(requestKey);
+            }
+            
+            // Create new request promise
+            const requestPromise = new Promise((resolve, reject) => {
+              // IMPROVED: Group by interval+limit+endTime only (not by symbols) to batch ALL symbols together
+              const batchGroupKey = `${interval}_${limit || 'default'}_${endTime || 'latest'}`;
               const timestamp = Date.now();
               
               // NEW: Use pre-collection system to bypass sequential API queue
@@ -316,9 +639,9 @@ const pendingKlineRequests = new Map();
                 this.startPreCollection();
               }
               
-              // Add request to pre-collection
-              if (!this.preCollectedRequests.has(symbolTimeframeKey)) {
-                this.preCollectedRequests.set(symbolTimeframeKey, []);
+              // Add request to pre-collection - group by batchGroupKey to combine all symbols
+              if (!this.preCollectedRequests.has(batchGroupKey)) {
+                this.preCollectedRequests.set(batchGroupKey, []);
               }
               
               const requestData = {
@@ -326,12 +649,13 @@ const pendingKlineRequests = new Map();
                 interval,
                 limit,
                 endTime,
+                priority, // Store priority for sorting
                 resolve,
                 reject,
                 timestamp
               };
               
-              this.preCollectedRequests.get(symbolTimeframeKey).push(requestData);
+              this.preCollectedRequests.get(batchGroupKey).push(requestData);
               
               const totalRequests = Array.from(this.preCollectedRequests.values()).flat().length;
               
@@ -343,53 +667,127 @@ const pendingKlineRequests = new Map();
                 }, this.preCollectionInterval);
               }
               
-              // NEW: Force processing after collecting a reasonable number of requests
-              if (totalRequests >= 5) {
+              // IMPROVED: Force processing when we have enough symbols to batch OR enough requests
+              // Check total symbols across all groups, not just request count
+              const totalSymbols = Array.from(this.preCollectedRequests.values())
+                .flat()
+                .reduce((sum, req) => sum + (req.symbols?.length || 0), 0);
+              
+              // Process if we have many symbols (better batching) OR many requests (avoid waiting too long)
+              // Also process immediately if there's a high priority request
+              if (totalSymbols >= this.maxBatchSize || totalRequests >= 10 || priority === 1) {
                 clearTimeout(this.preCollectionTimeout);
-                this.processPreCollectedRequests();
+                // For high priority requests, process immediately (don't await to avoid blocking)
+                this.processPreCollectedRequests().catch(err => {
+                  console.error('[KLINE_COORDINATOR] ❌ Error in processPreCollectedRequests:', err);
+                });
               }
             });
+            
+            // Store pending request for deduplication
+            pendingKlineRequests.set(requestKey, requestPromise);
+            
+            // Clean up when request completes
+            requestPromise.finally(() => {
+              pendingKlineRequests.delete(requestKey);
+            });
+            
+            return requestPromise;
           },
           
 };
 
 // Helper function for executing kline requests - ALWAYS use batch endpoint
 async function executeKlineRequest(symbols, interval, limit, endTime) {
+  // Check circuit breaker before attempting request
+  const circuitState = circuitBreaker.state;
+  const canAttempt = circuitBreaker.canAttemptRequest();
+  
+  if (!canAttempt) {
+    return {
+      success: false,
+      error: 'Circuit breaker is open - too many recent failures'
+    };
+  }
+  
   try {
     // ALWAYS use batch endpoint, even for single symbols
     
     const symbolsParam = JSON.stringify(symbols);
     const batchUrl = `http://localhost:3003/api/binance/klines/batch?symbols=${encodeURIComponent(symbolsParam)}&interval=${interval}${limit ? `&limit=${limit}` : ''}${endTime ? `&endTime=${endTime}` : ''}`;
     
-    const response = await fetch(batchUrl);
+    // NEW: Retry logic with shorter timeout (10s) and exponential backoff
+    // Instead of one 25s attempt, try 3 times with 10s timeout each
+    const maxRetries = 3;
+    const baseFetchTimeout = 10000; // 10 seconds per attempt
+    let lastError;
     
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Use adaptive timeout based on circuit breaker state
+        const fetchTimeout = circuitBreaker.getAdaptiveTimeout(baseFetchTimeout);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, fetchTimeout);
+        
+        const fetchPromise = fetch(batchUrl, { signal: controller.signal });
+        const response = await fetchPromise;
+        clearTimeout(timeoutId);
+        
+        // Success - break out of retry loop
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const batchData = await response.json();
+        
+        // Convert batch response to expected format
+        if (batchData.success && batchData.data) {
+          const results = {};
+          batchData.data.forEach(item => {
+            results[item.symbol] = {
+              success: item.success,
+              data: item.data,
+              error: item.error
+            };
+          });
+          
+          // Record success in circuit breaker
+          circuitBreaker.recordSuccess();
+          
+          return {
+            success: true,
+            data: results
+          };
+        } else {
+          throw new Error(batchData.error || 'Failed to fetch batch kline data');
+        }
+      } catch (error) {
+        lastError = error;
+        const isTimeout = error.name === 'AbortError' || error.message?.includes('timeout');
+        const isLastAttempt = attempt === maxRetries;
+        
+        if (isTimeout && !isLastAttempt) {
+          // Exponential backoff: wait 500ms * attempt number before retry
+          const backoffDelay = 500 * attempt;
+          await new Promise(resolve => setTimeout(resolve, backoffDelay));
+          continue;
+        } else if (isLastAttempt) {
+          // Final attempt failed - record failure in circuit breaker
+          circuitBreaker.recordFailure();
+          throw error;
+        } else {
+          // Non-timeout error - don't retry, but record failure
+          circuitBreaker.recordFailure();
+          throw error;
+        }
+      }
     }
     
-    const batchData = await response.json();
-    
-    if (batchData.success && batchData.data) {
-      // Convert batch response to expected format
-      const results = {};
-      batchData.data.forEach(item => {
-        results[item.symbol] = {
-          success: item.success,
-          data: item.data,
-          error: item.error
-        };
-      });
-      
-      return {
-        success: true,
-        data: results
-      };
-    } else {
-      return {
-        success: false,
-        error: batchData.error || 'Failed to fetch batch kline data'
-      };
-    }
+    // Should never reach here, but just in case
+    throw lastError || new Error('Unknown error');
   } catch (error) {
     console.error('[executeKlineRequest] ❌ Error:', error);
     return {
@@ -437,14 +835,15 @@ export const functions = {
 
   async getKlineData(data) {
     try {
-      const { symbols, interval, limit, endTime } = data;
+      const { symbols, interval, limit, endTime, priority = 0 } = data;
       
       if (!Array.isArray(symbols) || symbols.length === 0) {
         return { success: false, error: 'Symbols array is required' };
       }
       
       // Direct kline coordinator bypass - no API queue for kline requests
-      const result = await globalKlineCoordinator.requestKlineData(symbols, interval, limit, endTime);
+      // priority: 0 = normal (scanning), 1 = high (position monitoring)
+      const result = await globalKlineCoordinator.requestKlineData(symbols, interval, limit, endTime, priority);
       
       // Extract only the requested symbols from the batch result
       if (result.success && result.data) {
@@ -551,13 +950,17 @@ export const functions = {
       return [];
     }
     
-    // Filter out only fiat currency pairs that are truly unavailable on testnet
+    // Filter out fiat currency pairs and invalid symbols that are unavailable on Binance
     const unavailableSymbols = new Set([
+      // Fiat currencies (not traded as spot pairs on Binance)
       'MXNUSDT', 'COPUSDT', 'CZKUSDT', 'ARSUSDT', 'BRLUSDT', 
       'TRYUSDT', 'EURUSDT', 'GBPUSDT', 'JPYUSDT', 'AUDUSDT', 'CADUSDT',
       'CHFUSDT', 'SEKUSDT', 'NOKUSDT', 'DKKUSDT', 'PLNUSDT', 'HUFUSDT',
       'RUBUSDT', 'INRUSDT', 'KRWUSDT', 'CNYUSDT', 'HKDUSDT', 'SGDUSDT',
-      'TWDUSDT', 'THBUSDT', 'VNDUSDT', 'IDRUSDT', 'MYRUSDT', 'PHPUSDT'
+      'TWDUSDT', 'THBUSDT', 'VNDUSDT', 'IDRUSDT', 'MYRUSDT', 'PHPUSDT',
+      'ZARUSDT', 'UAHUSDT', 'RONUSDT', 'NGNUSDT',
+      // Delisted or invalid symbols
+      'DAIUSDT', 'MATICUSDT'
     ]);
     
     const availableSymbols = symbols.filter(symbol => !unavailableSymbols.has(symbol));
@@ -568,29 +971,56 @@ export const functions = {
     }
     
     if (availableSymbols.length < symbols.length) {
-      console.log(`[getBinancePrices] Filtered out ${symbols.length - availableSymbols.length} unavailable symbols on testnet`);
     }
     
     try {
-      console.log(`[getBinancePrices] 📊 Request for ${availableSymbols.length} symbols: ${availableSymbols.slice(0, 5).join(', ')}${availableSymbols.length > 5 ? '...' : ''}`);
       
-      // Use centralized cache service for batch fetching with global coordination
-      const tickerMap = await priceCacheService.getBatchTicker24hr(availableSymbols, 'testnet');
+      // CRITICAL FIX: Use current price endpoint instead of 24hr ticker's lastPrice
+      // The 24hr ticker's lastPrice is stale (could be hours old) and causes wrong exit prices like 4160.88 for ETH
+      // Use getBatchPrices() which fetches from /api/v3/ticker/price (current price, not lastPrice)
+      const priceMap = await priceCacheService.getBatchPrices(availableSymbols, 'testnet');
+      
+      // Optionally fetch 24hr ticker for priceChangePercent (but use current price for price field)
+      let tickerMap = new Map();
+      try {
+        tickerMap = await priceCacheService.getBatchTicker24hr(availableSymbols, 'testnet');
+      } catch (tickerError) {
+        console.warn(`[getBinancePrices] ⚠️ Failed to fetch 24hr ticker for change data: ${tickerError.message}`);
+      }
       
       // Convert Map to array format expected by existing code
       const results = [];
-      tickerMap.forEach((tickerData, symbol) => {
-        if (tickerData && tickerData.lastPrice) {
+      priceMap.forEach((currentPrice, symbol) => {
+        if (currentPrice && currentPrice > 0) {
+          // Get priceChangePercent from 24hr ticker if available, otherwise 0
+          const tickerData = tickerMap.get(symbol);
+          const change = tickerData && tickerData.priceChangePercent 
+            ? parseFloat(tickerData.priceChangePercent) 
+            : 0;
+          
+          // NOTE: The 24hr ticker's lastPrice is intentionally NOT used for price - it can be stale
+          // We only use it for priceChangePercent (24h change). The actual price comes from /api/v3/ticker/price
+          // This diagnostic check is disabled to reduce noise - price mismatch is expected and harmless
+          // if (symbol === 'ETHUSDT' && tickerData && tickerData.lastPrice) {
+          //   const ethLastPrice = parseFloat(tickerData.lastPrice);
+          //   const ethCurrentPrice = currentPrice;
+          //   const priceDiff = Math.abs(ethCurrentPrice - ethLastPrice);
+          //   const priceDiffPercent = (priceDiff / ethCurrentPrice) * 100;
+          //   if (priceDiffPercent > 50) {
+          //     console.warn(`[getBinancePrices] ⚠️ Large price discrepancy (expected): Current=${ethCurrentPrice}, 24hrTicker.lastPrice=${ethLastPrice} (${priceDiffPercent.toFixed(2)}% diff)`);
+          //     console.warn(`[getBinancePrices] ℹ️ This is normal - 24hr ticker lastPrice is stale. We use current price (correct).`);
+          //   }
+          // }
+          
           results.push({
             symbol: symbol,
-            price: tickerData.lastPrice,
-            change: parseFloat(tickerData.priceChangePercent) || 0,
+            price: currentPrice, // CRITICAL: Use current price, not stale lastPrice
+            change: change,
             timestamp: Date.now()
           });
         }
       });
       
-      console.log(`[getBinancePrices] ✅ Retrieved ${results.length} prices from global batch`);
       return results;
       
     } catch (error) {
@@ -639,7 +1069,23 @@ export const functions = {
          throw new Error('Invalid response format from direct API');
        }
      } catch (error) {
-       // Try proxy server as fallback
+       // Suppress network errors (expected in some environments)
+       const isNetworkError = error.message?.includes('ERR_SOCKET_NOT_CONNECTED') ||
+                              error.message?.includes('Failed to fetch') ||
+                              error.message?.includes('NetworkError') ||
+                              error.name === 'TypeError' ||
+                              error.name === 'AbortError';
+       
+       if (isNetworkError) {
+         // Silently fail for network errors - F&G Index is optional
+         return {
+           success: false,
+           error: 'Network error - Fear & Greed Index unavailable',
+           data: null
+         };
+       }
+       
+       // Try proxy server as fallback for non-network errors
        try {
          const controller = new AbortController();
          const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout for proxy
@@ -666,7 +1112,12 @@ export const functions = {
            throw new Error('Proxy server returned invalid response');
          }
        } catch (proxyError) {
-         throw new Error('Failed to fetch Fear & Greed Index from proxy server');
+         // Return failure instead of throwing - F&G Index is optional
+         return {
+           success: false,
+           error: 'Failed to fetch Fear & Greed Index',
+           data: null
+         };
        }
      }
    },
@@ -809,7 +1260,7 @@ export const functions = {
   async initializePriceCache() {
     const commonSymbols = [
       'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'SOLUSDT', 'XRPUSDT', 'DOTUSDT',
-      'DOGEUSDT', 'AVAXUSDT', 'MATICUSDT', 'LINKUSDT', 'UNIUSDT', 'LTCUSDT',
+      'DOGEUSDT', 'AVAXUSDT', 'POLUSDT', 'LINKUSDT', 'UNIUSDT', 'LTCUSDT',
       'ATOMUSDT', 'XLMUSDT', 'ALGOUSDT', 'VETUSDT', 'FILUSDT', 'TRXUSDT', 'ETCUSDT'
     ];
     
@@ -1042,7 +1493,7 @@ export const functions = {
             } 
           };
         } else {
-          console.log(`[scannerSessionManager] Session claim failed - already active by ${state.activeSessionId}`);
+          // Session claim failed - already active (expected behavior)
           return { 
             success: false, 
             data: { 
@@ -1135,8 +1586,6 @@ export const functions = {
 
   async archiveOldTrades(params = {}) {
     // Real implementation of archiveOldTrades function
-    console.log('[archiveOldTrades] Starting trade archiving process...');
-    
     const TRADE_LIMIT = 2000; // Maximum number of trades before archiving
     const TARGET_TRADES = 1800; // Desired number after archiving
     const BATCH_SIZE = 50; // Records to delete in one batch
@@ -1149,8 +1598,6 @@ export const functions = {
       let totalCount = 0;
       let offset = 0;
       let exceededLimit = false;
-      
-      console.log('[archiveOldTrades] Counting trades...');
       while (true) {
         const pageResponse = await apiRequest('/trades', {
           method: 'GET',
@@ -1183,11 +1630,8 @@ export const functions = {
         await new Promise(resolve => setTimeout(resolve, 10));
       }
       
-      console.log(`[archiveOldTrades] Total trades: ${totalCount}, Exceeded limit: ${exceededLimit}`);
-      
       // Step 2: Check if archiving is needed
       if (!exceededLimit) {
-        console.log(`[archiveOldTrades] No archiving needed. Total trades: ${totalCount} (limit: ${TRADE_LIMIT})`);
         return {
           success: true,
           data: {
@@ -1202,7 +1646,7 @@ export const functions = {
       
       // Step 3: Calculate how many trades to delete
       const tradesToDelete = Math.min(totalCount - TARGET_TRADES, BATCH_SIZE);
-      console.log(`[archiveOldTrades] Need to delete ${tradesToDelete} trades`);
+      // Archiving needed
       
       // Step 4: Get oldest trades for deletion
       const oldestTradesResponse = await apiRequest('/trades', {
@@ -1228,7 +1672,7 @@ export const functions = {
       }
       
       const tradesToDeleteList = oldestTradesResponse.data;
-      console.log(`[archiveOldTrades] Found ${tradesToDeleteList.length} trades to delete`);
+      // Trades to delete identified
       
       // Step 5: Delete trades in batches
       let deletedCount = 0;
@@ -1255,7 +1699,7 @@ export const functions = {
       const remainingCount = totalCount - deletedCount;
       const moreToProcess = remainingCount >= TRADE_LIMIT;
       
-      console.log(`[archiveOldTrades] Deleted ${deletedCount} trades, ${remainingCount} remaining`);
+      // Archiving complete
       
       return {
         success: true,

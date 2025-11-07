@@ -27,6 +27,17 @@
 export const calculateATR = (klineData, period = 14, options = {}) => {
   const { debug = false, validateData = true } = options;
   
+  // Enhanced logging for investigation
+  const inputLength = klineData ? klineData.length : 0;
+  if (debug || inputLength > 200) { // Log if debug enabled or large dataset (likely scanner scenario)
+    /*console.log(`[ATR_CALC_INVESTIGATION] Starting ATR calculation:`, {
+      klineDataLength: inputLength,
+      period: period,
+      debug: debug,
+      validateData: validateData,
+      expectedATRLength: inputLength >= period ? (inputLength - period + 1) : 0
+    });*/
+  }
   
   // Input validation
   if (!klineData || klineData.length < period) {
@@ -117,6 +128,18 @@ export const calculateATR = (klineData, period = 14, options = {}) => {
     trueRanges.push(trueRange);
   }
 
+  // Enhanced logging after trueRanges calculation
+  if (debug || inputLength > 200) {
+    /*console.log(`[ATR_CALC_INVESTIGATION] True Ranges calculated:`, {
+      trueRangesLength: trueRanges.length,
+      klineDataLength: klineData.length,
+      match: trueRanges.length === klineData.length,
+      difference: klineData.length - trueRanges.length,
+      period: period,
+      expectedATRCount: trueRanges.length >= period ? (trueRanges.length - period + 1) : 0
+    });*/
+  }
+
   const atrValues = [];
   if (trueRanges.length < period) {
     return Array(klineData.length).fill(null);
@@ -130,6 +153,14 @@ export const calculateATR = (klineData, period = 14, options = {}) => {
   const firstATR = sumFirstTR / period;
   atrValues.push(firstATR);
 
+  if (debug || inputLength > 200) {
+    /*console.log(`[ATR_CALC_INVESTIGATION] First ATR calculated:`, {
+      firstATR: firstATR,
+      atrValuesLength: atrValues.length,
+      correspondsToKlineIndex: period - 1, // First ATR corresponds to kline index period-1
+      remainingIterations: trueRanges.length - period
+    });*/
+  }
 
   // Calculate subsequent ATR values using Wilder's smoothing method
   for (let i = period; i < trueRanges.length; i++) {
@@ -170,10 +201,55 @@ export const calculateATR = (klineData, period = 14, options = {}) => {
     
   }
 
+  // Enhanced logging before return
+  if (debug || inputLength > 200) {
+    const finalATR = atrValues[atrValues.length - 1];
+    const lastKlineIndex = trueRanges.length - 1; // Last kline index
+    const lastAtrIndex = atrValues.length - 1; // Last ATR index in array
+    
+    /*console.log(`[ATR_CALC_INVESTIGATION] ATR calculation complete:`, {
+      klineDataLength: klineData.length,
+      trueRangesLength: trueRanges.length,
+      atrValuesLength: atrValues.length,
+      period: period,
+      lastKlineIndex: lastKlineIndex,
+      lastAtrIndex: lastAtrIndex,
+      mappingNote: `atrValues[${lastAtrIndex}] corresponds to kline[${lastKlineIndex}]`,
+      evaluationIndexIfUsing: `klines.length - 2 = ${klineData.length - 2}`,
+      willAccessIndex: klineData.length - 2,
+      willHaveATR: (klineData.length - 2) >= (period - 1) && (klineData.length - 2) <= lastKlineIndex,
+      actualAtrIndexForEvaluation: (klineData.length - 2) >= (period - 1) ? ((klineData.length - 2) - (period - 1)) : -1,
+      gap: (klineData.length - 2) - lastKlineIndex,
+      finalATR: finalATR
+    });*/
+    
+    // Show sample mapping
+    if (atrValues.length > 0) {
+      const sampleIndices = [
+        { atrIndex: 0, klineIndex: period - 1 },
+        { atrIndex: Math.floor(atrValues.length / 2), klineIndex: period - 1 + Math.floor(atrValues.length / 2) },
+        { atrIndex: lastAtrIndex, klineIndex: lastKlineIndex }
+      ];
+      /*console.log(`[ATR_CALC_INVESTIGATION] Sample index mapping:`, sampleIndices.map(m => 
+        `atrValues[${m.atrIndex}] ↔ kline[${m.klineIndex}]`
+      ).join(', '));*/
+    }
+  }
+
   const finalATR = atrValues[atrValues.length - 1];
 
+  // CRITICAL FIX: Pad the array to match klineData length
+  // ATR values start at index (period - 1) in the kline data
+  // We need to pad with nulls at the beginning to align indices
+  const paddedATR = new Array(klineData.length).fill(null);
+  for (let i = 0; i < atrValues.length; i++) {
+    const klineIndex = (period - 1) + i;
+    if (klineIndex < klineData.length) {
+      paddedATR[klineIndex] = atrValues[i];
+    }
+  }
 
-  return atrValues;
+  return paddedATR;
 };
 
 /**

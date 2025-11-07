@@ -24,18 +24,33 @@ export class StrategyManagerService {
      * @returns {Array} An array of eligible strategies.
      */
     async _loadAndFilterStrategiesInternal(minCombinedStrengthOverride = null) {
+        // Commented out to reduce console flooding
+        // console.log('[StrategyManagerService] 🔍 [_loadAndFilterStrategiesInternal] Starting...');
         this.addLog('[StrategyManagerService] Loading and filtering strategies (internal)...', 'info');
 
         const minimumCombinedStrength = minCombinedStrengthOverride !== null
             ? minCombinedStrengthOverride
             : (this.state.settings?.minimumCombinedStrength || 0);
-
+        
+        // console.log('[StrategyManagerService] 🔍 [_loadAndFilterStrategiesInternal] minimumCombinedStrength:', minimumCombinedStrength);
+        // console.log('[StrategyManagerService] 🔍 [_loadAndFilterStrategiesInternal] Calling queueEntityCall...');
+        
         const strategiesList = await queueEntityCall('BacktestCombination', 'list');
+        
+        // console.log('[StrategyManagerService] 🔍 [_loadAndFilterStrategiesInternal] queueEntityCall complete, got', strategiesList?.length || 0, 'strategies');
 
         let totalStrategies = strategiesList?.length || 0;
+        // console.log('[StrategyManagerService] 🔍 [_loadAndFilterStrategiesInternal] Total strategies from DB:', totalStrategies);
+        
         let filteredOptedOut = 0;
         let filteredUnderperforming = 0;
+        let filteredNoSignals = 0;
+        let filteredLowStrength = 0;
+        let filteredNotIncluded = 0;
         let filteredOther = 0;
+
+        // console.log('[StrategyManagerService] 🔍 [_loadAndFilterStrategiesInternal] Starting filter process...');
+        this.addLog(`[StrategyManagerService] Filtering ${totalStrategies} strategies with minimumCombinedStrength=${minimumCombinedStrength}`, 'info');
 
         const eligibleStrategies = (strategiesList || [])
             .filter(match => {
@@ -45,12 +60,15 @@ export class StrategyManagerService {
                 }
 
                 if (!Array.isArray(match.signals) || match.signals.length === 0) {
+                    filteredNoSignals++;
                     filteredOther++;
                     return false;
                 }
 
                 // Apply minimum combined strength filter
-                if ((match.combinedStrength || 0) < minimumCombinedStrength) {
+                const combinedStrength = match.combinedStrength || 0;
+                if (combinedStrength < minimumCombinedStrength) {
+                    filteredLowStrength++;
                     filteredOther++;
                     return false;
                 }
@@ -65,6 +83,7 @@ export class StrategyManagerService {
                 }
 
                 if (!match.includedInScanner) {
+                    filteredNotIncluded++;
                     filteredOther++;
                     return false;
                 }
@@ -128,7 +147,25 @@ export class StrategyManagerService {
             : 0;
 
         const activeCount = eligibleStrategies.length;
-        this.addLog(`[StrategyManagerService] Strategy filtering complete: ${activeCount}/${totalStrategies} active (${filteredOptedOut} opted-out, ${filteredUnderperforming} underperforming, ${filteredOther} other)`, 'info');
+        this.addLog(`[StrategyManagerService] Strategy filtering complete: ${activeCount}/${totalStrategies} active`, 'info');
+        if (filteredOptedOut > 0) {
+            this.addLog(`  └─ Opted-out: ${filteredOptedOut}`, 'info');
+        }
+        if (filteredUnderperforming > 0) {
+            this.addLog(`  └─ Underperforming: ${filteredUnderperforming}`, 'info');
+        }
+        if (filteredNoSignals > 0) {
+            this.addLog(`  └─ No signals/empty signals: ${filteredNoSignals}`, 'info');
+        }
+        if (filteredLowStrength > 0) {
+            this.addLog(`  └─ Low combined strength (< ${minimumCombinedStrength}): ${filteredLowStrength}`, 'info');
+        }
+        if (filteredNotIncluded > 0) {
+            this.addLog(`  └─ Not included in scanner (includedInScanner=false): ${filteredNotIncluded}`, 'info');
+        }
+        if (activeCount === 0 && totalStrategies > 0) {
+            this.addLog(`⚠️ All ${totalStrategies} strategies filtered out. Check scanner settings and strategy configuration.`, 'warning');
+        }
 
         if (eligibleStrategies.length > 0) {
             const topStrategy = eligibleStrategies[0];
@@ -164,13 +201,37 @@ export class StrategyManagerService {
         this.addLog('[StrategyManagerService] Refreshing strategy list due to new backtest results or tradingMode...', 'info');
 
         try {
-            const oldCount = this.state.activeStrategies.length; // Capture old count for comparison
+            const oldCount = this.scannerService.state.activeStrategies?.length || 0;
             const newStrategies = await this.loadActiveStrategies(this.scannerService.getTradingMode()); // Use the new public method
+            
+            // CRITICAL: Update scanner state with new strategies
+            this.scannerService.state.activeStrategies = newStrategies;
+            
+            // Update PositionManager and SignalDetectionEngine with new strategies
+            if (this.scannerService.positionManager) {
+                const activeStrategiesMap = new Map();
+                newStrategies.forEach(strategy => {
+                    if (strategy.combinationName) {
+                        activeStrategiesMap.set(strategy.combinationName, strategy);
+                    }
+                });
+                this.scannerService.positionManager.activeStrategies = activeStrategiesMap;
+                console.log(`[StrategyManagerService] ✅ Updated PositionManager with ${activeStrategiesMap.size} strategies`);
+            }
+            
+            if (this.scannerService.signalDetectionEngine && typeof this.scannerService.signalDetectionEngine.updateStrategies === 'function') {
+                this.scannerService.signalDetectionEngine.updateStrategies(newStrategies);
+                console.log(`[StrategyManagerService] ✅ Updated SignalDetectionEngine with ${newStrategies.length} strategies`);
+            }
+            
             const newCount = newStrategies.length;
             const countChange = newCount - oldCount;
             const changeText = countChange > 0 ? `+${countChange}` : countChange.toString();
 
             this.addLog(`✅ Strategy list refreshed: ${newCount} strategies (${changeText} from before)`, 'success');
+            
+            // Notify subscribers of state change
+            this.scannerService.notifySubscribers();
 
             if (this.toast) {
                 this.toast({
@@ -197,16 +258,9 @@ export class StrategyManagerService {
      * @returns {object} Scan result from signal detection, including signalsFound and tradesExecuted.
      */
     async evaluateStrategies(strategies, currentWalletState, settings, marketRegime, currentPrices, cycleStats) {
-        console.log('[StrategyManagerService] 🔍 evaluateStrategies called with:', {
-            strategiesCount: strategies.length,
-            availableBalance: currentWalletState.availableBalance,
-            currentPricesCount: Object.keys(currentPrices).length
-        });
-
         // Reset newPositionsCount for this evaluation cycle
         this.scannerService.state.newPositionsCount = 0;
 
-        console.log('[StrategyManagerService] 🔍 Delegating to SignalDetectionEngine...');
         const scanResult = await this.scannerService.signalDetectionEngine.scanForSignals(
             strategies,
             currentWalletState,
@@ -215,18 +269,11 @@ export class StrategyManagerService {
             currentPrices,
             cycleStats
         );
-        console.log('[StrategyManagerService] 🔍 SignalDetectionEngine result:', scanResult);
 
         // Assuming scanForSignals (via PositionManager) updates cycleStats.positionsOpened,
         // we can use it to reflect newPositionsCount.
         // Or, more directly, assume scanResult includes tradesExecuted which represents new positions.
         this.scannerService.state.newPositionsCount = scanResult.tradesExecuted;
-
-        console.log('[StrategyManagerService] 🔍 Final result:', {
-            signalsFound: scanResult.signalsFound,
-            tradesExecuted: scanResult.tradesExecuted,
-            newPositionsCount: this.scannerService.state.newPositionsCount
-        });
 
         return scanResult; // { signalsFound, tradesExecuted }
     }

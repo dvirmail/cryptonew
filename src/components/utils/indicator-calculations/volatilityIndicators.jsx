@@ -122,9 +122,21 @@ export const calculateKeltnerChannels = (data, period = 20, atrPeriod = 10, mult
     const atr = unifiedCalculateATR(data, atrPeriod, { debug: false, validateData: true });
     const results = [];
 
+    // Track null reasons for debugging
+    let nullCount = 0;
+    let emaNullCount = 0;
+    let atrNullCount = 0;
+    let lastNullIndex = -1;
+
     for (let i = 0; i < data.length; i++) {
         if (ema[i] === null || atr[i] === null || typeof ema[i] !== 'number' || typeof atr[i] !== 'number') {
             results.push(null);
+            nullCount++;
+            lastNullIndex = i;
+            if (i >= data.length - 10) { // Only log for last 10 candles to avoid spam
+                if (ema[i] === null || typeof ema[i] !== 'number') emaNullCount++;
+                if (atr[i] === null || typeof atr[i] !== 'number') atrNullCount++;
+            }
             continue;
         }
 
@@ -150,6 +162,11 @@ export const calculateKeltnerChannels = (data, period = 20, atrPeriod = 10, mult
             breakout,
             atr: atr[i]
         });
+    }
+
+    // Log diagnostic info if there are nulls in the last 10 candles
+    if (lastNullIndex >= data.length - 10 && nullCount > 0) {
+        console.warn(`[KELTNER_CALC] ⚠️ Null values detected: ${nullCount} total, ${emaNullCount} EMA nulls, ${atrNullCount} ATR nulls in last 10 candles. Last null at index ${lastNullIndex}/${data.length - 1}. EMA period=${period}, ATR period=${atrPeriod}`);
     }
 
     return results;

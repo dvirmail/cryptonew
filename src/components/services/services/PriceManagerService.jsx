@@ -158,9 +158,141 @@ export class PriceManagerService {
      * @param {string} symbol - Symbol to get price for (e.g., 'BTCUSDT').
      * @returns {number|null} Current price or null if not available.
      */
-    getCurrentPrice(symbol) {
+    async getCurrentPrice(symbol) {
         const normalizedSymbol = symbol.replace('/', '');
-        return this.currentPrices[normalizedSymbol] || null;
+        
+        // Check cache first
+        if (this.currentPrices[normalizedSymbol]) {
+            return this.currentPrices[normalizedSymbol];
+        }
+        
+        // FALLBACK: Fetch on-demand if not in cache
+        // CRITICAL: getBinancePrices() now uses current price (not stale lastPrice), so this is safe
+        try {
+            const { getBinancePrices } = await import('@/api/functions');
+            const response = await getBinancePrices({ symbols: [normalizedSymbol] });
+            
+            let priceArray = null;
+            if (Array.isArray(response)) {
+                priceArray = response;
+            } else if (response?.data && Array.isArray(response.data)) {
+                priceArray = response.data;
+            } else if (response?.success && response.data && Array.isArray(response.data)) {
+                priceArray = response.data;
+            }
+            
+            if (priceArray && priceArray.length > 0) {
+                const item = priceArray.find(p => p.symbol === normalizedSymbol || p.symbol === symbol);
+                if (item && item.price && !item.error) {
+                    const price = parseFloat(item.price);
+                    if (price > 0) {
+                        // Update cache with current price (not stale lastPrice)
+                        this.currentPrices[normalizedSymbol] = price;
+                        return price;
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn(`[PriceManagerService] ⚠️ Failed to fetch on-demand price for ${symbol}:`, error.message);
+        }
+        
+        return null;
+    }
+
+    /**
+     * Gets FRESH current price for a symbol, ALWAYS bypassing cache.
+     * CRITICAL: Use this method when closing positions to ensure accurate exit prices.
+     * This method directly calls Binance /api/v3/ticker/price endpoint (not 24hr ticker).
+     * 
+     * @param {string} symbol - Symbol to get price for (e.g., 'ETH/USDT' or 'ETHUSDT').
+     * @param {string} tradingMode - Trading mode (testnet/mainnet), defaults to scanner's trading mode.
+     * @returns {Promise<number|null>} Current price or null if not available.
+     */
+    async getFreshCurrentPrice(symbol, tradingMode = null) {
+        const normalizedSymbol = symbol.replace('/', '');
+        const mode = tradingMode || this.scannerService?.state?.tradingMode || 'testnet';
+        
+        try {
+            // CRITICAL: Always fetch fresh price directly from Binance /api/v3/ticker/price
+            // This endpoint returns the CURRENT price (not 24hr ticker lastPrice)
+            const proxyUrl = 'http://localhost:3003';
+            const endpoint = `${proxyUrl}/api/binance/ticker/price?symbol=${normalizedSymbol}&tradingMode=${mode}`;
+            
+            
+            const response = await fetch(endpoint);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            
+            
+            if (!data.success || !data.data || !data.data.price) {
+                console.error(`[PriceManagerService] ❌ Invalid price response structure for ${symbol}:`, data);
+                throw new Error(`Invalid price response for ${symbol}`);
+            }
+            
+            const price = parseFloat(data.data.price);
+            if (isNaN(price) || price <= 0) {
+                console.error(`[PriceManagerService] ❌ Invalid price value for ${symbol}: ${data.data.price} (raw: ${JSON.stringify(data.data)})`);
+                throw new Error(`Invalid price value: ${data.data.price}`);
+            }
+            
+            // CRITICAL: Validate price against expected ranges
+            // Updated ranges to reflect current market conditions (2024-2025)
+            const EXPECTED_PRICE_RANGES = {
+                'ETHUSDT': { min: 1500, max: 6000 },      // Updated: ETH has been above 4000
+                'BTCUSDT': { min: 20000, max: 150000 },   // Updated: BTC trading above 100k
+                'SOLUSDT': { min: 50, max: 500 },         // Updated: SOL more volatile
+                'BNBUSDT': { min: 150, max: 1000 }        // Updated: Wider range
+            };
+            
+            const range = EXPECTED_PRICE_RANGES[normalizedSymbol];
+            if (range && (price < range.min || price > range.max)) {
+                console.error(`[PriceManagerService] ❌ CRITICAL: Binance returned price ${price} for ${symbol}, which is outside expected range [${range.min}, ${range.max}]`);
+                console.error(`[PriceManagerService] ❌ This indicates Binance API may have returned wrong data - rejecting price`);
+                throw new Error(`Price ${price} for ${symbol} is outside expected range [${range.min}, ${range.max}]`);
+            }
+            
+            // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
+            if (normalizedSymbol === 'ETHUSDT') {
+                const ETH_ALERT_MIN = 3500;
+                const ETH_ALERT_MAX = 4000;
+                if (price < ETH_ALERT_MIN || price > ETH_ALERT_MAX) {
+                    //console.error(`[PriceManagerService] 🚨🚨🚨 ETH PRICE ALERT 🚨🚨🚨`);
+                    //console.error(`[PriceManagerService] 🚨 ETH price ${price} is outside alert range [${ETH_ALERT_MIN}, ${ETH_ALERT_MAX}]`);
+                    /*console.error(`[PriceManagerService] 🚨 Full details:`, {
+                        symbol: normalizedSymbol,
+                        originalSymbol: symbol,
+                        tradingMode: mode,
+                        price: price,
+                        expectedRange: { min: range.min, max: range.max },
+                        alertRange: { min: ETH_ALERT_MIN, max: ETH_ALERT_MAX },
+                        priceDifference: price < ETH_ALERT_MIN ? 
+                            `${(ETH_ALERT_MIN - price).toFixed(2)} below minimum` : 
+                            `${(price - ETH_ALERT_MAX).toFixed(2)} above maximum`,
+                        percentDifference: price < ETH_ALERT_MIN ? 
+                            `${((ETH_ALERT_MIN - price) / ETH_ALERT_MIN * 100).toFixed(2)}%` : 
+                            `${((price - ETH_ALERT_MAX) / ETH_ALERT_MAX * 100).toFixed(2)}%`,
+                        timestamp: new Date().toISOString(),
+                        endpoint: endpoint,
+                        fullResponse: data,
+                        scannerState: this.scannerService?.state?.tradingMode,
+                        cachedPrice: this.currentPrices[normalizedSymbol]
+                    });*/
+                    //console.error(`[PriceManagerService] 🚨🚨🚨 END ETH PRICE ALERT 🚨🚨🚨`);
+                }
+            }
+            
+            // Update cache with fresh price
+            this.currentPrices[normalizedSymbol] = price;
+            
+            return price;
+            
+        } catch (error) {
+            console.error(`[PriceManagerService] ❌ Failed to fetch fresh price for ${symbol}:`, error.message);
+            return null;
+        }
     }
 
     /**

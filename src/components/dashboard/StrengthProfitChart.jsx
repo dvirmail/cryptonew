@@ -74,13 +74,27 @@ export default function StrengthProfitChart({ trades = [], backtestCombinations 
 
     if (tradesWithStrength.length === 0) return { strengthData: [], analyzedTradesCount: 0 };
 
-    // Create strength ranges in intervals of 20
-    const strengthRanges = Array.from({ length: 25 }, (_, i) => ({
-      min: i * 20,
-      max: (i + 1) * 20,
-      label: `${i * 20}-${(i + 1) * 20}`
-    }));
-    strengthRanges.push({ min: 500, max: Infinity, label: '500+' });
+    // Find the maximum combined strength score in the data
+    const maxStrength = Math.max(...tradesWithStrength.map(t => t.combined_strength));
+    
+    // Calculate the number of 20-point ranges needed to cover from 0 to max
+    // Round up to ensure we include the max value
+    const numRanges = Math.ceil(maxStrength / 20);
+    
+    // Create dynamic strength ranges in intervals of 20, up to the max score
+    const strengthRanges = Array.from({ length: numRanges }, (_, i) => {
+      const min = i * 20;
+      // For the last range, use the actual max strength (rounded up to next 20)
+      // For other ranges, use standard 20-point increments
+      const max = i === numRanges - 1 
+        ? Math.ceil(maxStrength / 20) * 20  // Round max up to next 20 for last range
+        : (i + 1) * 20;
+      return {
+        min: min,
+        max: max,
+        label: `${min}-${max}`
+      };
+    });
 
     const rangeStats = strengthRanges.map(range => {
       const rangedTrades = tradesWithStrength.filter(t => 

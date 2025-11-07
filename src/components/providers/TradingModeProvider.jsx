@@ -33,7 +33,8 @@ export const TradingModeProvider = ({ children }) => {
       // Check localStorage for API keys (local development setup)
       const savedKeys = localStorage.getItem('binanceApiKeys');
       if (!savedKeys) {
-        console.warn('No API keys found in localStorage. Cannot check API keys.');
+        // Only warn if we're actually trying to use API keys (not just checking periodically)
+        // This is a harmless check that doesn't need to spam the console
         if (!silent) {
           toast({
             title: "API Key Check Warning",

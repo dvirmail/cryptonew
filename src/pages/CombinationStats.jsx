@@ -309,29 +309,34 @@ export default function CombinationStats() {
     const stats = {};
 
     combinations.forEach(combo => {
-      // Find trades for this specific strategy
+      // Find CLOSED trades for this specific strategy (only count trades with exit_timestamp)
+      // Match by strategy_name (combinationName)
       const strategyTrades = tradeHistory.filter(trade =>
-        trade.strategy_name === combo.combinationName
+        trade.strategy_name === combo.combinationName &&
+        trade.exit_timestamp != null && // Only count closed trades
+        trade.exit_timestamp !== undefined &&
+        trade.exit_timestamp !== ''
       );
+      
 
       // DEBUG: Log strategy matching
       if (DEBUG_COMBINATION_STATS) {
-        console.log(`[CS] Processing strategy: ${combo.combinationName}`);
-        console.log(`[CS] Found ${strategyTrades.length} trades for this strategy`);
+        //console.log(`[CS] Processing strategy: ${combo.combinationName}`);
+        //console.log(`[CS] Found ${strategyTrades.length} trades for this strategy`);
 
         // Check all available strategy names in trades for debugging
         const allStrategyNames = [...new Set(tradeHistory.map(t => t.strategy_name))];
-        console.log(`[CS] All strategy names in trades:`, allStrategyNames.slice(0, 5));
+        //console.log(`[CS] All strategy names in trades:`, allStrategyNames.slice(0, 5));
 
         if (strategyTrades.length > 0) {
-          console.log(`[CS] Sample trade:`, {
+          /*console.log(`[CS] Sample trade:`, {
             strategy_name: strategyTrades[0].strategy_name,
             exit_timestamp: strategyTrades[0].exit_timestamp,
             conviction_score: strategyTrades[0].conviction_score,
             pnl_usdt: strategyTrades[0].pnl_usdt
-          });
+          });*/
         } else {
-          console.log(`[CS] No trades found for strategy: ${combo.combinationName}`);
+          //console.log(`[CS] No trades found for strategy: ${combo.combinationName}`);
         }
       }
 
@@ -376,7 +381,7 @@ export default function CombinationStats() {
 
     if (DEBUG_COMBINATION_STATS && combinations.length > 0) {
       const sampleKey = combinations[0]?.combinationName;
-      if (sampleKey) console.log('[CS] strategyStats sample:', sampleKey, stats[sampleKey]);
+      // Removed [CS] log
     }
     return stats;
   }, [combinations, tradeHistory]);
@@ -387,40 +392,79 @@ export default function CombinationStats() {
     setError(null);
 
     try {
-      if (DEBUG_COMBINATION_STATS) console.log('[CS] loadData() starting');
+      // Removed [CS] log
       // Fetch combinations and trade history in parallel
+      // MODIFIED: Fetch all trades and deduplicate - filtering for exit_timestamp happens in deduplication logic
       const [combinationsData, tradesData] = await Promise.all([
         queueEntityCall('BacktestCombination', 'list', '-created_date'), // Adjusted sort key from -updated_date
-        queueEntityCall('Trade', 'list', '-exit_timestamp') // MODIFIED: Read from Trade entity
+        queueEntityCall('Trade', 'list', '-exit_timestamp') // Fetch all trades, deduplication will filter duplicates and open positions
       ]);
 
       if (DEBUG_COMBINATION_STATS) {
-        console.log('[CS] combinations fetched:', combinationsData?.length || 0, combinationsData?.slice(0, 2));
-        console.log('[CS] trades fetched:', tradesData?.length || 0, tradesData?.slice(0, 2));
-        if (tradesData && tradesData.length > 0) {
-          const modes = [...new Set(tradesData.map(t => t.trading_mode || 'unknown'))];
-          console.log('[CS] trade modes present:', modes);
-
-          // DEBUG: Check conviction scores and strategy names
-          const sampleTrade = tradesData[0];
-          console.log('[CS] Sample trade data:', {
-            strategy_name: sampleTrade.strategy_name,
-            conviction_score: sampleTrade.conviction_score,
-            exit_timestamp: sampleTrade.exit_timestamp,
-            pnl_usdt: sampleTrade.pnl_usdt
-          });
-
-          // Check if any trades have conviction scores
-          const tradesWithConviction = tradesData.filter(t => t.conviction_score !== null && t.conviction_score !== undefined);
-          console.log('[CS] Trades with conviction scores:', tradesWithConviction.length, 'out of', tradesData.length);
-        }
+        // Removed [CS] logs
       }
 
       setCombinations(combinationsData || []);
 
-      // MODIFIED: Update trade history processing
-      const processedTrades = tradesData || [];
-      setTradeHistory(processedTrades);
+      // MODIFIED: Update trade history processing with deduplication
+      // CRITICAL FIX: Deduplicate trades before using them for stats
+      const rawTrades = tradesData || [];
+      
+      // Deduplication logic: same as used in other parts of the system
+      // A duplicate is defined as same symbol, entry_price, exit_price, quantity, entry_timestamp (within 1 second), and strategy_name
+      const deduplicatedTrades = [];
+      const seenTrades = new Map();
+      
+      for (const trade of rawTrades) {
+        // Skip trades without exit_timestamp (open positions)
+        if (!trade.exit_timestamp || trade.exit_timestamp === null || trade.exit_timestamp === undefined || trade.exit_timestamp === '') {
+          continue;
+        }
+        
+        // Primary deduplication: by position_id if available (most reliable)
+        if (trade.position_id) {
+          if (seenTrades.has(trade.position_id)) {
+            const existing = seenTrades.get(trade.position_id);
+            // Keep the one with the most complete data or later exit_timestamp
+            if (trade.exit_timestamp > existing.exit_timestamp || 
+                (trade.exit_timestamp === existing.exit_timestamp && Object.keys(trade).length > Object.keys(existing).length)) {
+              const index = deduplicatedTrades.indexOf(existing);
+              if (index >= 0) deduplicatedTrades.splice(index, 1);
+              seenTrades.set(trade.position_id, trade);
+              deduplicatedTrades.push(trade);
+            }
+            continue;
+          }
+          seenTrades.set(trade.position_id, trade);
+          deduplicatedTrades.push(trade);
+          continue;
+        }
+        
+        // Fallback deduplication: by trade characteristics
+        const entryTs = new Date(trade.entry_timestamp);
+        const entryTsRounded = Math.floor(entryTs.getTime() / 2000) * 2000; // Round to 2 seconds
+        
+        const uniqueKey = `${trade.symbol || ''}_${trade.strategy_name || ''}_${trade.entry_price || 0}_${trade.exit_price || 0}_${trade.quantity || trade.quantity_crypto || 0}_${entryTsRounded}_${trade.trading_mode || ''}`;
+        
+        if (seenTrades.has(uniqueKey)) {
+          const existing = seenTrades.get(uniqueKey);
+          // Keep the one with the most complete data or later exit_timestamp
+          if (trade.exit_timestamp > existing.exit_timestamp || 
+              (trade.exit_timestamp === existing.exit_timestamp && Object.keys(trade).length > Object.keys(existing).length)) {
+            const index = deduplicatedTrades.indexOf(existing);
+            if (index >= 0) deduplicatedTrades.splice(index, 1);
+            seenTrades.set(uniqueKey, trade);
+            deduplicatedTrades.push(trade);
+          }
+          continue;
+        }
+        
+        seenTrades.set(uniqueKey, trade);
+        deduplicatedTrades.push(trade);
+      }
+      
+      
+      setTradeHistory(deduplicatedTrades);
 
       //if (DEBUG_COMBINATION_STATS) console.log(`[CS] loadData() done: combos=${combinationsData?.length || 0}, trades=${processedTrades.length}`);
 
@@ -449,13 +493,13 @@ export default function CombinationStats() {
         clearTimeout(updateTimeoutRef.current);
       }
       updateTimeoutRef.current = setTimeout(debouncedBatchUpdate, 10000 - (now - lastUpdateTimeRef.current) + 1000); // Try again after cooldown + 1 sec
-      if (DEBUG_COMBINATION_STATS) console.log('[CS] debouncedBatchUpdate: Rate limited, re-queuing.');
+      // Removed [CS] log
       return;
     }
 
     const updates = Array.from(pendingUpdatesRef.current.entries());
     if (updates.length === 0) {
-      if (DEBUG_COMBINATION_STATS) console.log('[CS] debouncedBatchUpdate: No pending updates.');
+      // Removed [CS] log
       return;
     }
 
@@ -488,19 +532,18 @@ export default function CombinationStats() {
             // Add small delay between updates to respect rate limits
             await new Promise(resolve => setTimeout(resolve, UPDATE_DELAY_MS));
           } else {
-            if (DEBUG_COMBINATION_STATS) console.warn(`[CS] Strategy ${strategyName} not found in current combinations for update.`);
+            // Removed [CS] log
           }
         }
         catch (err) {
           // Check for common rate limit or network error messages
           const errorMessage = err.message?.toLowerCase();
           if (errorMessage?.includes('429') || errorMessage?.includes('rate limit') || errorMessage?.includes('network error') || errorMessage?.includes('failed to fetch')) {
-            if (DEBUG_COMBINATION_STATS) console.warn(`[CS] Rate limited or network error for strategy ${strategyName}, re-queuing:`, err);
+            // Removed [CS] log
             // Re-queue this update for later attempt
             pendingUpdatesRef.current.set(strategyName, updateData);
           } else {
-            // DEBUG LOG: Log any non-rate-limit errors during update
-            console.error(`[CS] FAILED to update strategy ${strategyName} (non-rate-limit error):`, err);
+            // Removed [CS] log
           }
         }
       }
@@ -517,10 +560,10 @@ export default function CombinationStats() {
       if (updateTimeoutRef.current) {
         clearTimeout(updateTimeoutRef.current);
       }
-      //if (DEBUG_COMBINATION_STATS) console.log(`[CS] ${pendingUpdatesRef.current.size} items re-queued due to errors/rate limits. Retrying in 15s.`);
+      // Removed [CS] log
       updateTimeoutRef.current = setTimeout(debouncedBatchUpdate, 15000); // Retry re-queued items after 15 seconds
     } else {
-      if (DEBUG_COMBINATION_STATS) console.log('[CS] All pending updates processed successfully.');
+      // Removed [CS] log
     }
 
   }, [combinations]);
@@ -572,15 +615,15 @@ export default function CombinationStats() {
     });
 
     if (updatesQueued.length > 0) {
-      if (DEBUG_COMBINATION_STATS) console.log('[CS] Queued stat updates for', updatesQueued.length, 'strategies:', updatesQueued.slice(0,5)); // Log a few for debug
+      // Removed [CS] log
       // Clear existing timeout and set new one to trigger debouncedBatchUpdate
       if (updateTimeoutRef.current) clearTimeout(updateTimeoutRef.current);
       updateTimeoutRef.current = setTimeout(() => {
-        if (DEBUG_COMBINATION_STATS) console.log('[CS] Running debounced batch stat update due to strategyStats changes.');
+        // Removed [CS] log
         debouncedBatchUpdate();
       }, 2000); // Debounce by 2 seconds
     } else {
-      if (DEBUG_COMBINATION_STATS) console.log('[CS] No BacktestCombination stat changes to persist.');
+      // Removed [CS] log
     }
   }, [strategyStats, combinations, debouncedBatchUpdate]);
 
@@ -600,11 +643,11 @@ export default function CombinationStats() {
           duration: 3000,
         });
       }
-      if (DEBUG_COMBINATION_STATS) console.log('[CS] Auto opt-out skipped due to rate limit.');
+      // Removed [CS] log
       return;
     }
     lastAutoOptOutCheckRef.current = now;
-    if (DEBUG_COMBINATION_STATS) console.log('[CS] Running auto opt-out check...');
+    // Removed [CS] log
 
     setIsProcessingAutoOptOut(true);
 
@@ -630,7 +673,7 @@ export default function CombinationStats() {
             duration: 3000,
           });
         }
-        if (DEBUG_COMBINATION_STATS) console.log('[CS] No underperforming strategies found for auto opt-out.');
+        // Removed [CS] log
         return;
       }
 
@@ -657,7 +700,7 @@ export default function CombinationStats() {
       await loadData(false);
 
     } catch (error) {
-      console.error('[CS] Auto opt-out failed:', error);
+      // Removed [CS] log
       toast({
         title: "Auto Opt-Out Failed",
         description: "Failed to automatically opt-out strategies: " + (error.message || "Unknown error"),
@@ -694,6 +737,32 @@ export default function CombinationStats() {
     loadData();
   }, [loadData]);
 
+  // Expose refresh function globally for manual refresh
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.refreshCombinationStats = () => {
+        loadData(false);
+      };
+    }
+    return () => {
+      if (typeof window !== 'undefined' && window.refreshCombinationStats) {
+        delete window.refreshCombinationStats;
+      }
+    };
+  }, [loadData]);
+
+  // Listen for global trade data refresh events
+  useEffect(() => {
+    const handleTradeRefresh = () => {
+      loadData(false); // Refresh without showing loader
+    };
+    
+    window.addEventListener('tradeDataRefresh', handleTradeRefresh);
+    return () => {
+      window.removeEventListener('tradeDataRefresh', handleTradeRefresh);
+    };
+  }, [loadData]);
+
   // MODIFIED: Watch for trade history changes from virtualWallet and trigger full data refresh
   useEffect(() => {
     // Only proceed if virtualWallet data is available
@@ -712,7 +781,7 @@ export default function CombinationStats() {
       autoOptOutTimeoutRef.current = setTimeout(async () => {
         // Reload all data (combinations and trades) to ensure the latest are available
         await loadData(false); // Using false to prevent loading spinner on background refresh
-        if (DEBUG_COMBINATION_STATS) console.log('[CS] Data reloaded after new trades. Checking auto opt-out.');
+        // Removed [CS] log
 
         // CRITICAL FIX: This is the right place to call the opt-out logic.
         // It runs after data is reloaded, ensuring it has the latest stats.
@@ -823,7 +892,7 @@ export default function CombinationStats() {
     });
 
     if (DEBUG_COMBINATION_STATS) {
-      console.log('[CS] filtered results count:', filtered.length);
+      // Removed [CS] log
     }
 
     // Sort
@@ -1155,6 +1224,16 @@ export default function CombinationStats() {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Strategy Performance</h1>
         <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => loadData(false)}
+            className="flex items-center gap-2"
+            title="Refresh demo trade counts and performance metrics"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh Stats
+          </Button>
           <Badge variant="secondary" className="text-xs">
             Auto-updating with live trades ({tradeHistory.length} total trades analyzed)
           </Badge>

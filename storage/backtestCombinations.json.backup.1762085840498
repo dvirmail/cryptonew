@@ -1,0 +1,1023 @@
+[
+  {
+    "id": "1762084743364",
+    "combinationName": "Phase 1 Comprehensive Test - All Enhanced Indicators",
+    "coin": "ETH/USDT",
+    "strategyDirection": "long",
+    "timeframe": "15m",
+    "successRate": 0,
+    "occurrences": 0,
+    "avgPriceMove": 0,
+    "takeProfitPercentage": 5,
+    "stopLossPercentage": 2,
+    "estimatedExitTimeMinutes": 240,
+    "enableTrailingTakeProfit": false,
+    "trailingStopPercentage": 0,
+    "positionSizePercentage": 1,
+    "dominantMarketRegime": "uptrend",
+    "combinedStrength": 400,
+    "profitFactor": 5,
+    "is_event_driven_strategy": false,
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "Bullish Cross"
+      },
+      {
+        "type": "MACD",
+        "value": "MACD Above Signal"
+      },
+      {
+        "type": "RSI",
+        "value": "Oversold Exit"
+      },
+      {
+        "type": "RSI",
+        "value": "RSI Above 50"
+      },
+      {
+        "type": "EMA",
+        "value": "Price Above EMA"
+      },
+      {
+        "type": "MA200",
+        "value": "price_cross_up"
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Above Kumo"
+      },
+      {
+        "type": "Stochastic",
+        "value": "Stochastic Oversold Exit"
+      },
+      {
+        "type": "Bollinger",
+        "value": "Price Above Lower Band"
+      },
+      {
+        "type": "ATR",
+        "value": "ATR Expansion"
+      },
+      {
+        "type": "MACD",
+        "value": "MACD Histogram Regular Bullish Divergence"
+      },
+      {
+        "type": "MACD",
+        "value": "MACD Histogram Regular Bearish Divergence"
+      },
+      {
+        "type": "MACD",
+        "value": "MACD Histogram Hidden Bullish Divergence"
+      },
+      {
+        "type": "MACD",
+        "value": "MACD Histogram Hidden Bearish Divergence"
+      },
+      {
+        "type": "MFI",
+        "value": "MFI Regular Bullish Divergence"
+      },
+      {
+        "type": "MFI",
+        "value": "MFI Regular Bearish Divergence"
+      },
+      {
+        "type": "MFI",
+        "value": "MFI Hidden Bullish Divergence"
+      },
+      {
+        "type": "MFI",
+        "value": "MFI Hidden Bearish Divergence"
+      },
+      {
+        "type": "MFI",
+        "value": "MFI Failure Swing Bullish"
+      },
+      {
+        "type": "MFI",
+        "value": "MFI Failure Swing Bearish"
+      },
+      {
+        "type": "OBV",
+        "value": "OBV Bullish Divergence"
+      },
+      {
+        "type": "OBV",
+        "value": "OBV Bearish Divergence"
+      },
+      {
+        "type": "ADX",
+        "value": "Bullish Directional Movement"
+      },
+      {
+        "type": "PSAR",
+        "value": "Uptrending"
+      }
+    ],
+    "createdDate": "2025-11-02T11:59:03.353Z",
+    "created_date": "2025-11-02T11:59:03.364Z"
+  },
+  {
+    "id": "1762085625046",
+    "coin": "DOGE/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "Bearish Cross",
+        "strength": 80,
+        "details": "MACD line crossed below Signal line",
+        "priority": 9,
+        "candle": 1753,
+        "isEvent": true
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 53,
+        "details": "Fast EMA below Slow EMA - bearish alignment",
+        "priority": 7,
+        "candle": 1753,
+        "isEvent": false
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75,
+        "details": "Price 0.22 is below MA200 0.23",
+        "priority": 6,
+        "candle": 1753,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "Stochastic",
+        "value": "Oversold Entry",
+        "strength": 70,
+        "isEvent": true,
+        "details": "Stochastic entered oversold zone: 12.45",
+        "priority": 7,
+        "candle": {
+          "time": 1755498600000,
+          "open": 0.22204,
+          "high": 0.223,
+          "low": 0.22124,
+          "close": 0.22174,
+          "volume": 25811116,
+          "closeTime": 1755499499999,
+          "quoteAssetVolume": 5731577.61337,
+          "trades": 33741,
+          "takerBuyBaseAssetVolume": 13449537,
+          "takerBuyQuoteAssetVolume": 2986479.68565,
+          "ignore": "0",
+          "coin": "DOGE/USDT"
+        }
+      }
+    ],
+    "combination_signature": "TF:15m|EMA:Bearish EMA Alignment+!Ichimoku:Price Below Kumo+!MA200:Price Below MA200+!MACD:Bearish Cross+!Stochastic:Oversold Entry",
+    "signalCount": 5,
+    "combinedStrength": 343,
+    "successRate": 50,
+    "occurrences": 10,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-18T06:30:00.000Z",
+        "price": 0.22174,
+        "priceMove": 0.20097862361324115,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-18T16:45:00.000Z",
+        "price": 0.22111,
+        "priceMove": 1.0977454660576231,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-19T23:15:00.000Z",
+        "price": 0.2107,
+        "priceMove": 0.623279544375894,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-04T18:15:00.000Z",
+        "price": 0.21154,
+        "priceMove": 0.5725394724401964,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-04T18:45:00.000Z",
+        "price": 0.21134,
+        "priceMove": 0.7862449134096705,
+        "successful": true,
+        "exitTime": 13500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-04T19:45:00.000Z",
+        "price": 0.21074,
+        "priceMove": 0.8129211350479224,
+        "successful": true,
+        "exitTime": 7200000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T16:30:00.000Z",
+        "price": 0.23924,
+        "priceMove": -0.7515883631499777,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-30T15:00:00.000Z",
+        "price": 0.22751,
+        "priceMove": 0.7829216298184778,
+        "successful": true,
+        "exitTime": 9000000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-04T15:15:00.000Z",
+        "price": 0.24751,
+        "priceMove": 0.46512262130822746,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-28T05:45:00.000Z",
+        "price": 0.19839,
+        "priceMove": 1.2218483794545985,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 0.5812013422375873,
+    "profitFactor": 8.732974201486007,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 10,
+        "successful": 5,
+        "grossProfit": 4.7016815237882925,
+        "grossLoss": 2.6135086248875368
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Furious Knight of DOGEUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 117,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.4587367206855518,
+    "is_event_driven_strategy": false,
+    "created_date": "2025-11-02T12:13:45.046Z"
+  },
+  {
+    "id": "1762085625053",
+    "coin": "DOGE/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "EMA",
+        "value": "Price Below EMA",
+        "strength": 52,
+        "details": "Price 0.19 is below EMA 0.19",
+        "priority": 6,
+        "candle": 284,
+        "isEvent": false
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75,
+        "details": "Price 0.19 is below MA200 0.20",
+        "priority": 6,
+        "candle": 284,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80,
+        "details": "ADX 42.0 indicates strong trending market",
+        "priority": 7,
+        "candle": 284,
+        "isEvent": false
+      },
+      {
+        "type": "MARibbon",
+        "value": "Downtrend Confirmation",
+        "strength": 75,
+        "details": "MA ribbon confirms a downtrend (fast MAs above slow MAs).",
+        "priority": 8,
+        "candle": 284,
+        "isEvent": false
+      }
+    ],
+    "combination_signature": "TF:15m|ADX:Strong Trend+!EMA:Price Below EMA+!Ichimoku:Price Below Kumo+!MA200:Price Below MA200+!MARibbon:Downtrend Confirmation",
+    "signalCount": 5,
+    "combinedStrength": 347,
+    "successRate": 63.1578947368421,
+    "occurrences": 19,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-02T23:15:00.000Z",
+        "price": 0.18949,
+        "priceMove": 1.4967940260699815,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-14T21:15:00.000Z",
+        "price": 0.2201,
+        "priceMove": 0.8631303952748786,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-25T20:00:00.000Z",
+        "price": 0.21216,
+        "priceMove": -1.4095022624434344,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-25T20:30:00.000Z",
+        "price": 0.20893,
+        "priceMove": -0.6711937012396458,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-25T21:00:00.000Z",
+        "price": 0.20696,
+        "priceMove": 1.2140510243525342,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-25T21:30:00.000Z",
+        "price": 0.20742,
+        "priceMove": 0.9890319159193985,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T06:15:00.000Z",
+        "price": 0.23958,
+        "priceMove": -0.6423532849152669,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T06:45:00.000Z",
+        "price": 0.2403,
+        "priceMove": -0.4747191011236008,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T07:15:00.000Z",
+        "price": 0.23957,
+        "priceMove": -0.38774679634344744,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T07:45:00.000Z",
+        "price": 0.23772,
+        "priceMove": 0.7806242638398149,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T16:45:00.000Z",
+        "price": 0.22728,
+        "priceMove": -1.512759591693071,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T17:15:00.000Z",
+        "price": 0.22517,
+        "priceMove": 0.9046831283030559,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T17:45:00.000Z",
+        "price": 0.22141,
+        "priceMove": 1.8411431281333255,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-10T21:15:00.000Z",
+        "price": 0.1673,
+        "priceMove": 15.709354453078303,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T07:15:00.000Z",
+        "price": 0.19874,
+        "priceMove": 1.1538442185770288,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T07:45:00.000Z",
+        "price": 0.19786,
+        "priceMove": 1.6048468614171527,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T10:15:00.000Z",
+        "price": 0.19627,
+        "priceMove": 1.5689229123146633,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-22T05:15:00.000Z",
+        "price": 0.1914,
+        "priceMove": -0.3597178683385517,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T19:30:00.000Z",
+        "price": 0.1771,
+        "priceMove": 0.9640033879164231,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 1.2438124794262915,
+    "profitFactor": 5.329877083875159,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 19,
+        "successful": 12,
+        "grossProfit": 29.090429715196557,
+        "grossLoss": 5.457992606097019
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Swift Typhoon of DOGEUSDT-EMAMAI",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 55,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 1.0717520378383782,
+    "is_event_driven_strategy": false,
+    "created_date": "2025-11-02T12:13:45.053Z"
+  },
+  {
+    "id": "1762085625056",
+    "coin": "DOGE/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "Bearish Cross",
+        "strength": 80,
+        "details": "MACD line crossed below Signal line",
+        "priority": 9,
+        "candle": 284,
+        "isEvent": true
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75,
+        "details": "Price 0.19 is below MA200 0.20",
+        "priority": 6,
+        "candle": 284,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Below Kumo",
+        "strength": 65,
+        "isEvent": false,
+        "description": "Price is below the cloud"
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 80,
+        "details": "ADX 42.0 indicates strong trending market",
+        "priority": 7,
+        "candle": 284,
+        "isEvent": false
+      },
+      {
+        "type": "MARibbon",
+        "value": "Downtrend Confirmation",
+        "strength": 75,
+        "details": "MA ribbon confirms a downtrend (fast MAs above slow MAs).",
+        "priority": 8,
+        "candle": 284,
+        "isEvent": false
+      }
+    ],
+    "combination_signature": "TF:15m|ADX:Strong Trend+!Ichimoku:Price Below Kumo+!MA200:Price Below MA200+!MACD:Bearish Cross+!MARibbon:Downtrend Confirmation",
+    "signalCount": 5,
+    "combinedStrength": 375,
+    "successRate": 66.66666666666666,
+    "occurrences": 30,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-02T23:15:00.000Z",
+        "price": 0.18949,
+        "priceMove": 1.4967940260699815,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-03T00:15:00.000Z",
+        "price": 0.1902,
+        "priceMove": 1.0223449001051552,
+        "successful": true,
+        "exitTime": 900000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-05T18:30:00.000Z",
+        "price": 0.19818,
+        "priceMove": 0.10321424967201848,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-05T19:30:00.000Z",
+        "price": 0.19812,
+        "priceMove": 0.7695840904502433,
+        "successful": true,
+        "exitTime": 13500000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-05T20:45:00.000Z",
+        "price": 0.19807,
+        "priceMove": 0.7950850709345265,
+        "successful": true,
+        "exitTime": 9000000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-14T21:45:00.000Z",
+        "price": 0.21996,
+        "priceMove": 0.9274868157846923,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-18T06:30:00.000Z",
+        "price": 0.22174,
+        "priceMove": 0.20097862361324115,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-18T07:45:00.000Z",
+        "price": 0.22176,
+        "priceMove": -0.2409812409812445,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-18T08:45:00.000Z",
+        "price": 0.22125,
+        "priceMove": 0.766949152542374,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-08-19T07:30:00.000Z",
+        "price": 0.21712,
+        "priceMove": 0.7678703021370623,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T07:15:00.000Z",
+        "price": 0.23957,
+        "priceMove": -0.38774679634344744,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-22T11:30:00.000Z",
+        "price": 0.23885,
+        "priceMove": 1.3032761147163454,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T04:30:00.000Z",
+        "price": 0.23397,
+        "priceMove": -0.7329679018677693,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T06:00:00.000Z",
+        "price": 0.23347,
+        "priceMove": -0.4298946331434461,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-25T08:30:00.000Z",
+        "price": 0.23284,
+        "priceMove": -1.2506871671534097,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-30T14:00:00.000Z",
+        "price": 0.22874,
+        "priceMove": 0.40139459648508846,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-09-30T15:15:00.000Z",
+        "price": 0.22695,
+        "priceMove": 0.7502203128442362,
+        "successful": true,
+        "exitTime": 6300000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T07:45:00.000Z",
+        "price": 0.19786,
+        "priceMove": 1.6048468614171527,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T10:00:00.000Z",
+        "price": 0.19804,
+        "priceMove": 0.946727933750763,
+        "successful": true,
+        "exitTime": 5400000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-14T12:00:00.000Z",
+        "price": 0.19839,
+        "priceMove": 1.2772947225162443,
+        "successful": true,
+        "exitTime": 8100000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-21T08:15:00.000Z",
+        "price": 0.19326,
+        "priceMove": 0.8624909448411535,
+        "successful": true,
+        "exitTime": 9000000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-21T10:15:00.000Z",
+        "price": 0.19319,
+        "priceMove": 0.8991278016460478,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-22T05:30:00.000Z",
+        "price": 0.19146,
+        "priceMove": -0.814086493262299,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-22T10:30:00.000Z",
+        "price": 0.19014,
+        "priceMove": 0.8176343746712968,
+        "successful": true,
+        "exitTime": 6300000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-28T04:30:00.000Z",
+        "price": 0.19939,
+        "priceMove": 1.0890842068308229,
+        "successful": true,
+        "exitTime": 9000000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-28T05:45:00.000Z",
+        "price": 0.19839,
+        "priceMove": 1.2218483794545985,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T17:00:00.000Z",
+        "price": 0.18091,
+        "priceMove": -0.9630617434083166,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T18:30:00.000Z",
+        "price": 0.17849,
+        "priceMove": 0.7864726315199679,
+        "successful": true,
+        "exitTime": 11700000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T19:30:00.000Z",
+        "price": 0.1771,
+        "priceMove": 0.9640033879164231,
+        "successful": true,
+        "exitTime": 3600000,
+        "marketRegime": "downtrend"
+      },
+      {
+        "date": "2025-10-30T19:45:00.000Z",
+        "price": 0.17694,
+        "priceMove": 0.8294619645077557,
+        "successful": true,
+        "exitTime": 1800000,
+        "marketRegime": "downtrend"
+      }
+    ],
+    "avgPriceMove": 0.5261588496089087,
+    "profitFactor": 4.275237666549739,
+    "dominantMarketRegime": "downtrend",
+    "marketRegimeDistribution": {
+      "downtrend": {
+        "occurrences": 30,
+        "successful": 20,
+        "grossProfit": 19.898603994656845,
+        "grossLoss": 5.5250134459302815
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Golden Gladiator of DOGEUSDT-MACDMA",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 93,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.769546757708086,
+    "is_event_driven_strategy": false,
+    "created_date": "2025-11-02T12:13:45.056Z"
+  },
+  {
+    "id": "1762085625077",
+    "coin": "DOGE/USDT",
+    "timeframe": "15m",
+    "signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Signal",
+        "strength": 40,
+        "details": "MACD line (-0.0002) is below Signal line (-0.0002)",
+        "priority": 6,
+        "candle": 688,
+        "isEvent": false
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 46,
+        "details": "Fast EMA below Slow EMA - bearish alignment",
+        "priority": 7,
+        "candle": 688,
+        "isEvent": false
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Kijun Bounce Bullish",
+        "strength": 82,
+        "isEvent": true,
+        "description": "Price bounced bullish off Kijun-Sen"
+      },
+      {
+        "type": "PSAR",
+        "value": "PSAR Flip Bullish",
+        "strength": 85,
+        "details": "PSAR flipped below the price, signaling a new uptrend",
+        "priority": 9,
+        "candle": 688,
+        "isEvent": true
+      },
+      {
+        "type": "CCI",
+        "value": "Bullish Zero Cross",
+        "strength": 75,
+        "details": "CCI crossed above zero line",
+        "priority": 8,
+        "name": "CCI Bullish Zero Cross",
+        "candle": {
+          "time": 1754540100000,
+          "open": 0.20457,
+          "high": 0.20532,
+          "low": 0.20454,
+          "close": 0.20519,
+          "volume": 4024942,
+          "closeTime": 1754540999999,
+          "quoteAssetVolume": 825849.95644,
+          "trades": 3471,
+          "takerBuyBaseAssetVolume": 2372490,
+          "takerBuyQuoteAssetVolume": 486822.06604,
+          "ignore": "0",
+          "coin": "DOGE/USDT"
+        },
+        "isEvent": true
+      }
+    ],
+    "combination_signature": "TF:15m|CCI:Bullish Zero Cross+!EMA:Bearish EMA Alignment+!Ichimoku:Kijun Bounce Bullish+!MACD:MACD Below Signal+!PSAR:PSAR Flip Bullish",
+    "signalCount": 5,
+    "combinedStrength": 328,
+    "successRate": 50,
+    "occurrences": 10,
+    "occurrenceDates": [
+      {
+        "date": "2025-08-07T04:15:00.000Z",
+        "price": 0.20519,
+        "priceMove": 0.4859033091281171,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-13T02:45:00.000Z",
+        "price": 0.23677,
+        "priceMove": 1.114193098787846,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-23T12:15:00.000Z",
+        "price": 0.23751,
+        "priceMove": -0.8857627047282268,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-08-27T01:45:00.000Z",
+        "price": 0.21863,
+        "priceMove": 1.295990943603358,
+        "successful": true,
+        "exitTime": 7200000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-10T21:00:00.000Z",
+        "price": 0.24356,
+        "priceMove": 0.8831910001642358,
+        "successful": true,
+        "exitTime": 13500000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-16T15:15:00.000Z",
+        "price": 0.26466,
+        "priceMove": 0.947763167837983,
+        "successful": true,
+        "exitTime": 4500000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-09-18T08:00:00.000Z",
+        "price": 0.2812,
+        "priceMove": -0.5878378378378402,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-10T09:15:00.000Z",
+        "price": 0.25041,
+        "priceMove": 0.4967752885268091,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-10-24T11:45:00.000Z",
+        "price": 0.19735,
+        "priceMove": 1.574170255890546,
+        "successful": true,
+        "exitTime": 2700000,
+        "marketRegime": "uptrend"
+      },
+      {
+        "date": "2025-11-01T15:00:00.000Z",
+        "price": 0.18717,
+        "priceMove": -0.30877010204626754,
+        "successful": false,
+        "exitTime": null,
+        "marketRegime": "uptrend"
+      }
+    ],
+    "avgPriceMove": 0.501561641932656,
+    "profitFactor": 3.8140142649271787,
+    "dominantMarketRegime": "uptrend",
+    "marketRegimeDistribution": {
+      "uptrend": {
+        "occurrences": 10,
+        "successful": 5,
+        "grossProfit": 5.815308466283969,
+        "grossLoss": 2.765049242267261
+      }
+    },
+    "recommendedTradingStrategy": "",
+    "includedInScanner": true,
+    "combinationName": "Dark Shark of DOGEUSDT-MACDEM",
+    "riskPercentage": 1,
+    "stopLossAtrMultiplier": 1,
+    "takeProfitAtrMultiplier": 1.5,
+    "enableTrailingTakeProfit": true,
+    "estimatedExitTimeMinutes": 102,
+    "strategyDirection": "long",
+    "medianLowestLowDuringBacktest": 0.4970781162529053,
+    "is_event_driven_strategy": false,
+    "created_date": "2025-11-02T12:13:45.077Z"
+  }
+]

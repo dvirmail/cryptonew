@@ -1,5 +1,6 @@
 import { queueEntityCall, queueFunctionCall } from '@/components/utils/apiQueue';
 import { liveTradingAPI } from '@/api/functions';
+import { getAutoScannerService } from './AutoScannerService';
 
 /**
  * CentralWalletStateManager - Single Source of Truth for Wallet State
@@ -84,14 +85,18 @@ class CentralWalletStateManager {
             this.lastNotificationState.balance_in_trades !== this.currentState.balance_in_trades ||
             this.lastNotificationState.open_positions_count !== this.currentState.open_positions_count;
         
+        // Reduced logging - only log when state actually changes or positions change
         if (!stateChanged) {
             this.performanceMetrics.skippedNotifications++;
             return;
         }
         
+        const positionsCount = this.currentState?.positions?.length || 0;
+        
         this.lastNotificationState = { ...this.currentState };
         
-        this.subscribers.forEach(callback => {
+        const subscriberArray = Array.from(this.subscribers);
+        subscriberArray.forEach((callback, index) => {
             try {
                 callback(this.currentState);
             } catch (error) {
@@ -138,7 +143,6 @@ class CentralWalletStateManager {
         try {
             // PERSISTENT WALLET ID SYSTEM: Get the primary wallet ID from wallet_config
             const primaryWalletId = await this.getPrimaryWalletId(tradingMode);
-            console.log(`[CentralWalletStateManager] 🔑 Primary wallet ID for ${tradingMode}: ${primaryWalletId}`);
             
             // Check if CentralWalletState already exists for this wallet ID
             const existingStates = await queueEntityCall(
@@ -151,13 +155,11 @@ class CentralWalletStateManager {
             let targetState = existingStates?.find(state => state.id === primaryWalletId);
             
             if (targetState) {
-                console.log(`[CentralWalletStateManager] ✅ Found existing state for primary wallet ID: ${primaryWalletId}`);
                 this.currentState = targetState;
                 
-                // Immediately sync with Binance to get latest data
+                // Immediately sync with Binance to get latest data (this will recalculate P&L)
                 await this.syncWithBinance(tradingMode);
             } else {
-                console.log(`[CentralWalletStateManager] 🔄 Creating new state for primary wallet ID: ${primaryWalletId}`);
                 
                 // Create new state with the primary wallet ID
                 const newState = {
@@ -221,19 +223,15 @@ class CentralWalletStateManager {
             const data = await response.json();
             
             if (data.success && data.walletId) {
-                console.log(`[CentralWalletStateManager] 🔑 Retrieved primary wallet ID: ${data.walletId}`);
                 return data.walletId;
             } else {
                 // Fallback: use default wallet ID for this trading mode
                 const fallbackWalletId = defaultWalletIds[tradingMode] || `wallet_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                console.log(`[CentralWalletStateManager] ⚠️ No primary wallet ID found in DB, using default: ${fallbackWalletId}`);
                 return fallbackWalletId;
             }
         } catch (error) {
-            console.error('[CentralWalletStateManager] ❌ Error getting primary wallet ID (server may not be running):', error.message);
             // Fallback: use default wallet ID for this trading mode (hardcoded)
             const fallbackWalletId = defaultWalletIds[tradingMode] || `wallet_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            console.log(`[CentralWalletStateManager] ✅ Using hardcoded default wallet ID for ${tradingMode}: ${fallbackWalletId}`);
             return fallbackWalletId;
         }
     }
@@ -302,9 +300,14 @@ class CentralWalletStateManager {
         this.syncInProgress = true;
         
         try {
+            // CRITICAL FIX: Delay BEFORE fetching account info to ensure any recent position creations
+            // are fully committed to the database and visible in queries
+            // This prevents race conditions where positions were just created but aren't queryable yet
+            // Increased to 800ms to ensure PostgreSQL transaction is fully committed and visible
+            // Combined with 200ms delay in SignalDetectionEngine before event dispatch, total is ~1000ms
+            await new Promise(resolve => setTimeout(resolve, 800));
             
             // Get account info from Binance
-            console.log(`[CentralWalletStateManager] 🔄 Syncing with Binance for ${tradingMode}...`);
             const accountResponse = await liveTradingAPI({
                 action: 'getAccountInfo',
                 tradingMode: tradingMode,
@@ -317,31 +320,120 @@ class CentralWalletStateManager {
             }
 
             const accountData = accountResponse.data;
-            console.log(`[CentralWalletStateManager] ✅ Received Binance account data:`, {
-                balancesCount: accountData.balances?.length || 0,
-                hasUsdtBalance: !!accountData.balances?.find(b => b.asset === 'USDT')
-            });
             
             // Extract USDT balance
             const usdtBalance = accountData.balances?.find(b => b.asset === 'USDT');
             const availableBalance = parseFloat(usdtBalance?.free || 0);
             const lockedBalance = parseFloat(usdtBalance?.locked || 0);
             
-            console.log(`[CentralWalletStateManager] 💰 USDT Balance extracted:`, {
-                usdtBalance: usdtBalance,
-                availableBalance: availableBalance,
-                lockedBalance: lockedBalance
-            });
+            // CRITICAL FIX: Get positions from PositionManager first (single source of truth)
+            // Only query DB if PositionManager is not available
+            let positions = [];
+            const queryStartTime = performance.now();
+            const queryStartISO = new Date().toISOString();
             
-            // Get current positions
-            const positions = await queueEntityCall(
-                'LivePosition', 
-                'filter', 
-                { 
-                    trading_mode: tradingMode, 
-                    status: ['open', 'trailing'] 
+            // Define filterCriteria outside try/catch so it's available for retry logic
+            const filterCriteria = { 
+                trading_mode: tradingMode,
+                status: ['open', 'trailing']
+            };
+            
+            try {
+                const scannerService = getAutoScannerService();
+                const positionManager = scannerService?.positionManager;
+                
+                // CRITICAL FIX: Use PositionManager even if positions array is empty (empty array is valid state!)
+                // An empty array means "no positions" which is correct after closing a position
+                if (positionManager && Array.isArray(positionManager.positions)) {
+                    // Use positions from PositionManager (already filtered by status)
+                    positions = positionManager.positions.filter(pos => 
+                        pos.trading_mode === tradingMode && 
+                        (pos.status === 'open' || pos.status === 'trailing')
+                    );
+                } else {
+                    // Fallback: Query DB directly (PositionManager not available)
+                    throw new Error('PositionManager not available'); // Fall through to DB query
                 }
-            );
+            } catch (pmError) {
+                // Fallback: Query DB directly
+                //console.log(`[POSITION_QUERY] 🔍 PositionManager access failed, querying DB directly:`, pmError.message);
+                // Additional delay after account info fetch to ensure positions are queryable
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+                //console.log(`[POSITION_QUERY] 🔍 ========================================`);
+                //console.log(`[POSITION_QUERY] 🔍 Querying positions at ${queryStartISO}`);
+                //console.log(`[POSITION_QUERY] 📝 Filter criteria:`, JSON.stringify(filterCriteria));
+                //console.log(`[POSITION_QUERY] 📊 Before query: state has ${this.currentState?.positions?.length || 0} positions`);
+                //console.log(`[POSITION_QUERY] 🌐 API: POST /api/entities/LivePosition/filter`);
+                
+                positions = await queueEntityCall(
+                    'LivePosition', 
+                    'filter', 
+                    filterCriteria
+                );
+                
+                const queryEndTime = performance.now();
+                const queryDuration = queryEndTime - queryStartTime;
+                const queryEndISO = new Date().toISOString();
+                
+                //console.log(`[POSITION_QUERY] ⏱️ Query completed in ${queryDuration.toFixed(2)}ms`);
+                //console.log(`[POSITION_QUERY] ⏰ Query end time: ${queryEndISO}`);
+                //console.log(`[POSITION_QUERY] 📥 Query returned: ${positions?.length || 0} positions`);
+            }
+            
+            // Log final result (outside try/catch so it's always executed)
+            const queryEndTime = performance.now();
+            const queryDuration = queryEndTime - queryStartTime;
+            const queryEndISO = new Date().toISOString();
+            if (positions && positions.length > 0) {
+                //console.log(`[POSITION_QUERY] ✅ Found ${positions.length} positions:`, positions.map(p => `${p.symbol}(${p.status || 'NULL'})`).join(', '));
+            } else {
+                // CRITICAL FIX: Check if position was recently created (within last 5 seconds)
+                // If so, retry the query as it may not be visible yet
+                const currentPositionsCount = this.currentState?.positions?.length || 0;
+                const lastSyncTime = this.currentState?.last_binance_sync;
+                const timeSinceLastSync = lastSyncTime ? Date.now() - new Date(lastSyncTime).getTime() : Infinity;
+                
+                // If we have positions in state OR last sync was very recent, retry
+                if (currentPositionsCount > 0 || timeSinceLastSync < 5000) {
+                    //console.log(`[POSITION_QUERY] 🔄 Retrying query after 500ms delay...`);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    
+                    const retryStartTime = performance.now();
+                    const retryStartISO = new Date().toISOString();
+                    //console.log(`[POSITION_QUERY] 🔍 Retry query with filter:`, JSON.stringify(filterCriteria));
+                    //console.log(`[POSITION_QUERY] ⏰ Retry start time: ${retryStartISO}`);
+                    //console.log(`[POSITION_QUERY] 🌐 API: POST /api/entities/LivePosition/filter`);
+                    
+                    const retryPositions = await queueEntityCall(
+                        'LivePosition', 
+                        'filter', 
+                        filterCriteria
+                    );
+                    
+                    const retryEndTime = performance.now();
+                    const retryDuration = retryEndTime - retryStartTime;
+                    const retryEndISO = new Date().toISOString();
+                    
+                    //console.log(`[POSITION_QUERY] ⏱️ Retry completed in ${retryDuration.toFixed(2)}ms`);
+                    //console.log(`[POSITION_QUERY] ⏰ Retry end time: ${retryEndISO}`);
+                    //console.log(`[POSITION_QUERY] 📥 Retry returned: ${retryPositions?.length || 0} positions`);
+                    if (retryPositions && retryPositions.length > 0) {
+                        //console.log(`[POSITION_QUERY] ✅ Retry found ${retryPositions.length} positions:`, retryPositions.map(p => `${p.symbol}(${p.status || 'NULL'})`).join(', '));
+                        positions = retryPositions;
+                    } else if (currentPositionsCount > 0 && timeSinceLastSync < 3000) {
+                        // Preserve existing positions if retry failed but sync was very recent
+                        console.log(`[POSITION_QUERY] ⚠️ Retry failed but preserving ${currentPositionsCount} existing positions (sync was ${Math.round(timeSinceLastSync)}ms ago)`);
+                        positions = this.currentState.positions || [];
+                    } else {
+                        console.log(`[POSITION_QUERY] ❌ No positions found after retry`);
+                        if (currentPositionsCount > 0) {
+                            console.log(`[POSITION_QUERY] ⚠️ State had ${currentPositionsCount} positions but query returned 0 - positions will be overwritten!`);
+                            //console.log(`[POSITION_QUERY] 🔍 Current positions in state:`, this.currentState.positions.map(p => `${p.symbol}(${p.status || 'NULL'}, id=${p.id?.substring(0, 8)})`).join(', '));
+                        }
+                    }
+                }
+            }
 
             // Calculate balance in trades
             const balanceInTrades = positions?.reduce((total, pos) => {
@@ -391,15 +483,52 @@ class CentralWalletStateManager {
             // Calculate crypto assets value (excluding USDT)
             const cryptoAssetsValue = await this.calculateCryptoAssetsValue(accountData.balances);
             
+            // CRITICAL FIX: Use the dedicated recalculation function that handles deduplication
+            // This ensures consistent P&L calculation across the entire system
+            let totalRealizedPnl = 0;
+            let totalTradesCount = 0;
+            let winningTradesCount = 0;
+            let losingTradesCount = 0;
+            let totalGrossProfit = 0;
+            let totalGrossLoss = 0;
+            
+            try {
+                // Use the dedicated recalculation function which handles deduplication correctly
+                totalRealizedPnl = await this.recalculateRealizedPnlFromDatabase(tradingMode);
+                
+                // Extract the trade counts from the updated central state (they're set by recalculateRealizedPnlFromDatabase)
+                totalTradesCount = this.currentState?.total_trades_count || 0;
+                winningTradesCount = this.currentState?.winning_trades_count || 0;
+                losingTradesCount = this.currentState?.losing_trades_count || 0;
+                totalGrossProfit = this.currentState?.total_gross_profit || 0;
+                totalGrossLoss = this.currentState?.total_gross_loss || 0;
+            } catch (tradeError) {
+                console.error('[CentralWalletStateManager] ⚠️ Failed to calculate realized P&L from database:', tradeError);
+                // Fallback: use existing value if calculation fails
+                totalRealizedPnl = this.currentState?.total_realized_pnl || 0;
+                totalTradesCount = this.currentState?.total_trades_count || 0;
+                winningTradesCount = this.currentState?.winning_trades_count || 0;
+                losingTradesCount = this.currentState?.losing_trades_count || 0;
+                totalGrossProfit = this.currentState?.total_gross_profit || 0;
+                totalGrossLoss = this.currentState?.total_gross_loss || 0;
+            }
+            
             // Calculate total equity (including crypto assets)
             const totalEquity = availableBalance + balanceInTrades + unrealizedPnl + cryptoAssetsValue;
 
             // Update the central state
+            const positionsCount = positions?.length || 0;
             const updatedState = {
                 ...this.currentState,
                 available_balance: availableBalance,
                 balance_in_trades: balanceInTrades,
                 total_equity: totalEquity,
+                total_realized_pnl: totalRealizedPnl, // CRITICAL: Always from database
+                total_trades_count: totalTradesCount,
+                winning_trades_count: winningTradesCount,
+                losing_trades_count: losingTradesCount,
+                total_gross_profit: totalGrossProfit,
+                total_gross_loss: totalGrossLoss,
                 unrealized_pnl: unrealizedPnl,
                 crypto_assets_value: cryptoAssetsValue,
                 open_positions_count: positions?.length || 0,
@@ -408,7 +537,6 @@ class CentralWalletStateManager {
                 positions: positions || [],
                 status: 'synced'
             };
-
             // Save to database
             const savedState = await queueEntityCall(
                 'CentralWalletState', 
@@ -419,16 +547,6 @@ class CentralWalletStateManager {
 
             this.currentState = savedState;
             this.notifySubscribers();
-            
-            console.log(`[CentralWalletStateManager] ✅ Sync completed:`, {
-                availableBalance: availableBalance.toFixed(2),
-                balanceInTrades: balanceInTrades.toFixed(2),
-                cryptoAssetsValue: cryptoAssetsValue.toFixed(2),
-                totalEquity: totalEquity.toFixed(2),
-                positionsCount: positions?.length || 0,
-                balancesCount: accountData.balances?.length || 0,
-                usdtBalance: usdtBalance
-            });
 
         } catch (error) {
             console.error('[CentralWalletStateManager] ❌ Sync failed:', error);
@@ -450,9 +568,17 @@ class CentralWalletStateManager {
 
         const stablecoins = ['USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'PAX', 'GUSD', 'USDD'];
         
-        // Filter crypto assets with significant amounts
+        // Fiat currencies that don't have USDT trading pairs on Binance
+        const fiatCurrencies = new Set([
+            'TRY', 'ZAR', 'UAH', 'BRL', 'PLN', 'RON', 'ARS', 'JPY', 'MXN', 'COP', 'CZK',
+            'EUR', 'GBP', 'AUD', 'CAD', 'CHF', 'SEK', 'NOK', 'DKK', 'HUF', 'RUB', 'INR',
+            'KRW', 'CNY', 'HKD', 'SGD', 'TWD', 'THB', 'VND', 'IDR', 'MYR', 'PHP', 'NGN'
+        ]);
+        
+        // Filter crypto assets with significant amounts (exclude stablecoins and fiat)
         const cryptoAssets = balances.filter(balance => {
             if (stablecoins.includes(balance.asset)) return false;
+            if (fiatCurrencies.has(balance.asset)) return false; // Skip fiat currencies
             const total = parseFloat(balance.free || 0) + parseFloat(balance.locked || 0);
             return total > 0.00000001; // Only include significant amounts
         });
@@ -461,7 +587,7 @@ class CentralWalletStateManager {
             return 0;
         }
 
-        // Fetch real-time prices from Binance
+        // Fetch real-time prices from Binance (only for valid crypto assets)
         const symbols = cryptoAssets.map(asset => `${asset.asset}USDT`);
         const pricesResponse = await liveTradingAPI({
             action: 'getSymbolPriceTicker',
@@ -495,10 +621,126 @@ class CentralWalletStateManager {
             }
         });
 
-        console.log(`[CentralWalletStateManager] 💰 Crypto assets value calculated: $${totalValue.toFixed(2)} (${cryptoAssets.length} assets)`);
         return totalValue;
     }
 
+
+    /**
+     * Recalculate total realized P&L directly from database (source of truth)
+     * This should be called whenever trades are added/updated to ensure accuracy
+     * @param {string} tradingMode - Trading mode
+     * @returns {Promise<number>} Total realized P&L
+     */
+    async recalculateRealizedPnlFromDatabase(tradingMode) {
+        try {
+            const { queueEntityCall } = await import('@/components/utils/apiQueue');
+            
+            // Fetch ALL closed trades for this trading mode (only those with exit_timestamp)
+            const allTrades = await queueEntityCall('Trade', 'filter', 
+                { 
+                    trading_mode: tradingMode,
+                    exit_timestamp: { $ne: null } // Only closed trades
+                }, 
+                '-exit_timestamp', 
+                100000 // Large limit to get all trades
+            ).catch(() => []);
+
+            // CRITICAL FIX: Deduplicate trades before calculating P&L to prevent inflated numbers
+            const deduplicatedTrades = [];
+            const seenTrades = new Map();
+            
+            if (allTrades && allTrades.length > 0) {
+                allTrades.forEach(trade => {
+                    if (!trade.exit_timestamp || !trade.entry_timestamp) return;
+                    
+                    // Create unique key based on trade characteristics
+                    const entryPrice = Math.round((Number(trade.entry_price) || 0) * 10000) / 10000;
+                    const exitPrice = Math.round((Number(trade.exit_price) || 0) * 10000) / 10000;
+                    const quantity = Math.round((Number(trade.quantity_crypto) || Number(trade.quantity) || 0) * 1000000) / 1000000;
+                    const entryDate = trade.entry_timestamp ? new Date(trade.entry_timestamp) : null;
+                    const entryDateRounded = entryDate ? new Date(Math.floor(entryDate.getTime() / 1000) * 1000).toISOString() : '';
+                    const symbol = trade.symbol || '';
+                    const strategy = trade.strategy_name || '';
+                    
+                    const uniqueKey = `${symbol}|${strategy}|${entryPrice}|${exitPrice}|${quantity}|${entryDateRounded}`;
+                    
+                    if (!seenTrades.has(uniqueKey)) {
+                        seenTrades.set(uniqueKey, trade);
+                        deduplicatedTrades.push(trade);
+                    } else {
+                        // Keep the trade with the earliest exit_timestamp
+                        const existing = seenTrades.get(uniqueKey);
+                        const existingExit = existing?.exit_timestamp ? new Date(existing.exit_timestamp).getTime() : 0;
+                        const currentExit = trade?.exit_timestamp ? new Date(trade.exit_timestamp).getTime() : 0;
+                        if (currentExit > 0 && (existingExit === 0 || currentExit < existingExit)) {
+                            const index = deduplicatedTrades.indexOf(existing);
+                            if (index >= 0) deduplicatedTrades.splice(index, 1);
+                            seenTrades.set(uniqueKey, trade);
+                            deduplicatedTrades.push(trade);
+                        }
+                    }
+                });
+                
+                if (seenTrades.size < allTrades.length) {
+                }
+            }
+
+            let totalRealizedPnl = 0;
+            let totalTradesCount = 0;
+            let winningTradesCount = 0;
+            let losingTradesCount = 0;
+            let totalGrossProfit = 0;
+            let totalGrossLoss = 0;
+
+            if (deduplicatedTrades && deduplicatedTrades.length > 0) {
+                deduplicatedTrades.forEach(trade => {
+                    if (trade.exit_timestamp) { // Double-check: only closed trades
+                        totalTradesCount++;
+                        const pnl = Number(trade.pnl_usdt || 0);
+                        totalRealizedPnl += pnl;
+
+                        if (pnl > 0) {
+                            winningTradesCount++;
+                            totalGrossProfit += pnl;
+                        } else if (pnl < 0) {
+                            losingTradesCount++;
+                            totalGrossLoss += Math.abs(pnl);
+                        }
+                    }
+                });
+            }
+
+            // Update the central state with recalculated values
+            if (this.currentState) {
+                const updatedState = {
+                    ...this.currentState,
+                    total_realized_pnl: totalRealizedPnl,
+                    total_trades_count: totalTradesCount,
+                    winning_trades_count: winningTradesCount,
+                    losing_trades_count: losingTradesCount,
+                    total_gross_profit: totalGrossProfit,
+                    total_gross_loss: totalGrossLoss,
+                    updated_date: new Date().toISOString()
+                };
+
+                const savedState = await queueEntityCall(
+                    'CentralWalletState', 
+                    'update', 
+                    this.currentState.id, 
+                    updatedState
+                );
+
+                this.currentState = savedState;
+                this.notifySubscribers();
+
+            }
+
+            return totalRealizedPnl;
+        } catch (error) {
+            console.error('[CentralWalletStateManager] ❌ Failed to recalculate realized P&L from database:', error);
+            return this.currentState?.total_realized_pnl || 0;
+        }
+    }
 
     /**
      * Update balance in trades (called when positions change)
@@ -528,7 +770,6 @@ class CentralWalletStateManager {
             this.currentState = savedState;
             this.notifySubscribers();
             
-            console.log(`[CentralWalletStateManager] 💰 Updated balance in trades: ${newBalanceInTrades.toFixed(2)}`);
             
         } catch (error) {
             console.error('[CentralWalletStateManager] ❌ Failed to update balance in trades:', error);
@@ -564,7 +805,6 @@ class CentralWalletStateManager {
             this.currentState = savedState;
             this.notifySubscribers();
             
-            console.log(`[CentralWalletStateManager] 💰 Updated available balance: ${newAvailableBalance.toFixed(2)}`);
             
         } catch (error) {
             console.error('[CentralWalletStateManager] ❌ Failed to update available balance:', error);

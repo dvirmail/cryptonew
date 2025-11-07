@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useWallet } from '@/components/providers/WalletProvider';
 import { useTradingMode } from '@/components/providers/TradingModeProvider';
 import { useLivePrices } from '@/components/utils/useLivePrices';
@@ -284,7 +283,7 @@ const PositionRow = React.memo(({ position, currentPrice, onClosePosition, isClo
     }, [position.entry_price, position.stop_loss_price, position.take_profit_price, position.is_trailing, position.trailing_stop_price, position.trailing_peak_price, position.peak_price, position.trough_price]);
 
     return (
-        <TableRow key={position.position_id}>
+        <TableRow>
             <TableCell>
                 <div className="font-medium">{position.symbol || 'N/A'}</div>
                 <div className="text-xs text-gray-500">{position.strategy_name || 'Unknown Strategy'}</div>
@@ -394,6 +393,7 @@ const WalletPage = () => {
     const [tradingModalConfig, setTradingModalConfig] = useState({ asset: '', initialSide: 'buy', availableAmount: 0 });
     const [closingPositions, setClosingPositions] = useState({});
     const [isSyncing, setIsSyncing] = useState(false);
+    const [fallbackPrices, setFallbackPrices] = useState({}); // Store prices fetched on-demand
     
     // NEW: State for asset balances pagination and filtering
     const [hideZeroBalances, setHideZeroBalances] = useState(true);
@@ -412,22 +412,62 @@ const WalletPage = () => {
     const { toast } = useToast();
     const POSITIONS_PER_PAGE = 10;
 
-    const activePositions = useMemo(() => {
+    // Use ref to store forceRefresh so event listener doesn't get recreated
+    const forceRefreshRef = useRef(forceRefresh);
+    useEffect(() => {
+        forceRefreshRef.current = forceRefresh;
+    }, [forceRefresh]);
+
+    // Listen for position data refresh events
+    useEffect(() => {
+        const handlePositionRefresh = (event) => {
+            console.log('[Wallet] 🔄 Received positionDataRefresh event, refreshing positions...');
+            if (forceRefreshRef.current) {
+                // Small delay to ensure DB transaction is fully committed and position is queryable
+                setTimeout(() => {
+                    forceRefreshRef.current().catch(error => {
+                        console.error('[Wallet] ❌ Error calling forceRefresh:', error);
+                    });
+                }, 300); // 300ms delay to ensure DB transaction is committed and position is queryable
+            } else {
+                console.warn('[Wallet] ⚠️ forceRefresh function not available');
+            }
+        };
         
+        window.addEventListener('positionDataRefresh', handlePositionRefresh);
+        
+        return () => {
+            window.removeEventListener('positionDataRefresh', handlePositionRefresh);
+        };
+    }, []); // Empty dependency array - listener stays mounted
+
+    const prevPositionCountRef = useRef(0);
+    const activePositions = useMemo(() => {
         const validPositions = (positions || []).filter(pos => {
             const isValid = pos.status === 'open' || pos.status === 'trailing';
-            // TEMPORARILY DISABLE STRICT FILTERING TO DEBUG
             const hasEssentialData = true; // pos.position_id && pos.symbol && pos.strategy_name;
-            
-            
-            if (!hasEssentialData) {
-            }
-            
             return isValid && hasEssentialData;
         });
         
+        // Deduplicate positions by using a Map with unique key (id or position_id)
+        const uniquePositions = new Map();
+        validPositions.forEach(pos => {
+            // Use database id as primary key, fallback to position_id
+            const uniqueKey = pos.id || pos.position_id;
+            if (uniqueKey && !uniquePositions.has(uniqueKey)) {
+                uniquePositions.set(uniqueKey, pos);
+            }
+        });
         
-        return validPositions;
+        const deduplicatedPositions = Array.from(uniquePositions.values());
+        
+        // Only log when position count changes
+        if (deduplicatedPositions.length !== prevPositionCountRef.current) {
+            console.log(`[Wallet] Positions: ${prevPositionCountRef.current} → ${deduplicatedPositions.length}`);
+            prevPositionCountRef.current = deduplicatedPositions.length;
+        }
+        
+        return deduplicatedPositions;
     }, [positions]);
 
     // Cleanup corrupted positions automatically
@@ -653,6 +693,51 @@ const WalletPage = () => {
     }, [balances, activePositions]);
 
     const { prices: currentPrices } = useLivePrices(symbolsToWatch);
+
+    // Fetch missing prices for positions (especially KSM and AAVE)
+    useEffect(() => {
+        if (!scannerInitialized || !activePositions.length) return;
+        
+        const fetchMissingPrices = async () => {
+            const missingPrices = {};
+            const scannerService = getAutoScannerService();
+            
+            for (const pos of activePositions) {
+                const symbolNoSlash = (pos.symbol || '').replace('/', '');
+                // Skip if we already have price in currentPrices or fallbackPrices
+                if (currentPrices[symbolNoSlash] || fallbackPrices[symbolNoSlash]) continue;
+                
+                let price = null;
+                
+                // First try scanner's currentPrices
+                if (scannerService?.currentPrices?.[symbolNoSlash]) {
+                    price = scannerService.currentPrices[symbolNoSlash];
+                } 
+                // Then try priceManagerService
+                else if (scannerService?.priceManagerService) {
+                    try {
+                        price = await scannerService.priceManagerService.getCurrentPrice(pos.symbol);
+                    } catch (err) {
+                        // Silently fail - will retry on next cycle
+                    }
+                }
+                
+                if (price && price > 0) {
+                    missingPrices[symbolNoSlash] = price;
+                }
+            }
+            
+            // Update fallback prices if we found any
+            if (Object.keys(missingPrices).length > 0) {
+                setFallbackPrices(prev => ({ ...prev, ...missingPrices }));
+                console.log(`[Wallet] ✅ Fetched ${Object.keys(missingPrices).length} missing prices:`, Object.keys(missingPrices));
+            }
+        };
+        
+        // Debounce: only fetch every 1 second to avoid spam
+        const timeoutId = setTimeout(fetchMissingPrices, 1000);
+        return () => clearTimeout(timeoutId);
+    }, [activePositions, currentPrices, fallbackPrices, scannerInitialized]);
 
     const sortedBalances = useMemo(() => {
         if (!balances) return [];
@@ -1003,19 +1088,6 @@ const WalletPage = () => {
                 </div>
 
                 <div className="mb-6">
-                    {(() => {
-                        console.log('[Wallet] 🔍 Passing data to DailyPerformanceChart:', {
-                            recentTradesLength: recentTrades?.length || 0,
-                            chartTimeframe,
-                            dailyPerformanceHistoryLength: dailyPerformanceHistory?.length || 0,
-                            hourlyPerformanceHistoryLength: hourlyPerformanceHistory?.length || 0,
-                            walletSummary: walletSummary ? 'present' : 'null',
-                            dailyPerformanceHistorySample: dailyPerformanceHistory?.slice(0, 2),
-                            hourlyPerformanceHistorySample: hourlyPerformanceHistory?.slice(0, 2),
-                            timestamp: new Date().toISOString()
-                        });
-                        return null;
-                    })()}
                     <DailyPerformanceChart
                         trades={recentTrades}
                         timeframe={chartTimeframe}
@@ -1113,16 +1185,22 @@ const WalletPage = () => {
                                 </TableHeader>
                                 <TableBody>
                                     {paginatedPositions.length > 0 ? (
-                                        paginatedPositions.map((pos, index) => (
-                                            <PositionRow
-                                                key={pos.position_id || pos.id || `position-${index}`}
-                                                position={pos}
-                                                currentPrice={currentPrices[(pos.symbol || '').replace('/', '')]}
-                                                onClosePosition={handleClosePosition}
-                                                isClosing={!!closingPositions[pos.position_id]}
-                                                scannerInitialized={scannerInitialized}
-                                            />
-                                        ))
+                                        paginatedPositions.map((pos, index) => {
+                                            const symbolNoSlash = (pos.symbol || '').replace('/', '');
+                                            // Use currentPrices first, then fallbackPrices
+                                            const currentPrice = currentPrices[symbolNoSlash] || fallbackPrices[symbolNoSlash];
+                                            
+                                            return (
+                                                <PositionRow
+                                                    key={pos.id || pos.position_id || `position-${index}`}
+                                                    position={pos}
+                                                    currentPrice={currentPrice}
+                                                    onClosePosition={handleClosePosition}
+                                                    isClosing={!!closingPositions[pos.position_id]}
+                                                    scannerInitialized={scannerInitialized}
+                                                />
+                                            );
+                                        })
                                     ) : (
                                         <TableRow>
                                             <TableCell colSpan="13" className="text-center h-24">

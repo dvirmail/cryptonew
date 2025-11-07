@@ -83,17 +83,86 @@ const calculatePerformance = (matches) => {
   return { successfulMatches, failedMatches, totalGrossProfit, totalGrossLoss, successfulCount, failCount };
 };
 
+// Module-level variable to track regime performance logging (avoids flooding console)
+let regimePerformanceLogCount = {};
+
+// Calculate exit reason breakdown from backtest matches
+function calculateBacktestExitReasonBreakdown(matches, takeProfitPercentage, stopLossPercentage) {
+  const breakdown = {};
+  const totalMatches = matches.length;
+  
+  if (totalMatches === 0) return null;
+  
+  matches.forEach(match => {
+    // Infer exit reason from match data
+    let exitReason = 'unknown';
+    
+    if (match.successful) {
+      // Successful trade - likely take profit
+      if (match.priceMove >= (takeProfitPercentage * 0.9)) { // Within 90% of TP
+        exitReason = 'take_profit';
+      } else {
+        exitReason = 'timeout'; // Hit TP but not at full percentage (timeout)
+      }
+    } else {
+      // Failed trade - likely stop loss
+      if (Math.abs(match.priceMove) >= (stopLossPercentage * 0.9)) { // Within 90% of SL
+        exitReason = 'stop_loss';
+      } else {
+        exitReason = 'timeout'; // Hit SL but not at full percentage (timeout)
+      }
+    }
+    
+    if (!breakdown[exitReason]) {
+      breakdown[exitReason] = {
+        count: 0,
+        percentage: 0,
+        avg_pnl: 0,
+        total_pnl: 0
+      };
+    }
+    
+    breakdown[exitReason].count++;
+    breakdown[exitReason].total_pnl += match.priceMove || 0;
+  });
+  
+  // Calculate percentages and averages
+  Object.keys(breakdown).forEach(reason => {
+    breakdown[reason].percentage = (breakdown[reason].count / totalMatches) * 100;
+    breakdown[reason].avg_pnl = breakdown[reason].total_pnl / breakdown[reason].count;
+  });
+  
+  return breakdown;
+}
 
 export const processMatches = (rawMatches, config, classifySignalType, historicalData = null) => {
+  console.log(`[PROCESS_SUMMARY] 🔍 Processing ${rawMatches.length} raw matches with minOccurrences=${config.minOccurrences || 2}`);
+  
+  // Calculate average loss per losing trade from ALL matches for zero-loss PF calculation
+  const allLosingTrades = rawMatches.filter(m => !m.successful && m.priceMove < 0);
+  const totalLossFromAllTrades = allLosingTrades.reduce((sum, m) => sum + Math.abs(m.priceMove), 0);
+  const avgLossPerLosingTrade = allLosingTrades.length > 0 
+    ? totalLossFromAllTrades / allLosingTrades.length 
+    : 1.0; // Fallback to 1% if no losing trades exist
+  
   const combinations = new Map();
   const { minOccurrences = 2, timeWindow = '4h', timeframe = '4h' } = config;
+  
+  // DEBUG: Track strength distribution (minimal logging)
+  const strengthStats = { total: 0, min: Infinity, max: -Infinity };
 
   // Calculate time window in candles for swing low identification (Note: This is no longer used for median drawdown directly)
   const timeWindowMinutes = getTimeframeInMinutes(timeWindow);
   const candleDurationMinutes = getTimeframeInMinutes(timeframe);
   const timeWindowInCandles = candleDurationMinutes > 0 ? Math.floor(timeWindowMinutes / candleDurationMinutes) : 20; // Default to 20 candles if calculation fails
 
-  rawMatches.forEach(match => {
+  rawMatches.forEach((match) => {
+    // DEBUG: Track strength distribution (no per-match logging)
+    const matchStrength = match.combinedStrength || 0;
+    strengthStats.total++;
+    strengthStats.min = Math.min(strengthStats.min, matchStrength);
+    strengthStats.max = Math.max(strengthStats.max, matchStrength);
+    
     // Generate combination name from signals
     const combinationName = match.signals.map(s => s.value || s.type).sort().join(' + ');
     // Include coin in the key to ensure combinations are grouped per coin
@@ -106,7 +175,8 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
           ...s,
           isEvent: classifySignalType(s)
         })),
-        matches: [],
+        matches: [], // ALL matches for this combination (for profit factor calculation)
+        filteredMatches: [], // Only matches that passed minCombinedStrength (for filtering)
         combinedStrength: 0,
         coin: match.coin, // Preserve the coin information from the match
         combinationName: combinationName, // Store the original combination name
@@ -121,7 +191,10 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
 
     const combination = combinations.get(combinationKey);
 
-    // Store the full match object
+    // Store ALL matches for profit factor calculation (regardless of minCombinedStrength)
+    // NOTE: Currently, rawMatches are already filtered by minCombinedStrength in BacktestingEngine
+    // This means we're only getting filtered matches. To use ALL occurrences, we'd need to
+    // modify BacktestingEngine to collect all matches, not just filtered ones.
     combination.matches.push(match);
     combination.combinedStrength += match.combinedStrength || 0;
 
@@ -202,6 +275,18 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
 
       const regimeSuccessRate = regimeTotalOccurrences > 0 ? (regimeSuccessfulCount / regimeTotalOccurrences) * 100 : 0;
       
+      // Log regime performance (sampled: first 3 strategies per regime, then every 100th)
+      if (!regimePerformanceLogCount[validRegime.regime]) {
+        regimePerformanceLogCount[validRegime.regime] = 0;
+      }
+      const logCount = regimePerformanceLogCount[validRegime.regime]++;
+      const shouldLog = logCount < 3 || logCount % 100 === 0;
+      
+      if (shouldLog) {
+        const profitFactor = regimeTotalGrossLoss > 0 ? (regimeTotalGrossProfit / regimeTotalGrossLoss).toFixed(2) : 'N/A';
+        //console.log(`[REGIME_PERFORMANCE] [BACKTEST] Regime: ${validRegime.regime}, Occurrences: ${regimeTotalOccurrences}, Success: ${(regimeSuccessRate).toFixed(1)}% (${regimeSuccessfulCount}/${regimeTotalOccurrences}), Profit: ${regimeTotalGrossProfit.toFixed(2)}%, Loss: ${regimeTotalGrossLoss.toFixed(2)}%, PF: ${profitFactor}, Strategy: ${regimeSpecificName}`);
+      }
+      
       // INVESTIGATION: Analyze market regime distribution
       if (regimeSuccessRate >= 100.0 && regimeTotalOccurrences > 5) {
         
@@ -239,21 +324,25 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
       const regimeGrossProfit = regimeTotalGrossProfit;
       const regimeGrossLoss = regimeTotalGrossLoss;
 
-      // FIXED: Realistic profit factor calculation without artificial caps
+      // FIXED: Use REAL data for profit factor calculation
+      // For zero-loss strategies, use average loss from ALL losing trades in the backtest
       let regimeProfitFactor;
       if (regimeGrossLoss === 0) {
-        // For zero loss strategies, use a more realistic approach
+        // For zero loss strategies, use average loss from all losing trades in the backtest
         if (regimeGrossProfit > 0 && regimeSuccessfulCount === regimeTotalOccurrences) {
-          // Use minimum realistic loss (0.5%) to calculate PF
-          const minRealisticLoss = 0.5; // 0.5% minimum realistic loss
-          regimeProfitFactor = Math.min(regimeGrossProfit / minRealisticLoss, 20.0); // Cap at 20x for realism
-          
+          // Use average loss from all losing trades (real data, not fixed value)
+          const calculatedPF = regimeGrossProfit / (avgLossPerLosingTrade * regimeTotalOccurrences);
+          regimeProfitFactor = calculatedPF; // No cap - show actual calculated value
+          if (calculatedPF > 20.0) {
+            // Log when PF is very high
+            console.log(`[PF_ZERO_LOSS] Regime "${validRegime.regime}" strategy | PF: ${calculatedPF.toFixed(2)} | ${regimeTotalOccurrences} trades (all successful) | Using avg loss: ${avgLossPerLosingTrade.toFixed(2)}% from ${allLosingTrades.length} losing trades`);
+          }
         } else {
           regimeProfitFactor = 1.0;
         }
     } else {
-        // FIXED: Remove artificial cap and use realistic calculation
-        regimeProfitFactor = Math.min(regimeGrossProfit / regimeGrossLoss, 20.0); // Cap at 20x for realism
+        // Actual PF for strategies with losses
+        regimeProfitFactor = regimeGrossProfit / regimeGrossLoss;
         
         // INVESTIGATION: Track high profit factor calculations (reduced logging)
         if (regimeProfitFactor >= 15.0) {
@@ -264,6 +353,14 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
       // Calculate regime-specific metrics
       const regimeAverageGainOnSuccess = regimeSuccessfulCount > 0 ? regimeSuccessfulMatches.reduce((sum, m) => sum + (m.priceMove || 0), 0) / regimeSuccessfulCount : 0;
       const regimeWinLossRatio = regimeFailCount > 0 ? regimeSuccessfulCount / regimeFailCount : regimeSuccessfulCount;
+      
+      // NEW: Calculate win/loss analysis
+      const regimeAvgWinPercent = regimeSuccessfulMatches.length > 0 
+        ? regimeSuccessfulMatches.reduce((sum, m) => sum + (m.priceMove || 0), 0) / regimeSuccessfulMatches.length 
+        : null;
+      const regimeAvgLossPercent = regimeFailedMatches.length > 0 
+        ? Math.abs(regimeFailedMatches.reduce((sum, m) => sum + (m.priceMove || 0), 0) / regimeFailedMatches.length)
+        : null;
 
       // Calculate regime-specific drawdown
       const regimeDrawdownPercentages = regimeMatches
@@ -271,6 +368,7 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
         .map(matchData => Math.abs(matchData.maxDrawdown));
       
       const regimeMedianDrawdownPercent = regimeDrawdownPercentages.length > 0 ? calculateMedian(regimeDrawdownPercentages) : null;
+      const regimeMaxDrawdownPercent = regimeDrawdownPercentages.length > 0 ? Math.max(...regimeDrawdownPercentages) : null;
 
       // Calculate regime-specific timing statistics
       const regimeTimeToPeakValues = regimeMatches
@@ -303,6 +401,98 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
 
       const regimeAvgWinDurationMinutes = regimeAvgSuccessfulTimeToPeak > 0 ? regimeAvgSuccessfulTimeToPeak / (60 * 1000) : 0;
 
+      // NEW: Calculate timing statistics
+      const regimeExitTimes = regimeMatches
+        .filter(m => m.exitTime && typeof m.exitTime === 'number' && m.exitTime > 0)
+        .map(m => m.exitTime / (60 * 1000)); // Convert to minutes
+      
+      const regimeMedianExitTimeMinutes = regimeExitTimes.length > 0 ? calculateMedian(regimeExitTimes) : null;
+      
+      // Calculate exit time variance (standard deviation)
+      let regimeExitTimeVarianceMinutes = null;
+      if (regimeExitTimes.length > 1) {
+        const avgExitTime = regimeExitTimes.reduce((sum, t) => sum + t, 0) / regimeExitTimes.length;
+        const variance = regimeExitTimes.reduce((sum, t) => sum + Math.pow(t - avgExitTime, 2), 0) / regimeExitTimes.length;
+        regimeExitTimeVarianceMinutes = Math.sqrt(variance);
+      }
+      
+      const regimeAvgTimeToPeakMinutes = regimeTimeToPeakValues.length > 0 
+        ? regimeTimeToPeakValues.reduce((sum, t) => sum + t, 0) / regimeTimeToPeakValues.length 
+        : null;
+
+      // NEW: Calculate consecutive wins/losses
+      let regimeMaxConsecutiveWins = 0;
+      let regimeMaxConsecutiveLosses = 0;
+      let currentStreak = 0;
+      let currentType = null;
+      
+      // Sort matches by time to analyze streaks chronologically
+      const sortedRegimeMatches = [...regimeMatches].sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));
+      
+      for (const match of sortedRegimeMatches) {
+        const isWin = match.successful;
+        if (currentType === null) {
+          currentType = isWin ? 'win' : 'loss';
+          currentStreak = 1;
+        } else if ((currentType === 'win' && isWin) || (currentType === 'loss' && !isWin)) {
+          currentStreak++;
+        } else {
+          // Streak broken, update max
+          if (currentType === 'win') {
+            regimeMaxConsecutiveWins = Math.max(regimeMaxConsecutiveWins, currentStreak);
+          } else {
+            regimeMaxConsecutiveLosses = Math.max(regimeMaxConsecutiveLosses, currentStreak);
+          }
+          currentType = isWin ? 'win' : 'loss';
+          currentStreak = 1;
+        }
+      }
+      
+      // Final streak check
+      if (currentType === 'win') {
+        regimeMaxConsecutiveWins = Math.max(regimeMaxConsecutiveWins, currentStreak);
+      } else if (currentType === 'loss') {
+        regimeMaxConsecutiveLosses = Math.max(regimeMaxConsecutiveLosses, currentStreak);
+      }
+      
+      // NEW: Calculate average trades between wins
+      let regimeAvgTradesBetweenWins = null;
+      if (regimeSuccessfulMatches.length > 0 && regimeMatches.length > regimeSuccessfulMatches.length) {
+        const winIndices = sortedRegimeMatches
+          .map((m, idx) => m.successful ? idx : -1)
+          .filter(idx => idx >= 0);
+        
+        if (winIndices.length > 1) {
+          const gaps = [];
+          for (let i = 1; i < winIndices.length; i++) {
+            gaps.push(winIndices[i] - winIndices[i - 1] - 1);
+          }
+          regimeAvgTradesBetweenWins = gaps.length > 0 ? gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length : null;
+        }
+      }
+      
+      // NEW: Build regime performance object (detailed metrics per regime)
+      // Calculate regime counts from comboData.matches
+      const allRegimesInCombo = [...new Set(comboData.matches.map(m => m.marketRegime || 'unknown'))];
+      const regimePerformanceDetailed = {};
+      allRegimesInCombo.forEach(regime => {
+        const regimeMatchesForPerf = comboData.matches.filter(m => (m.marketRegime || 'unknown') === regime);
+        const regimeSuccessfulForPerf = regimeMatchesForPerf.filter(m => m.successful);
+        const regimeGrossProfitForPerf = regimeSuccessfulForPerf.reduce((sum, m) => sum + (m.priceMove || 0), 0);
+        const regimeGrossLossForPerf = Math.abs(regimeMatchesForPerf.filter(m => !m.successful).reduce((sum, m) => sum + (m.priceMove || 0), 0));
+        const regimePFForPerf = regimeGrossLossForPerf > 0 ? Math.min(regimeGrossProfitForPerf / regimeGrossLossForPerf, 20.0) : 
+          (regimeGrossProfitForPerf > 0 ? Math.min(regimeGrossProfitForPerf / 0.5, 20.0) : 1.0);
+        
+        regimePerformanceDetailed[regime] = {
+          success_rate: regimeMatchesForPerf.length > 0 ? (regimeSuccessfulForPerf.length / regimeMatchesForPerf.length) * 100 : 0,
+          occurrences: regimeMatchesForPerf.length,
+          avg_price_move: regimeMatchesForPerf.length > 0 ? regimeMatchesForPerf.reduce((sum, m) => sum + (m.priceMove || 0), 0) / regimeMatchesForPerf.length : 0,
+          profit_factor: regimePFForPerf,
+          gross_profit: regimeGrossProfitForPerf,
+          gross_loss: regimeGrossLossForPerf
+        };
+      });
+
       // Calculate regime-specific profitability score
       const regimeProfitabilityScore = regimeSuccessRate * 0.4 + Math.min(regimeNetAveragePriceMove * 10, 100) * 0.3 + Math.min(regimeProfitFactor * 10, 100) * 0.3;
 
@@ -313,6 +503,9 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
       
       const regimeMedianLowestLowDuringBacktest = regimeHistoricalDrawdownPercentages.length > 0 ? calculateMedian(regimeHistoricalDrawdownPercentages) : null;
       
+
+      // Calculate if strategy is event-driven based on signals
+      const isEventDrivenStrategy = classifyStrategyAsEventDriven(comboData.signals);
 
       // Create the regime-specific strategy entry
       const regimeStrategy = {
@@ -325,6 +518,7 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
         successRate: regimeSuccessRate,
         netAveragePriceMove: regimeNetAveragePriceMove,
         averageCombinedStrength: regimeAverageCombinedStrength,
+        combinedStrength: regimeAverageCombinedStrength, // Use average for consistency - this is what gets saved to DB
         grossProfit: regimeGrossProfit,
         grossLoss: regimeGrossLoss,
         profitFactor: regimeProfitFactor,
@@ -341,8 +535,10 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
         avgWinDurationMinutes: regimeAvgWinDurationMinutes,
         profitabilityScore: regimeProfitabilityScore,
         marketRegime: validRegime.regime,
+        dominantMarketRegime: validRegime.regime, // ✅ FIX: Also set dominantMarketRegime for consistency
         coin: comboData.coin, // Preserve the coin information from the combination data
         medianLowestLowDuringBacktest: regimeMedianLowestLowDuringBacktest, // Add historical support analysis
+        isEventDrivenStrategy: isEventDrivenStrategy, // Classify strategy as event-based or state-based
         marketRegimePerformance: {
           [validRegime.regime]: {
             occurrences: validRegime.occurrences,
@@ -350,7 +546,25 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
             grossProfit: validRegime.grossProfit,
             grossLoss: validRegime.grossLoss
           }
-        }
+        },
+        // NEW: Add all analytics fields
+        maxDrawdownPercent: regimeMaxDrawdownPercent,
+        medianDrawdownPercent: regimeMedianDrawdownPercent,
+        avgWinPercent: regimeAvgWinPercent,
+        avgLossPercent: regimeAvgLossPercent,
+        medianExitTimeMinutes: regimeMedianExitTimeMinutes,
+        exitTimeVarianceMinutes: regimeExitTimeVarianceMinutes,
+        avgTimeToPeakMinutes: regimeAvgTimeToPeakMinutes,
+        maxConsecutiveWins: regimeMaxConsecutiveWins,
+        maxConsecutiveLosses: regimeMaxConsecutiveLosses,
+        avgTradesBetweenWins: regimeAvgTradesBetweenWins,
+        regimePerformance: regimePerformanceDetailed,
+        // NEW: Exit reason breakdown (use default TP/SL if not in config)
+        backtestExitReasonBreakdown: calculateBacktestExitReasonBreakdown(
+          regimeMatches,
+          config?.takeProfitPercentage || 5.0,
+          config?.stopLossPercentage || 2.0
+        )
       };
 
       processedCombinations.push(regimeStrategy);
@@ -359,6 +573,10 @@ export const processMatches = (rawMatches, config, classifySignalType, historica
 
   // Sort by profitability score for better ranking
   processedCombinations.sort((a, b) => (b.profitabilityScore || 0) - (a.profitabilityScore || 0));
+  
+  // DEBUG: Log summary statistics only
+  console.log(`[PROCESS_SUMMARY] 📊 Strength Range: Min=${strengthStats.min.toFixed(1)}, Max=${strengthStats.max.toFixed(1)}, Total matches=${strengthStats.total}`);
+  console.log(`[PROCESS_SUMMARY] 📊 Processed ${processedCombinations.length} final strategies from ${combinations.size} unique combinations`);
 
   // Smart logging with summary statistics
   // Processing summary (reduced logging)
@@ -489,7 +707,22 @@ const calculateDominantRegime = (regimes) => {
 };
 
 export const filterMatchesByBestCombination = (rawMatches, processedCombos) => {
-  const statsMap = new Map(processedCombos.map(c => [c.combinationName, c]));
+  // Create statsMap with both full names (with regime suffix) and base names (without suffix)
+  // This allows matching regardless of whether the combination name has a regime suffix
+  const statsMap = new Map();
+  processedCombos.forEach(c => {
+    // Store by full name (e.g., "Signal1 + Signal2 (UPTREND)")
+    statsMap.set(c.combinationName, c);
+    // Also store by base name (e.g., "Signal1 + Signal2") for matching
+    const baseName = c.combinationName.replace(/\s+\([^)]+\)$/, '');
+    if (baseName !== c.combinationName) {
+      // If base name exists and is different, store it too (keep the best one if multiple regimes exist)
+      if (!statsMap.has(baseName) || (c.profitabilityScore || 0) > (statsMap.get(baseName).profitabilityScore || 0)) {
+        statsMap.set(baseName, c);
+      }
+    }
+  });
+  
   const matchesByTime = new Map();
 
   const FILTER_BATCH_SIZE = 2000;
@@ -515,20 +748,46 @@ export const filterMatchesByBestCombination = (rawMatches, processedCombos) => {
 
   const bestMatches = [];
   let processedGroups = 0;
+  let matchesWithStats = 0;
+  let matchesWithoutStats = 0;
 
   for (const group of matchesByTime.values()) {
     processedGroups++;
 
     if (group.length === 1) {
-      bestMatches.push(group[0]);
+      // Check if this single match has stats
+      const stats = statsMap.get(group[0].combinationName) || 
+                    statsMap.get(group[0].combinationName.replace(/\s+\([^)]+\)$/, ''));
+      if (stats) {
+        matchesWithStats++;
+        bestMatches.push(group[0]);
+      } else {
+        matchesWithoutStats++;
+        // Don't include matches without stats - they can't be properly evaluated
+      }
       continue;
     }
 
     group.sort((a, b) => {
-      const statsA = statsMap.get(a.combinationName);
-      const statsB = statsMap.get(b.combinationName);
+      // Look up stats - try exact match first, then base name
+      let statsA = statsMap.get(a.combinationName);
+      if (!statsA) {
+        // Try base name if exact match failed
+        const baseNameA = a.combinationName.replace(/\s+\([^)]+\)$/, '');
+        statsA = statsMap.get(baseNameA);
+      }
+      
+      let statsB = statsMap.get(b.combinationName);
+      if (!statsB) {
+        // Try base name if exact match failed
+        const baseNameB = b.combinationName.replace(/\s+\([^)]+\)$/, '');
+        statsB = statsMap.get(baseNameB);
+      }
 
-      if (!statsA || !statsB) return 0;
+      // If either match has no stats, prioritize the one with stats
+      if (!statsA && !statsB) return 0; // Both missing stats, treat as equal
+      if (!statsA) return 1; // A has no stats, B wins
+      if (!statsB) return -1; // B has no stats, A wins
 
       // Handle Infinity for profitFactor during comparison
       const pfA = statsA.profitFactor === Infinity ? Number.MAX_VALUE : statsA.profitFactor;
@@ -543,8 +802,24 @@ export const filterMatchesByBestCombination = (rawMatches, processedCombos) => {
       return statsB.successRate - statsA.successRate;
     });
 
-    bestMatches.push(group[0]);
+    // Only include the best match if it has valid stats
+    const bestMatch = group[0];
+    const bestStats = statsMap.get(bestMatch.combinationName) || 
+                      statsMap.get(bestMatch.combinationName.replace(/\s+\([^)]+\)$/, ''));
+    if (bestStats) {
+      matchesWithStats++;
+      bestMatches.push(bestMatch);
+    } else {
+      matchesWithoutStats++;
+      // Don't include matches without stats - they can't be properly evaluated
+    }
   }
+
+  console.log('[FILTER_BEST_DEBUG] 📊 filterMatchesByBestCombination summary:');
+  console.log('[FILTER_BEST_DEBUG]   - Total time groups processed:', processedGroups);
+  console.log('[FILTER_BEST_DEBUG]   - Matches with valid stats:', matchesWithStats);
+  console.log('[FILTER_BEST_DEBUG]   - Matches without stats (excluded):', matchesWithoutStats);
+  console.log('[FILTER_BEST_DEBUG]   - Final best matches:', bestMatches.length);
 
   matchesByTime.clear();
   statsMap.clear();
@@ -751,6 +1026,32 @@ const defaultClassifySignalType = (signal) => {
 // Keep the old function for backward compatibility
 export const classifySignalType = defaultClassifySignalType;
 
+/**
+ * Classifies a strategy/combination as event-driven or state-based based on its signals
+ * A strategy is event-driven if more than 50% of its signals are event-based
+ * @param {Array} signals - Array of signal objects with optional isEvent property
+ * @returns {boolean} True if strategy is event-driven, false if state-based
+ */
+export const classifyStrategyAsEventDriven = (signals) => {
+  if (!signals || signals.length === 0) {
+    return false; // Default to state-based if no signals
+  }
+
+  // Count event-based signals
+  // Use isEvent property if available, otherwise classify the signal
+  const eventSignalsCount = signals.filter(signal => {
+    // If signal already has isEvent property, use it
+    if (signal.isEvent !== undefined) {
+      return signal.isEvent === true;
+    }
+    // Otherwise, classify it
+    return classifySignalType(signal);
+  }).length;
+
+  // Strategy is event-driven if more than 50% of signals are event-based
+  return eventSignalsCount > signals.length / 2;
+};
+
 
 const groupMatchesBySignals = (matches) => {
   const grouped = {};
@@ -775,24 +1076,63 @@ export const processBacktestResults = (matches, onLog) => {
     };
   }
 
+  // Calculate average loss per losing trade from ALL matches in the backtest
+  // This provides a realistic baseline for zero-loss strategies using actual market data
+  const allLosingTrades = matches.filter(m => !m.successful && m.priceMove < 0);
+  const totalLossFromAllTrades = allLosingTrades.reduce((sum, m) => sum + Math.abs(m.priceMove), 0);
+  const avgLossPerLosingTrade = allLosingTrades.length > 0 
+    ? totalLossFromAllTrades / allLosingTrades.length 
+    : 1.0; // Fallback to 1% if no losing trades exist (shouldn't happen in real backtest)
+  
+  console.log(`[PF_CALC] 📊 Using real data for zero-loss PF calculation:`);
+  console.log(`[PF_CALC]   - Total losing trades in backtest: ${allLosingTrades.length}`);
+  console.log(`[PF_CALC]   - Average loss per losing trade: ${avgLossPerLosingTrade.toFixed(2)}%`);
+  console.log(`[PF_CALC]   - This will be used for zero-loss strategies instead of fixed value`);
+
   const grouped = groupMatchesBySignals(matches);
 
   const processedCombinations = Object.entries(grouped).map(([key, matchGroup]) => {
     const firstMatch = matchGroup[0];
+    
+    // ⚠️ IMPORTANT: Profit factor calculation uses ONLY matches that passed minCombinedStrength filter
+    // 
+    // Current behavior:
+    // - BacktestingEngine filters matches by minCombinedStrength BEFORE adding to allMatches (line 205)
+    // - Only filtered matches are passed to processMatches as rawMatches
+    // - Profit factor is calculated using matchGroup, which only contains filtered matches
+    //
+    // To use ALL occurrences (including those below minCombinedStrength):
+    // 1. Modify BacktestingEngine to collect ALL matches (not just filtered ones)
+    // 2. Pass both filtered and unfiltered matches to processMatches
+    // 3. Use unfiltered matches for profit factor calculation, filtered for display/filtering
+    
     const successfulCount = matchGroup.filter(m => m.successful).length;
     const successRate = (successfulCount / matchGroup.length) * 100;
     const avgPriceMove = matchGroup.reduce((sum, m) => sum + m.priceMove, 0) / matchGroup.length;
 
+    // Profit factor uses ALL matches in matchGroup (currently only filtered matches)
     const grossProfit = matchGroup.filter(m => m.successful).reduce((sum, m) => sum + m.priceMove, 0);
     const grossLoss = Math.abs(matchGroup.filter(m => !m.successful).reduce((sum, m) => sum + m.priceMove, 0));
-    // FIXED: More realistic profit factor calculation with caps
+    
+    // FIXED: Use REAL data for profit factor calculation
+    // For zero-loss strategies, use average loss from ALL losing trades in the backtest
+    // This is more accurate than a fixed value and reflects actual market conditions
     let profitFactor;
     if (grossLoss > 0) {
-      profitFactor = Math.min(grossProfit / grossLoss, 20.0); // Cap at 20x for realism
+      profitFactor = grossProfit / grossLoss; // Actual PF for strategies with losses
     } else if (grossProfit > 0) {
-      // Use minimum realistic loss (0.5%) to calculate PF for zero loss strategies
-      const minRealisticLoss = 0.5; // 0.5% minimum realistic loss
-      profitFactor = Math.min(grossProfit / minRealisticLoss, 20.0); // Cap at 20x for realism
+      // For zero-loss strategies, use average loss from all losing trades in the backtest
+      // This provides a realistic baseline using actual market data
+      const avgProfitPerTrade = grossProfit / matchGroup.length;
+      // Calculate PF as if there was one loss trade with the average loss from the backtest
+      // Formula: PF = grossProfit / (avgLossPerLosingTrade * number_of_trades)
+      // This simulates what the PF would be if one trade had the average loss
+      profitFactor = grossProfit / (avgLossPerLosingTrade * matchGroup.length);
+      
+      // Log when PF is very high (but don't cap it - show actual calculated value)
+      if (profitFactor > 20.0) {
+        console.log(`[PF_ZERO_LOSS] Strategy "${firstMatch.signals.map(s => s.type).join(' + ')}" | PF: ${profitFactor.toFixed(2)} | ${matchGroup.length} trades (all successful) | Avg profit: ${avgProfitPerTrade.toFixed(2)}% | Using avg loss: ${avgLossPerLosingTrade.toFixed(2)}% from ${allLosingTrades.length} losing trades`);
+      }
     } else {
       profitFactor = 1.0;
     }
@@ -824,13 +1164,157 @@ export const processBacktestResults = (matches, onLog) => {
     
     const medianLowestLowDuringBacktest = drawdownPercentages.length > 0 ? calculateMedian(drawdownPercentages) : null;
     
+    // NEW: Calculate max drawdown (maximum drawdown across all occurrences)
+    const maxDrawdownPercent = drawdownPercentages.length > 0 ? Math.max(...drawdownPercentages) : null;
+    
+    // NEW: Calculate median drawdown
+    const medianDrawdownPercent = drawdownPercentages.length > 0 ? calculateMedian(drawdownPercentages) : null;
+    
+    // NEW: Calculate win/loss analysis
+    const successfulMatches = matchGroup.filter(m => m.successful);
+    const failedMatches = matchGroup.filter(m => !m.successful);
+    const avgWinPercent = successfulMatches.length > 0 
+      ? successfulMatches.reduce((sum, m) => sum + (m.priceMove || 0), 0) / successfulMatches.length 
+      : null;
+    const avgLossPercent = failedMatches.length > 0 
+      ? Math.abs(failedMatches.reduce((sum, m) => sum + (m.priceMove || 0), 0) / failedMatches.length)
+      : null;
+    const winLossRatio = avgLossPercent > 0 && avgWinPercent > 0 ? avgWinPercent / avgLossPercent : null;
+    
+    // NEW: Calculate timing statistics
+    const exitTimes = matchGroup
+      .filter(m => m.exitTime && typeof m.exitTime === 'number' && m.exitTime > 0)
+      .map(m => m.exitTime / (60 * 1000)); // Convert to minutes
+    
+    const medianExitTimeMinutes = exitTimes.length > 0 ? calculateMedian(exitTimes) : null;
+    
+    // Calculate exit time variance (standard deviation)
+    let exitTimeVarianceMinutes = null;
+    if (exitTimes.length > 1) {
+      const avgExitTime = exitTimes.reduce((sum, t) => sum + t, 0) / exitTimes.length;
+      const variance = exitTimes.reduce((sum, t) => sum + Math.pow(t - avgExitTime, 2), 0) / exitTimes.length;
+      exitTimeVarianceMinutes = Math.sqrt(variance);
+    }
+    
+    // NEW: Calculate time to peak statistics
+    const timeToPeakValues = matchGroup
+      .filter(m => m.timeToPeak && typeof m.timeToPeak === 'number' && m.timeToPeak > 0)
+      .map(m => m.timeToPeak / (60 * 1000)); // Convert to minutes
+    
+    const avgTimeToPeakMinutes = timeToPeakValues.length > 0 
+      ? timeToPeakValues.reduce((sum, t) => sum + t, 0) / timeToPeakValues.length 
+      : null;
+    
+    // NEW: Calculate consecutive wins/losses
+    let maxConsecutiveWins = 0;
+    let maxConsecutiveLosses = 0;
+    let currentStreak = 0;
+    let currentType = null;
+    
+    // Sort matches by time to analyze streaks chronologically
+    const sortedMatches = [...matchGroup].sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));
+    
+    for (const match of sortedMatches) {
+      const isWin = match.successful;
+      if (currentType === null) {
+        currentType = isWin ? 'win' : 'loss';
+        currentStreak = 1;
+      } else if ((currentType === 'win' && isWin) || (currentType === 'loss' && !isWin)) {
+        currentStreak++;
+      } else {
+        // Streak broken, update max
+        if (currentType === 'win') {
+          maxConsecutiveWins = Math.max(maxConsecutiveWins, currentStreak);
+        } else {
+          maxConsecutiveLosses = Math.max(maxConsecutiveLosses, currentStreak);
+        }
+        currentType = isWin ? 'win' : 'loss';
+        currentStreak = 1;
+      }
+    }
+    
+    // Final streak check
+    if (currentType === 'win') {
+      maxConsecutiveWins = Math.max(maxConsecutiveWins, currentStreak);
+    } else {
+      maxConsecutiveLosses = Math.max(maxConsecutiveLosses, currentStreak);
+    }
+    
+    // NEW: Calculate average trades between wins
+    let avgTradesBetweenWins = null;
+    if (successfulMatches.length > 0 && matchGroup.length > successfulMatches.length) {
+      const winIndices = sortedMatches
+        .map((m, idx) => m.successful ? idx : -1)
+        .filter(idx => idx >= 0);
+      
+      if (winIndices.length > 1) {
+        const gaps = [];
+        for (let i = 1; i < winIndices.length; i++) {
+          gaps.push(winIndices[i] - winIndices[i - 1] - 1);
+        }
+        avgTradesBetweenWins = gaps.length > 0 ? gaps.reduce((sum, gap) => sum + gap, 0) / gaps.length : null;
+      }
+    }
+    
+    // NEW: Build regime performance object (detailed metrics per regime)
+    const regimePerformance = {};
+    Object.keys(regimeCounts).forEach(regime => {
+      const regimeMatches = matchGroup.filter(m => (m.marketRegime || 'unknown') === regime);
+      const regimeSuccessful = regimeMatches.filter(m => m.successful);
+      const regimeGrossProfit = regimeSuccessful.reduce((sum, m) => sum + (m.priceMove || 0), 0);
+      const regimeGrossLoss = Math.abs(regimeMatches.filter(m => !m.successful).reduce((sum, m) => sum + (m.priceMove || 0), 0));
+      const regimePF = regimeGrossLoss > 0 ? Math.min(regimeGrossProfit / regimeGrossLoss, 20.0) : 
+        (regimeGrossProfit > 0 ? Math.min(regimeGrossProfit / 0.5, 20.0) : 1.0);
+      
+      regimePerformance[regime] = {
+        success_rate: regimeMatches.length > 0 ? (regimeSuccessful.length / regimeMatches.length) * 100 : 0,
+        occurrences: regimeMatches.length,
+        avg_price_move: regimeMatches.length > 0 ? regimeMatches.reduce((sum, m) => sum + (m.priceMove || 0), 0) / regimeMatches.length : 0,
+        profit_factor: regimePF,
+        gross_profit: regimeGrossProfit,
+        gross_loss: regimeGrossLoss
+      };
+    });
 
+    // Calculate average combined strength across all matches (not just first match)
+    // This represents the typical strength of this strategy
+    const avgCombinedStrength = matchGroup.length > 0
+      ? matchGroup.reduce((sum, m) => sum + (m.combinedStrength || 0), 0) / matchGroup.length
+      : (firstMatch.combinedStrength || 0);
+    
+    // DEBUG: Log if combinedStrength seems incorrect (should be >= minCombinedStrength if filter was applied)
+    if (matchGroup.length > 0 && avgCombinedStrength < 600) {
+      const firstMatchStrength = firstMatch.combinedStrength || 0;
+      const minStrength = Math.min(...matchGroup.map(m => m.combinedStrength || 0));
+      const maxStrength = Math.max(...matchGroup.map(m => m.combinedStrength || 0));
+      console.warn(`[processBacktestResults] ⚠️ Low combinedStrength detected:`, {
+        avgCombinedStrength: avgCombinedStrength.toFixed(2),
+        firstMatchStrength: firstMatchStrength.toFixed(2),
+        minStrength: minStrength.toFixed(2),
+        maxStrength: maxStrength.toFixed(2),
+        matchCount: matchGroup.length,
+        combinationName: firstMatch.signals?.map(s => s.type).join(' + ') || 'unknown',
+        note: 'If minCombinedStrength filter was 600, all matches should have strength >= 600'
+      });
+    }
+    
+    // Calculate exit reason breakdown from backtest matches
+    // Use default TP/SL percentages if not available in config
+    const takeProfitPercentage = config?.takeProfitPercentage || 5.0;
+    const stopLossPercentage = config?.stopLossPercentage || 2.0;
+    
+    const backtestExitReasonBreakdown = calculateBacktestExitReasonBreakdown(
+      matchGroup,
+      takeProfitPercentage,
+      stopLossPercentage
+    );
+    
     return {
       key,
       coin: firstMatch.coin, // Preserve the coin information from the first match
       signals: firstMatch.signals,
       signalCount: firstMatch.signals.length,
-      combinedStrength: firstMatch.combinedStrength,
+      combinedStrength: avgCombinedStrength, // Use average, not first match's strength
       occurrences: matchGroup.length,
       occurrenceDates: matchGroup.map(m => ({
         date: m.time, // Changed from m.date to m.time as per calculateMatchOutcomes output
@@ -843,10 +1327,27 @@ export const processBacktestResults = (matches, onLog) => {
       successRate,
       avgPriceMove,
       profitFactor,
+      grossProfit, // NEW: Total gross profit
+      grossLoss, // NEW: Total gross loss
       dominantMarketRegime, // This is now correctly 'uptrend', 'downtrend', or 'ranging'
       marketRegimeDistribution: regimeCounts, // This will also contain specific counts
+      regimePerformance, // NEW: Detailed regime performance metrics
       estimatedExitTimeMinutes,
       medianLowestLowDuringBacktest, // Add historical support analysis
+      // NEW: Additional analytics fields
+      maxDrawdownPercent,
+      medianDrawdownPercent,
+      avgWinPercent,
+      avgLossPercent,
+      winLossRatio,
+      medianExitTimeMinutes,
+      exitTimeVarianceMinutes,
+      avgTimeToPeakMinutes,
+      maxConsecutiveWins,
+      maxConsecutiveLosses,
+      avgTradesBetweenWins,
+      // NEW: Exit reason breakdown
+      backtestExitReasonBreakdown
     };
   });
 

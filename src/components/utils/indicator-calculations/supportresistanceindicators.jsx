@@ -4,14 +4,19 @@
  * and dynamic pivot level detection
  */
 export const calculatePivotPoints = (klineData, style = 'traditional', includeWeekly = true, includeDailyLevels = true) => {
+  //console.log(`[PIVOT_CALC] Starting calculation: klineData.length=${klineData?.length || 0}, style=${style}, includeWeekly=${includeWeekly}`);
   const pivots = [];
   // Add a null for the first candle which doesn't have a previous period for calculations.
   // This maintains a 1:1 index mapping where pivots[i] corresponds to klineData[i].
   pivots.push(null); 
   
   if (!klineData || klineData.length < 2) {
+    console.warn(`[PIVOT_CALC] ⚠️ Insufficient data: klineData.length=${klineData?.length || 0}`);
     return pivots; // This will return [null] for length 0 or 1.
   }
+  
+  let validCount = 0;
+  let nullCount = 0;
   
   for (let i = 1; i < klineData.length; i++) {
     const currentCandle = klineData[i];
@@ -109,6 +114,27 @@ export const calculatePivotPoints = (klineData, style = 'traditional', includeWe
     pivotData.confluence = detectPivotConfluence(pivotData, currentCandle.close);
     
     pivots.push(pivotData);
+    validCount++;
+    
+    // Log sample data for index 48 (evaluation index)
+    if (i === 48 || i === klineData.length - 1) {
+      //console.log(`[PIVOT_CALC] Index ${i}: traditional.pivot=${pivotData.traditional?.pivot?.toFixed(2) || 'null'}, traditional.s1=${pivotData.traditional?.s1?.toFixed(2) || 'null'}, traditional.r1=${pivotData.traditional?.r1?.toFixed(2) || 'null'}`);
+    }
+  }
+  
+  // Log summary
+  const lastValidIndex = pivots.length - 1;
+  //console.log(`[PIVOT_CALC] Calculation complete: total length=${pivots.length}, valid pivots=${validCount}, first null at index=0`);
+  if (lastValidIndex >= 48) {
+    const sample48 = pivots[48];
+    if (sample48) {
+      //console.log(`[PIVOT_CALC] Sample[48] structure: hasTraditional=${!!sample48.traditional}, hasFibonacci=${!!sample48.fibonacci}, keys=${Object.keys(sample48).join(', ')}`);
+      if (sample48.traditional) {
+        //console.log(`[PIVOT_CALC] Sample[48].traditional: pivot=${sample48.traditional.pivot?.toFixed(2) || 'null'}, s1=${sample48.traditional.s1?.toFixed(2) || 'null'}, r1=${sample48.traditional.r1?.toFixed(2) || 'null'}`);
+      }
+    } else {
+      console.warn(`[PIVOT_CALC] ⚠️ Sample[48] is null!`);
+    }
   }
   
   return pivots;
@@ -262,32 +288,131 @@ export const calculateFibonacci = (data, options = {}) => {
  * Enhanced Fibonacci Retracements with automatic swing detection
  * and dynamic level analysis
  */
-export const calculateFibonacciRetracements = (klineData, lookbackPeriod = 50, minSwingPercent = 3.0) => {
+export const calculateFibonacciRetracements = (klineData, lookbackPeriod = 100, minSwingPercent = 1.5, onLog = null) => {
   const fibonacciData = [];
   
   if (!klineData || klineData.length < lookbackPeriod) {
+    const msg = `[FIB_CALC] Insufficient data: klineData.length=${klineData?.length || 0}, lookbackPeriod=${lookbackPeriod}`;
+    if (onLog) onLog(msg, 'warn');
+    else console.warn(msg);
     return new Array(klineData?.length || 0).fill(null);
   }
   
-  // Initialize with nulls for early candles
-  for (let i = 0; i < lookbackPeriod; i++) {
+  //console.log(`[FIB_CALC] Starting calculation: klineData.length=${klineData.length}, lookbackPeriod=${lookbackPeriod}, minSwingPercent=${minSwingPercent}`);
+  
+  // CRITICAL FIX: Build array with proper index mapping
+  // We need to populate indices starting from lookbackPeriod - 2 to ensure evaluation index (typically length - 2) has data
+  // For a 50-candle array with lookback=50, evaluation is at index 48, so we need to populate from index 48
+  // Initialize array to match klineData length
+  for (let i = 0; i < klineData.length; i++) {
     fibonacciData.push(null);
   }
   
-  for (let i = lookbackPeriod; i < klineData.length; i++) {
+  // Start from lookbackPeriod - 2 to ensure evaluation index (typically length - 2) has data
+  // For a 50-candle array with lookback=50, evaluation is at index 48, so we start at index 48
+  const startIndex = Math.max(0, lookbackPeriod - 2);
+  //console.log(`[FIB_CALC] Populating indices from ${startIndex} to ${klineData.length - 1}`);
+  
+  for (let i = startIndex; i < klineData.length; i++) {
     const currentCandle = klineData[i];
-    const lookbackData = klineData.slice(i - lookbackPeriod, i + 1);
+    // Ensure we have enough data for lookback (may need to adjust window start)
+    const windowStart = Math.max(0, i - lookbackPeriod + 1); // +1 to include current candle
+    const lookbackData = klineData.slice(windowStart, i + 1);
     
-    // Detect significant swings in the lookback period
-    const swings = detectSignificantSwings(lookbackData, minSwingPercent);
+    if (i === 48 || (i >= 46 && i <= 50)) {
+      //console.log(`[FIB_CALC] Index ${i}: windowStart=${windowStart}, lookbackData.length=${lookbackData.length}, required=${lookbackPeriod}`);
+    }
     
-    if (swings.length === 0) {
-      fibonacciData.push(null);
+    // Need at least lookbackPeriod - 1 candles (relaxed from lookbackPeriod to allow index 48)
+    // For index 48 with lookback=50, we'll have 49 candles which should be enough for swing detection
+    if (lookbackData.length < (lookbackPeriod - 1)) {
+      // Not enough data - leave as null
+      if (i === 48) {
+        console.warn(`[FIB_CALC] ⚠️ Index 48: Insufficient data: lookbackData.length=${lookbackData.length}, required=${lookbackPeriod - 1}`);
+      }
       continue;
     }
     
-    // Use the most recent significant swing
-    const latestSwing = swings[swings.length - 1];
+    // Detect significant swings in the lookback period
+    const swings = detectSignificantSwings(lookbackData, minSwingPercent, onLog);
+    
+    // Reduced verbosity: Only log when swings ARE found (success case)
+    if ((i === 48 || (i >= 46 && i <= 50)) && swings.length > 0) {
+      //console.log(`[FIB_CALC] Index ${i}: Detected ${swings.length} swings, latest: ${swings[swings.length - 1].type} (low=${swings[swings.length - 1].low?.price?.toFixed(2)}, high=${swings[swings.length - 1].high?.price?.toFixed(2)})`);
+    }
+    
+    // Continue to fallback logic even if swings.length === 0
+    
+    // Use the most recent significant swing, or fall back to incomplete swing if no complete swings
+    let latestSwing = swings.length > 0 ? swings[swings.length - 1] : null;
+    
+    // If no complete swings detected, try to use the incomplete swing state
+    if (!latestSwing && lookbackData.length >= 20) {
+      // Re-detect swings with a more lenient approach for fallback
+      const fallbackSwings = detectSignificantSwings(lookbackData, Math.max(1.0, minSwingPercent * 0.5), onLog); // Use 50% of threshold
+      
+      if (fallbackSwings.length > 0) {
+        latestSwing = fallbackSwings[fallbackSwings.length - 1];
+        if (i === 48) {
+          const msg = `[FIB_CALC] Index ${i}: Using fallback swing (lenient threshold): ${latestSwing.type}, move=${latestSwing.percentMove.toFixed(2)}%`;
+          if (onLog) onLog(msg, 'debug');
+        }
+      } else {
+        // Last resort: find the highest high and lowest low in the lookback period
+        let minLow = Infinity;
+        let maxHigh = -Infinity;
+        let minLowIndex = -1;
+        let maxHighIndex = -1;
+        
+        for (let j = 0; j < lookbackData.length; j++) {
+          if (lookbackData[j].low < minLow) {
+            minLow = lookbackData[j].low;
+            minLowIndex = j;
+          }
+          if (lookbackData[j].high > maxHigh) {
+            maxHigh = lookbackData[j].high;
+            maxHighIndex = j;
+          }
+        }
+        
+        if (minLowIndex !== -1 && maxHighIndex !== -1 && minLow < maxHigh) {
+          const range = maxHigh - minLow;
+          const percentMove = (range / minLow) * 100;
+          
+          // Use this as a fallback swing if move is at least 1%
+          if (percentMove >= 1.0) {
+            // Determine if it's an upswing (low before high) or downswing (high before low)
+            if (minLowIndex < maxHighIndex) {
+              latestSwing = {
+                type: 'upswing',
+                low: { index: minLowIndex, price: minLow, candle: lookbackData[minLowIndex] },
+                high: { index: maxHighIndex, price: maxHigh, candle: lookbackData[maxHighIndex] },
+                percentMove: percentMove,
+                duration: maxHighIndex - minLowIndex
+              };
+            } else {
+              latestSwing = {
+                type: 'downswing',
+                high: { index: maxHighIndex, price: maxHigh, candle: lookbackData[maxHighIndex] },
+                low: { index: minLowIndex, price: minLow, candle: lookbackData[minLowIndex] },
+                percentMove: percentMove,
+                duration: minLowIndex - maxHighIndex
+              };
+            }
+            
+            if (i === 48) {
+              //console.log(`[FIB_CALC] Index ${i}: Using extreme points fallback: ${latestSwing.type}, move=${latestSwing.percentMove.toFixed(2)}%, low=${minLow.toFixed(2)}@${minLowIndex}, high=${maxHigh.toFixed(2)}@${maxHighIndex}`);
+            }
+          }
+        }
+      }
+    }
+    
+    // If still no swing, skip this index (expected in very low volatility)
+    if (!latestSwing) {
+      // Removed warning - expected behavior in low volatility, system handles gracefully
+      continue;
+    }
     
     const swingData = {
       swing: latestSwing,
@@ -308,13 +433,22 @@ export const calculateFibonacciRetracements = (klineData, lookbackPeriod = 50, m
         swingLow: swingLow,
         swingHigh: swingHigh,
         range: range,
-        fib_0: swingHigh, // 0% (swing high)
+        // Standard keys for evaluation
+        '0': swingHigh, // 0% (swing high)
+        '236': swingHigh - (range * 0.236),
+        '382': swingHigh - (range * 0.382),
+        '500': swingHigh - (range * 0.500),
+        '618': swingHigh - (range * 0.618),
+        '786': swingHigh - (range * 0.786),
+        '1000': swingLow, // 100% (swing low)
+        // Legacy keys for compatibility
+        fib_0: swingHigh,
         fib_236: swingHigh - (range * 0.236),
         fib_382: swingHigh - (range * 0.382),
         fib_500: swingHigh - (range * 0.500),
         fib_618: swingHigh - (range * 0.618),
         fib_786: swingHigh - (range * 0.786),
-        fib_100: swingLow, // 100% (swing low)
+        fib_100: swingLow,
         // Extension levels
         fib_1272: swingHigh + (range * 0.272),
         fib_1618: swingHigh + (range * 0.618),
@@ -331,13 +465,22 @@ export const calculateFibonacciRetracements = (klineData, lookbackPeriod = 50, m
         swingHigh: swingHigh,
         swingLow: swingLow,
         range: range,
-        fib_0: swingLow, // 0% (swing low)
+        // Standard keys for evaluation
+        '0': swingLow, // 0% (swing low)
+        '236': swingLow + (range * 0.236),
+        '382': swingLow + (range * 0.382),
+        '500': swingLow + (range * 0.500),
+        '618': swingLow + (range * 0.618),
+        '786': swingLow + (range * 0.786),
+        '1000': swingHigh, // 100% (swing high)
+        // Legacy keys for compatibility
+        fib_0: swingLow,
         fib_236: swingLow + (range * 0.236),
         fib_382: swingLow + (range * 0.382),
         fib_500: swingLow + (range * 0.500),
         fib_618: swingLow + (range * 0.618),
         fib_786: swingLow + (range * 0.786),
-        fib_100: swingHigh, // 100% (swing high)
+        fib_100: swingHigh,
         // Extension levels
         fib_1272: swingLow - (range * 0.272),
         fib_1618: swingLow - (range * 0.618),
@@ -351,23 +494,37 @@ export const calculateFibonacciRetracements = (klineData, lookbackPeriod = 50, m
     // Detect confluence with other technical levels
     swingData.confluence = detectFibonacciConfluence(swingData.levels, currentCandle.close);
     
-    fibonacciData.push(swingData);
+    // CRITICAL: Set at correct index in array (not push!)
+    fibonacciData[i] = swingData;
+    
+    if (i === 48) {
+      //console.log(`[FIB_CALC] ✅ Index 48 populated: levels=${swingData.levels ? Object.keys(swingData.levels).filter(k => ['0', '236', '382', '500', '618', '786', '1000'].includes(k) || k.startsWith('fib_')).join(', ') : 'none'}`);
+      if (swingData.levels) {
+        //console.log(`[FIB_CALC] Index 48 sample levels: 236=${swingData.levels['236']}, 618=${swingData.levels['618']}, 1000=${swingData.levels['1000']}`);
+      }
+    }
   }
+  
   
   return fibonacciData;
 };
 
 /**
  * Detects significant price swings for Fibonacci analysis
+ * IMPROVED: More robust pairing logic that handles cases where peaks/troughs exist but aren't properly sequenced
  */
-const detectSignificantSwings = (candleData, minSwingPercent) => {
+const detectSignificantSwings = (candleData, minSwingPercent, onLog = null) => {
   const swings = [];
   
-  if (candleData.length < 10) return swings;
+  if (candleData.length < 10) {
+    return swings;
+  }
   
   let currentTrend = null;
   let swingStart = null;
   let extremePoint = null;
+  let peakCount = 0;
+  let troughCount = 0;
   
   for (let i = 1; i < candleData.length - 1; i++) {
     const current = candleData[i];
@@ -376,6 +533,7 @@ const detectSignificantSwings = (candleData, minSwingPercent) => {
     
     // Detect potential swing highs (peak)
     if (current.high > prev.high && current.high > next.high) {
+      peakCount++;
       // If we are currently tracking a potential swing low as swingStart, and we found a new high,
       // it means a potential upswing might have formed.
       if (swingStart && swingStart.type === 'low') {
@@ -411,6 +569,7 @@ const detectSignificantSwings = (candleData, minSwingPercent) => {
     
     // Detect potential swing lows (trough)
     if (current.low < prev.low && current.low < next.low) {
+      troughCount++;
       // If we are currently tracking a potential swing high as extremePoint, and we found a new low,
       // it means a potential downswing might have formed.
       if (extremePoint && extremePoint.type === 'high') {
@@ -444,6 +603,55 @@ const detectSignificantSwings = (candleData, minSwingPercent) => {
       }
     }
   }
+  
+  // IMPROVED: Alternative pairing approach - collect all peaks and troughs, then pair them sequentially
+  // This helps when the state machine doesn't capture swings due to sequencing issues
+  if (swings.length === 0 && peakCount > 0 && troughCount > 0) {
+    // Collect all peaks and troughs
+    const allPeaks = [];
+    const allTroughs = [];
+    
+    for (let i = 1; i < candleData.length - 1; i++) {
+      const current = candleData[i];
+      const prev = candleData[i - 1];
+      const next = candleData[i + 1];
+      
+      if (current.high > prev.high && current.high > next.high) {
+        allPeaks.push({ index: i, price: current.high });
+      }
+      if (current.low < prev.low && current.low < next.low) {
+        allTroughs.push({ index: i, price: current.low });
+      }
+    }
+    
+    // Try to pair peaks and troughs sequentially
+    let lastPoint = null;
+    const allPoints = [...allPeaks.map(p => ({...p, type: 'peak'})), ...allTroughs.map(t => ({...t, type: 'trough'}))]
+      .sort((a, b) => a.index - b.index);
+    
+    for (let i = 1; i < allPoints.length; i++) {
+      const prev = allPoints[i - 1];
+      const curr = allPoints[i];
+      
+      // Only pair opposite types (peak->trough or trough->peak)
+      if (prev.type !== curr.type) {
+        const percentMove = prev.type === 'peak' 
+          ? ((prev.price - curr.price) / prev.price) * 100  // Downswing
+          : ((curr.price - prev.price) / prev.price) * 100; // Upswing
+        
+        if (Math.abs(percentMove) >= minSwingPercent) {
+          swings.push({
+            type: prev.type === 'peak' ? 'downswing' : 'upswing',
+            high: prev.type === 'peak' ? prev : curr,
+            low: prev.type === 'peak' ? curr : prev,
+            percentMove: Math.abs(percentMove),
+            duration: Math.abs(curr.index - prev.index)
+          });
+        }
+      }
+    }
+  }
+  
   
   return swings;
 };
@@ -563,49 +771,193 @@ const detectFibonacciConfluence = (fibLevels, currentPrice) => {
  * Advanced Support & Resistance Detection with multiple algorithms
  * Volume-weighted levels, touch counting, and dynamic strength assessment
  */
-export function calculateSupportResistance(klineData, lookback = 50) {
-    if (!klineData || klineData.length < lookback) {
-        return [];
-    }
-    const levels = [];
+export function calculateSupportResistance(klineData, lookback = 50, tolerance = 0.005, onLog = null) {
+    const logMsg = (msg, level = 'debug') => {
+        if (onLog) onLog(msg, level);
+        else (level === 'warn' ? console.warn : console.log)(msg);
+    };
     
-    // Using a simplified pivot point detection method
-    for (let i = 2; i < klineData.length - 2; i++) {
+    if (!klineData || klineData.length < lookback) {
+        // Return array padded with nulls to match klineData length
+        logMsg(`[SR_CALC] Insufficient data: klineData.length=${klineData?.length || 0}, lookback=${lookback}`, 'warn');
+        return new Array(klineData?.length || 0).fill(null);
+    }
+    
+    //console.log(`[SR_CALC] Starting calculation: klineData.length=${klineData.length}, lookback=${lookback}, tolerance=${tolerance}`);
+    
+    // Build per-index structure: array where each element corresponds to a candle
+    const result = new Array(klineData.length).fill(null);
+    
+    // Collect all pivot levels as we scan
+    const allSupportLevels = [];
+    const allResistanceLevels = [];
+    
+    // IMPROVED: Relaxed pivot point detection (from 2 candles to 1 candle on each side)
+    // This is less strict and will detect more swing points, especially useful for shorter timeframes
+    for (let i = 1; i < klineData.length - 1; i++) {
+        // High pivot: candle must be higher than the previous AND next candle
         const isHighPivot = klineData[i].high > klineData[i - 1].high &&
-                            klineData[i].high > klineData[i - 2].high &&
-                            klineData[i].high > klineData[i + 1].high &&
-                            klineData[i].high > klineData[i + 2].high;
+                            klineData[i].high > klineData[i + 1].high;
 
+        // Low pivot: candle must be lower than the previous AND next candle
         const isLowPivot = klineData[i].low < klineData[i - 1].low &&
-                           klineData[i].low < klineData[i - 2].low &&
-                           klineData[i].low < klineData[i + 1].low &&
-                           klineData[i].low < klineData[i + 2].low;
+                           klineData[i].low < klineData[i + 1].low;
 
         if (isHighPivot) {
-            levels.push({ level: klineData[i].high, type: 'resistance' });
+            allResistanceLevels.push({ level: klineData[i].high, index: i });
         }
         if (isLowPivot) {
-            levels.push({ level: klineData[i].low, type: 'support' });
+            allSupportLevels.push({ level: klineData[i].low, index: i });
         }
     }
+    
     
     // Simple clustering to merge close levels
-    const mergedLevels = [];
-    if (levels.length > 0) {
-        levels.sort((a, b) => a.level - b.level);
-        let currentLevel = levels[0];
-        for (let i = 1; i < levels.length; i++) {
-            if (Math.abs(levels[i].level - currentLevel.level) / currentLevel.level < 0.005) { // 0.5% tolerance
+    const mergedSupport = [];
+    if (allSupportLevels.length > 0) {
+        allSupportLevels.sort((a, b) => a.level - b.level);
+        let currentLevel = allSupportLevels[0];
+        for (let i = 1; i < allSupportLevels.length; i++) {
+            if (Math.abs(allSupportLevels[i].level - currentLevel.level) / currentLevel.level < tolerance) {
                 // merge logic can be improved, for now we just take the first one in a cluster
             } else {
-                mergedLevels.push(currentLevel);
-                currentLevel = levels[i];
+                mergedSupport.push(currentLevel.level);
+                currentLevel = allSupportLevels[i];
             }
         }
-        mergedLevels.push(currentLevel);
+        mergedSupport.push(currentLevel.level);
     }
     
-    return mergedLevels;
+    const mergedResistance = [];
+    if (allResistanceLevels.length > 0) {
+        allResistanceLevels.sort((a, b) => a.level - b.level);
+        let currentLevel = allResistanceLevels[0];
+        for (let i = 1; i < allResistanceLevels.length; i++) {
+            if (Math.abs(allResistanceLevels[i].level - currentLevel.level) / currentLevel.level < tolerance) {
+                // merge logic can be improved, for now we just take the first one in a cluster
+            } else {
+                mergedResistance.push(currentLevel.level);
+                currentLevel = allResistanceLevels[i];
+            }
+        }
+        mergedResistance.push(currentLevel.level);
+    }
+    
+    // For each candle, include all levels found up to that point (within lookback window)
+    // IMPROVED: Start populating from index 1 (after pivot detection can start) instead of wait until lookback
+    // This ensures early candles still get levels from available pivots
+    let firstValidIndex = -1;
+    let lastValidData = null;
+    
+    // Start from index 1 (first candle after we can detect pivots)
+    // Populate all indices from 1 onwards with available levels in their lookback window
+    const startIndex = 1;
+    
+    //console.log(`[SR_CALC] Populating indices from ${startIndex} to ${klineData.length - 1}, lookback=${lookback}, klineLength=${klineData.length}`);
+    
+    for (let i = startIndex; i < klineData.length; i++) {
+        // Calculate window start: look back up to 'lookback' candles, but start from 0
+        const windowStart = Math.max(0, i - lookback + 1);
+        const windowEnd = i;
+        
+        // Get levels that are relevant for this candle (within lookback window)
+        // IMPROVED: Include all merged levels, but filter by whether their pivot index is in window
+        const currentPrice = klineData[i].close;
+        
+        // Collect ALL relevant levels (both support and resistance pivots) within the lookback window
+        const allRelevantLevels = [];
+        
+        // Add support pivots (low pivots)
+        mergedSupport.forEach(level => {
+            const levelObj = allSupportLevels.find(l => Math.abs(l.level - level) < 0.0001);
+            if (levelObj === undefined) return;
+            const inWindow = i < lookback 
+                ? (levelObj.index >= 0 && levelObj.index <= windowEnd)
+                : (levelObj.index >= windowStart && levelObj.index <= windowEnd);
+            if (inWindow) {
+                allRelevantLevels.push({ level, index: levelObj.index, originalType: 'support' });
+            }
+        });
+        
+        // Add resistance pivots (high pivots)
+        mergedResistance.forEach(level => {
+            const levelObj = allResistanceLevels.find(l => Math.abs(l.level - level) < 0.0001);
+            if (levelObj === undefined) return;
+            const inWindow = i < lookback
+                ? (levelObj.index >= 0 && levelObj.index <= windowEnd)
+                : (levelObj.index >= windowStart && levelObj.index <= windowEnd);
+            if (inWindow) {
+                allRelevantLevels.push({ level, index: levelObj.index, originalType: 'resistance' });
+            }
+        });
+        
+        // CRITICAL FIX: Classify levels dynamically based on current price position
+        // Support = level BELOW current price, Resistance = level ABOVE current price
+        const relevantSupport = [];
+        const relevantResistance = [];
+        
+        for (const levelInfo of allRelevantLevels) {
+            if (levelInfo.level < currentPrice) {
+                // Level is below price → it's support
+                relevantSupport.push(levelInfo.level);
+            } else if (levelInfo.level > currentPrice) {
+                // Level is above price → it's resistance
+                relevantResistance.push(levelInfo.level);
+            }
+            // If level equals price (rare), skip it to avoid ambiguity
+        }
+        
+        // Remove duplicates (in case same level appeared as both support and resistance pivot)
+        const uniqueSupport = [...new Set(relevantSupport)];
+        const uniqueResistance = [...new Set(relevantResistance)];
+        
+        // Always set result[i] to an object (even if arrays are empty) for consistent structure
+        // This ensures we have a valid object structure even if no levels are found
+        result[i] = {
+            support: uniqueSupport,
+            resistance: uniqueResistance
+        };
+        
+        if (firstValidIndex === -1 && (uniqueSupport.length > 0 || uniqueResistance.length > 0)) {
+            firstValidIndex = i;
+        }
+        if (uniqueSupport.length > 0 || uniqueResistance.length > 0) {
+            lastValidData = result[i];
+        }
+    }
+    
+    // DIAGNOSTIC: Log summary for debugging
+    const validCount = result.filter(r => r !== null && typeof r === 'object').length;
+    const supportCount = mergedSupport.length;
+    const resistanceCount = mergedResistance.length;
+    
+    // Count how many candles have actual levels (not empty arrays)
+    let candlesWithSupport = 0;
+    let candlesWithResistance = 0;
+    let candlesWithBoth = 0;
+    for (let i = startIndex; i < result.length; i++) {
+        if (result[i] && result[i].support && result[i].support.length > 0) candlesWithSupport++;
+        if (result[i] && result[i].resistance && result[i].resistance.length > 0) candlesWithResistance++;
+        if (result[i] && result[i].support?.length > 0 && result[i].resistance?.length > 0) candlesWithBoth++;
+    }
+    
+    logMsg(`[SR_CALC] 📊 Calculation Summary:`, 'debug');
+    logMsg(`[SR_CALC]   - Raw pivots detected: ${allSupportLevels.length} support, ${allResistanceLevels.length} resistance`, 'debug');
+    logMsg(`[SR_CALC]   - After clustering: ${supportCount} support levels, ${resistanceCount} resistance levels`, 'debug');
+    logMsg(`[SR_CALC]   - Candles with support: ${candlesWithSupport}/${validCount} (${((candlesWithSupport/validCount)*100).toFixed(1)}%)`, 'debug');
+    logMsg(`[SR_CALC]   - Candles with resistance: ${candlesWithResistance}/${validCount} (${((candlesWithResistance/validCount)*100).toFixed(1)}%)`, 'debug');
+    logMsg(`[SR_CALC]   - Candles with both: ${candlesWithBoth}/${validCount} (${((candlesWithBoth/validCount)*100).toFixed(1)}%)`, 'debug');
+    
+    if (firstValidIndex >= 0 && firstValidIndex < 5) {
+        logMsg(`[SR_CALC] Sample result[${firstValidIndex}]: support=${result[firstValidIndex].support.length}, resistance=${result[firstValidIndex].resistance.length}`, 'debug');
+    }
+    if (result.length >= 48 && result[48]) {
+        logMsg(`[SR_CALC] Sample result[48]: support=${result[48].support.length}, resistance=${result[48].resistance.length}`, 'debug');
+    } else if (result.length >= 48) {
+        logMsg(`[SR_CALC] ⚠️ result[48] is null! Array length=${result.length}, lookback=${lookback}, firstValidIndex=${firstValidIndex}`, 'warn');
+    }
+    
+    return result;
 }
 
 /**

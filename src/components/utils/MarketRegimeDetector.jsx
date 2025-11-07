@@ -223,9 +223,11 @@ class MarketRegimeDetector {
                 downtrendScore += rsiPoints;
                 //console.log(`[REGIME_CALC] 🔻 RSI bearish: +${rsiPoints.toFixed(1)} downtrend (RSI: ${rsi.toFixed(2)})`);
             } else {
-                const rsiPoints = 5;
-                rangingScore += rsiPoints;
-                //console.log(`[REGIME_CALC] ↔️ RSI neutral: +${rsiPoints} ranging (RSI: ${rsi.toFixed(2)})`);
+                // ✅ FIX: Increased RSI neutral bonus (was 5, now 5-10 based on how neutral)
+                const neutralStrength = Math.abs(rsi - 50) / 10; // 0-1 scale (0 = perfectly neutral at 50)
+                const rangingPoints = 10 - (neutralStrength * 5); // 5-10 points (more neutral = more points)
+                rangingScore += rangingPoints;
+                //console.log(`[REGIME_CALC] ↔️ RSI neutral: +${rangingPoints.toFixed(1)} ranging (RSI: ${rsi.toFixed(2)})`);
             }
         } else {
             // Missing RSI data warning removed to reduce console spam
@@ -278,6 +280,34 @@ class MarketRegimeDetector {
             // Missing BBW data warning removed to reduce console spam
         }
 
+        // ✅ IMPROVED: Transition Detection - Boost ranging when both trends are weak and close together
+        const trendStrength = Math.max(uptrendScore, downtrendScore);
+        const trendDifference = Math.abs(uptrendScore - downtrendScore);
+        
+        // Enhanced ranging detection: Require ADX < 25 AND trends close together AND weak
+        const isWeakTrend = adx !== undefined && adx < 25;
+        const trendsAreClose = trendDifference < 12; // Tighter threshold
+        const trendsAreWeak = trendStrength < 35; // Lower threshold
+        
+        // If ADX is weak AND trends are close AND both are weak, it's likely ranging (not a weak trend)
+        if (isWeakTrend && trendsAreClose && trendsAreWeak) {
+            const transitionBonus = Math.min(30, (12 - trendDifference) * 2 + (35 - trendStrength) * 0.4);
+            rangingScore += transitionBonus;
+        }
+        
+        // ✅ NEW: Price oscillation detection - if price is between EMA and SMA, boost ranging
+        if (ema !== undefined && sma !== undefined && currentPrice !== undefined) {
+            const priceBetweenMAs = (currentPrice > Math.min(ema, sma) && currentPrice < Math.max(ema, sma));
+            if (priceBetweenMAs) {
+                rangingScore += 12; // Price between MAs suggests ranging
+            }
+        }
+        
+        // ✅ NEW: Additional ranging confirmation - if RSI is in neutral zone AND ADX is weak, boost ranging
+        if (rsi !== undefined && rsi >= 45 && rsi <= 55 && isWeakTrend) {
+            rangingScore += 8; // Strong ranging signal
+        }
+
         // Final scoring - REDUCED LOGGING TO PREVENT CRASH
         let regime;
         if (uptrendScore > downtrendScore && uptrendScore > rangingScore) {
@@ -298,80 +328,175 @@ class MarketRegimeDetector {
         return regime;
   }
 
-  _calculateConfidence(regime) {
-      // console.log(`[regime_debug] 🎯 Calculating confidence for ${regime.toUpperCase()}...`);
+  _calculateConfidence(regime, targetIndex = undefined) {
+      // Use the same index as regime detection for consistency
+      const index = targetIndex !== undefined ? targetIndex : this.klines.length - 1;
       
-      const latest = this.klines.length - 1; // Assuming latest candle
-      const adxData = this._getLatestValue('adx');
+      const adxData = this._getValueAt('adx', index);
       const adx = adxData && typeof adxData.ADX === 'number' ? adxData.ADX : undefined; // Extract ADX number
-      const rsi = this._getLatestValue('rsi');
-      const macdData = this._getLatestValue('macd');
+      const rsi = this._getValueAt('rsi', index);
+      const macdData = this._getValueAt('macd', index);
       const macd = macdData && typeof macdData.macd === 'number' && typeof macdData.signal === 'number' ? macdData : undefined;
-      const bbw = this._getLatestValue('bbw');
+      const bbw = this._getValueAt('bbw', index);
+      const ema = this._getValueAt('ema', index);
+      const sma = this._getValueAt('ma200', index) || this._getValueAt('sma', index);
 
+      let confidence = 0.4; // Lower base confidence - more dynamic
 
-      let confidence = 0.5; // Base confidence
-      // console.log(`[regime_debug] 🎯 Base confidence: ${(confidence * 100).toFixed(1)}%`);
-
-      // ADX contribution to confidence
+      // Enhanced ADX contribution - more responsive to regime strength
       if (adx !== undefined) {
-          if (adx > 25) {
-              const adxConfidence = Math.min(0.3, (adx - 25) / 100);
-              confidence += adxConfidence;
-              // console.log(`[regime_debug] 💪 ADX adds confidence: +${(adxConfidence * 100).toFixed(1)}% (ADX: ${adx.toFixed(2)}) - Total: ${(confidence * 100).toFixed(1)}%`);
-          } else {
-              const adxPenalty = Math.min(0.2, (25 - adx) / 100);
-              confidence -= adxPenalty;
-              // console.log(`[regime_debug] 😴 ADX reduces confidence: -${(adxPenalty * 100).toFixed(1)}% (ADX: ${adx.toFixed(2)}) - Total: ${(confidence * 100).toFixed(1)}%`);
+          if (regime === 'uptrend' || regime === 'downtrend') {
+              // For trending regimes, ADX is critical
+              if (adx > 25) {
+                  // Strong trend - scale confidence with ADX strength
+                  const adxStrength = Math.min(0.35, (adx - 25) / 80); // Up to 35% for very strong trends (ADX 50+)
+                  confidence += adxStrength;
+              } else {
+                  // Weak trend - more aggressive penalty
+                  // Changed from /60 to /50 to increase penalty, max from 25% to 30%
+                  const adxPenalty = Math.min(0.3, (25 - adx) / 50);
+                  confidence -= adxPenalty;
+              }
+          } else if (regime === 'ranging') {
+              // For ranging, low ADX is good
+              if (adx < 25) {
+                  // More sensitive: ADX close to 25 should still get substantial bonus
+                  // Changed from /60 to /40 to give 15-20% bonus when ADX is 24.37
+                  const rangingConfidence = Math.min(0.25, (25 - adx) / 40);
+                  confidence += rangingConfidence;
+              } else {
+                  // High ADX doesn't support ranging
+                  const rangingPenalty = Math.min(0.2, (adx - 25) / 100);
+                  confidence -= rangingPenalty;
+              }
           }
-      } else {
-          // console.log(`[regime_debug] ⚠️ ADX data not available`);
       }
 
-      // MACD contribution
+      // Enhanced MACD contribution - more responsive
       if (macd && macd.macd !== undefined && macd.signal !== undefined) {
           const macdStrength = Math.abs(macd.macd - macd.signal);
-          const macdConfidence = Math.min(0.15, macdStrength * 10);
-          confidence += macdConfidence;
-          // console.log(`[regime_debug] 📈 MACD adds confidence: +${(macdConfidence * 100).toFixed(1)}% (strength: ${macdStrength.toFixed(4)}) - Total: ${(confidence * 100).toFixed(1)}%`);
-      } else {
-          // console.log(`[regime_debug] ⚠️ MACD data not available`);
-      }
-
-      // RSI extremes add confidence for trending regimes
-      if (rsi !== undefined && (regime === 'uptrend' || regime === 'downtrend')) {
-          if ((regime === 'uptrend' && rsi > 60) || (regime === 'downtrend' && rsi < 40)) {
-              const rsiConfidence = Math.min(0.1, Math.abs(rsi - 50) / 500);
-              confidence += rsiConfidence;
-              // console.log(`[regime_debug] 🎯 RSI supports regime: +${(rsiConfidence * 100).toFixed(1)}% (RSI: ${rsi.toFixed(2)}) - Total: ${(confidence * 100).toFixed(1)}%`);
-          } else {
-              // console.log(`[regime_debug] 🎯 RSI doesn't support regime (RSI: ${rsi.toFixed(2)}, regime: ${regime})`);
+          const macdConfidence = Math.min(0.18, macdStrength * 12); // Increased sensitivity
+          
+          // Check if MACD aligns with regime
+          if (regime === 'uptrend' && macd.macd > macd.signal) {
+              confidence += macdConfidence;
+          } else if (regime === 'downtrend' && macd.macd < macd.signal) {
+              confidence += macdConfidence;
+          } else if (regime === 'ranging') {
+              // MACD crossing suggests trend change, not ranging
+              confidence -= Math.min(0.1, macdConfidence * 0.5);
           }
-      } else {
-          // console.log(`[regime_debug] ⚠️ RSI data not available or regime not trending`);
       }
 
-      // Bollinger Band Width
+      // Enhanced RSI contribution - regime-specific
+      if (rsi !== undefined) {
+          if (regime === 'uptrend') {
+              if (rsi > 60) {
+                  const rsiConfidence = Math.min(0.15, (rsi - 60) / 200); // Up to 15% for RSI 90+
+                  // Scale RSI bonus by ADX strength: if ADX is weak, reduce RSI bonus more aggressively
+                  if (adx !== undefined) {
+                      // Changed from /25 to /30, min from 0.3 to 0.2 for more aggressive scaling
+                      const adxScale = adx > 25 ? 1.0 : Math.max(0.2, adx / 30);
+                      confidence += rsiConfidence * adxScale;
+                  } else {
+                      confidence += rsiConfidence;
+                  }
+              } else if (rsi < 50) {
+                  // RSI below 50 doesn't support uptrend
+                  confidence -= Math.min(0.1, (50 - rsi) / 200);
+              }
+          } else if (regime === 'downtrend') {
+              if (rsi < 40) {
+                  const rsiConfidence = Math.min(0.15, (40 - rsi) / 200); // Up to 15% for RSI 10-
+                  // Scale RSI bonus by ADX strength: if ADX is weak, reduce RSI bonus more aggressively
+                  // This prevents weak trends from getting high confidence just because RSI is extreme
+                  if (adx !== undefined) {
+                      // Changed from /25 to /30, min from 0.3 to 0.2 for more aggressive scaling (consistent with uptrend)
+                      const adxScale = adx > 25 ? 1.0 : Math.max(0.2, adx / 30);
+                      confidence += rsiConfidence * adxScale;
+                  } else {
+                      confidence += rsiConfidence;
+                  }
+              } else if (rsi > 50) {
+                  // RSI above 50 doesn't support downtrend
+                  confidence -= Math.min(0.1, (rsi - 50) / 200);
+              }
+          } else if (regime === 'ranging') {
+              // RSI in neutral zone supports ranging
+              if (rsi >= 45 && rsi <= 55) {
+                  const neutralConfidence = Math.min(0.12, 1 - Math.abs(rsi - 50) / 5);
+                  confidence += neutralConfidence;
+              }
+          }
+      }
+
+      // Enhanced BBW contribution - more responsive
       if (bbw !== undefined) {
-          if (regime === 'ranging' && bbw < 0.03) {
-              const bbwConfidence = Math.min(0.1, (0.03 - bbw) * 2);
-              confidence += bbwConfidence;
-              // console.log(`[regime_debug] 🤏 Low BBW supports ranging: +${(bbwConfidence * 100).toFixed(1)}% (BBW: ${bbw.toFixed(4)}) - Total: ${(confidence * 100).toFixed(1)}%`);
-          } else if ((regime === 'uptrend' || regime === 'downtrend') && bbw > 0.04) {
-              const bbwConfidence = Math.min(0.1, bbw * 2);
-              confidence += bbwConfidence;
-              // console.log(`[regime_debug] 🌪️ High BBW supports trending: +${(bbwConfidence * 100).toFixed(1)}% (BBW: ${bbw.toFixed(4)}) - Total: ${(confidence * 100).toFixed(1)}%`);
-          } else {
-              // console.log(`[regime_debug] 🤏 BBW doesn't support regime (BBW: ${bbw.toFixed(4)}, regime: ${regime})`);
+          if (regime === 'ranging') {
+              if (bbw < 0.03) {
+                  const bbwConfidence = Math.min(0.15, (0.03 - bbw) * 3); // Increased sensitivity
+                  confidence += bbwConfidence;
+              } else {
+                  // High BBW doesn't support ranging
+                  confidence -= Math.min(0.1, (bbw - 0.03) * 2);
+              }
+          } else if (regime === 'uptrend' || regime === 'downtrend') {
+              if (bbw > 0.04) {
+                  const bbwConfidence = Math.min(0.12, bbw * 2.5); // Increased sensitivity
+                  // Scale BBW bonus by ADX strength for weak trends
+                  // High volatility doesn't necessarily mean strong trend - could be volatile ranging
+                  if (adx !== undefined && adx < 25) {
+                      const adxScale = Math.max(0.3, adx / 25); // Scale from 30% to 100%
+                      confidence += bbwConfidence * adxScale;
+                  } else {
+                      confidence += bbwConfidence;
+                  }
+              } else {
+                  // Low BBW suggests ranging, not trending
+                  confidence -= Math.min(0.1, (0.04 - bbw) * 2);
+              }
           }
-      } else {
-          // console.log(`[regime_debug] ⚠️ BBW data not available`);
+      }
+
+      // Price position relative to MAs - additional confirmation
+      if (ema !== undefined && sma !== undefined && this.klines[index]) {
+          const currentPrice = this.klines[index].close;
+          if (regime === 'ranging') {
+              // Price between MAs supports ranging
+              if (currentPrice > Math.min(ema, sma) && currentPrice < Math.max(ema, sma)) {
+                  confidence += 0.08;
+              }
+          } else if (regime === 'uptrend') {
+              // Price above both MAs supports uptrend
+              if (currentPrice > ema && currentPrice > sma) {
+                  const priceBonus = 0.1;
+                  // Scale price position bonus by ADX strength for weak trends
+                  // Price position alone doesn't confirm trend strength
+                  if (adx !== undefined && adx < 25) {
+                      const adxScale = Math.max(0.5, adx / 25); // Scale from 50% to 100%
+                      confidence += priceBonus * adxScale;
+                  } else {
+                      confidence += priceBonus;
+                  }
+              }
+          } else if (regime === 'downtrend') {
+              // Price below both MAs supports downtrend
+              if (currentPrice < ema && currentPrice < sma) {
+                  const priceBonus = 0.1;
+                  // Scale price position bonus by ADX strength for weak trends
+                  // Price position alone doesn't confirm trend strength
+                  if (adx !== undefined && adx < 25) {
+                      const adxScale = Math.max(0.5, adx / 25); // Scale from 50% to 100%
+                      confidence += priceBonus * adxScale;
+                  } else {
+                      confidence += priceBonus;
+                  }
+              }
+          }
       }
 
       // Ensure confidence stays within bounds
-      confidence = Math.max(0.1, Math.min(1.0, confidence));
-      
-      // console.log(`[regime_debug] 🎯 Final confidence: ${(confidence * 100).toFixed(1)}%`);
+      confidence = Math.max(0.15, Math.min(0.95, confidence)); // Wider range, more dynamic
       
       return confidence;
   }
@@ -398,7 +523,26 @@ class MarketRegimeDetector {
 
     try {
         const regime = this._detectRegime(targetIndex);
-        const confidence = this._calculateConfidence(regime); // This confidence is 0-1, will be converted to 0-100 for storage/return
+        const confidence = this._calculateConfidence(regime, targetIndex); // Use same index for consistency
+
+        // Log regime detection values (sampled: first 3, then every 1000th)
+        if (!this._regimeDetectionLogCount) {
+          this._regimeDetectionLogCount = 0;
+        }
+        this._regimeDetectionLogCount++;
+        const shouldLog = this._regimeDetectionLogCount <= 3 || this._regimeDetectionLogCount % 1000 === 0;
+        
+        if (shouldLog) {
+          const adxData = this._getValueAt('adx', targetIndex);
+          const adx = adxData?.ADX;
+          const rsi = this._getValueAt('rsi', targetIndex);
+          const ema = this._getValueAt('ema', targetIndex);
+          const sma = this._getValueAt('ma200', targetIndex) || this._getValueAt('sma', targetIndex);
+          const bbw = this._getValueAt('bbw', targetIndex);
+          const currentPrice = this.klines[targetIndex]?.close;
+          
+          //console.log(`[REGIME_DETECTION] Regime: ${regime}, Confidence: ${(confidence * 100).toFixed(1)}%, ADX: ${adx?.toFixed(2) || 'N/A'}, RSI: ${rsi?.toFixed(2) || 'N/A'}, Price: ${currentPrice?.toFixed(2) || 'N/A'}, EMA: ${ema?.toFixed(2) || 'N/A'}, SMA: ${sma?.toFixed(2) || 'N/A'}, BBW: ${bbw?.toFixed(4) || 'N/A'}`);
+        }
 
         // Update regime history (adapting existing logic)
         this.regimeHistory.push({

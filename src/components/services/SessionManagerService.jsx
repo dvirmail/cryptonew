@@ -375,6 +375,8 @@ export default class SessionManagerService {
         
         if (hasLeadership) {
           this.addLog('[SESSION] ✅ Session recovery successful - leadership maintained', 'success');
+          // Resume scanning if scanner was running before recovery
+          await this._resumeScanningAfterRecovery();
           return true;
         }
         
@@ -384,6 +386,8 @@ export default class SessionManagerService {
         
         if (startResult) {
           this.addLog('[SESSION] ✅ Session recovery successful - new session started', 'success');
+          // Resume scanning if scanner was running before recovery
+          await this._resumeScanningAfterRecovery();
           return true;
         } else {
           this.addLog(`[SESSION] ⚠️ Recovery attempt ${attempt} failed - retrying...`, 'warning');
@@ -408,6 +412,51 @@ export default class SessionManagerService {
     
     this.addLog('[SESSION] ❌ Session recovery failed after all retries', 'error');
     return false;
+  }
+
+  /**
+   * Resumes scanning after successful session recovery.
+   * Checks if scanner was running and restarts the scan loop if needed.
+   */
+  async _resumeScanningAfterRecovery() {
+    try {
+      // Check if scanner should be running
+      if (!this.scannerService.state.isRunning) {
+        this.addLog('[SESSION] ⏸️ Scanner not in running state - skipping scan resume', 'system');
+        return;
+      }
+
+      // Check if scanner is already scanning
+      if (this.scannerService.state.isScanning) {
+        this.addLog('[SESSION] ⏸️ Scanner already scanning - skipping scan resume', 'system');
+        return;
+      }
+
+      // Check if there's already an active countdown
+      const hasActiveCountdown = this.scannerService.lifecycleService.countdownInterval !== null;
+      const hasNextScanTime = this.scannerService.state.nextScanTime !== null && 
+                              this.scannerService.state.nextScanTime > Date.now();
+
+      if (hasActiveCountdown || hasNextScanTime) {
+        this.addLog('[SESSION] ⏸️ Scan countdown already active - skipping scan resume', 'system');
+        return;
+      }
+
+      // Resume scanning by restarting the countdown or triggering immediate scan
+      this.addLog('[SESSION] 🔄 Resuming scan loop after recovery...', 'system');
+      
+      // Option 1: Start countdown (preferred - respects scan frequency)
+      // This will schedule the next scan according to the scan frequency setting
+      this.scannerService._startCountdown();
+      this.addLog('[SESSION] ✅ Scan countdown restarted after recovery', 'success');
+      
+      // Option 2: Trigger immediate scan (alternative - if you want to scan immediately)
+      // Uncomment the line below if you prefer immediate scanning after recovery
+      // await this.scannerService.scanEngineService.scanCycle();
+    } catch (error) {
+      this.addLog(`[SESSION] ❌ Error resuming scan loop: ${error.message}`, 'error');
+      console.error('[SESSION] Error resuming scan loop after recovery:', error);
+    }
   }
 
   startMonitoring() {

@@ -8,7 +8,8 @@ import { debounce } from 'lodash';
 import { liveTradingAPI } from '@/api/functions';
 import { Trade, LivePosition } from '@/api/entities';
 import { updatePerformanceSnapshot } from '@/api/functions';
-import { getBinancePrices } from '@/api/functions';
+import priceCacheService from '@/components/services/PriceCacheService';
+import { getBinancePrices, getKlineData } from '@/api/functions';
 import { generateTradeId } from '@/components/utils/id';
 import * as dynamicSizing from "@/components/utils/dynamicPositionSizing";
 import { reconcileWalletState, walletReconciliation, purgeGhostPositions } from '@/api/functions';
@@ -684,9 +685,12 @@ export default class PositionManager {
         let fetchedLivePositions = [];
         try {
             console.log('[PositionManager] 🔍 Loading positions using LivePosition entity...');
+            // CRITICAL FIX: Include status filter to only get open/trailing positions
+            // This matches the filter used by CentralWalletStateManager
             fetchedLivePositions = await LivePosition.filter({
                     wallet_id: actualWalletId,
-                    trading_mode: resolvedMode
+                    trading_mode: resolvedMode,
+                    status: ['open', 'trailing']  // Only get active positions
             });
             
             console.log('[PositionManager] 🔍 LivePosition.filter result:', {
@@ -774,8 +778,33 @@ export default class PositionManager {
                         wallet_id: dbPos.wallet_id, // IMPORTANT: Preserve wallet_id
                         trading_mode: dbPos.trading_mode, // IMPORTANT: Preserve trading_mode
                         created_date: dbPos.created_date || dbPos.entry_timestamp || new Date().toISOString(),
-                        last_updated_timestamp: dbPos.last_updated_timestamp || new Date().toISOString()
+                        last_updated_timestamp: dbPos.last_updated_timestamp || new Date().toISOString(),
+                        // Include new analytics fields for complete data preservation
+                        volatility_at_open: dbPos.volatility_at_open,
+                        volatility_label_at_open: dbPos.volatility_label_at_open,
+                        regime_impact_on_strength: dbPos.regime_impact_on_strength,
+                        correlation_impact_on_strength: dbPos.correlation_impact_on_strength,
+                        effective_balance_risk_at_open: dbPos.effective_balance_risk_at_open,
+                        btc_price_at_open: dbPos.btc_price_at_open,
+                        exit_time: dbPos.exit_time,
+                        // NEW: Entry quality metrics
+                        entry_near_support: dbPos.entry_near_support !== undefined ? dbPos.entry_near_support : null,
+                        entry_near_resistance: dbPos.entry_near_resistance !== undefined ? dbPos.entry_near_resistance : null,
+                        entry_distance_to_support_percent: dbPos.entry_distance_to_support_percent,
+                        entry_distance_to_resistance_percent: dbPos.entry_distance_to_resistance_percent,
+                        entry_momentum_score: dbPos.entry_momentum_score,
+                        entry_relative_to_day_high_percent: dbPos.entry_relative_to_day_high_percent,
+                        entry_relative_to_day_low_percent: dbPos.entry_relative_to_day_low_percent,
+                        entry_volume_vs_average: dbPos.entry_volume_vs_average,
+                        entry_fill_time_ms: dbPos.entry_fill_time_ms !== undefined && dbPos.entry_fill_time_ms !== null ? parseInt(dbPos.entry_fill_time_ms, 10) : null
                     };
+
+                    // Log entry_fill_time_ms loading for debugging
+                    if (dbPos.entry_fill_time_ms !== undefined && dbPos.entry_fill_time_ms !== null) {
+                        console.log(`[PositionManager] ✅ Loaded entry_fill_time_ms from DB for ${dbPos.symbol}: ${dbPos.entry_fill_time_ms} ms`);
+                    } else if (dbPos.entry_fill_time_ms === null || dbPos.entry_fill_time_ms === undefined) {
+                        console.log(`[PositionManager] ⚠️ entry_fill_time_ms is NULL/undefined in DB for ${dbPos.symbol} (position may have been created before this field was added)`);
+                    }
 
                     // Log any data issues for debugging
                     if (!dbPos.symbol || !dbPos.strategy_name || !dbPos.quantity_crypto) {
@@ -1427,13 +1456,119 @@ export default class PositionManager {
                     
                     totalUnrealized += unrealizedPnl;
                 } else {
-                    console.log(`[PositionManager] ⚠️ No current price for ${position.symbol} (${symbolNoSlash}) - P&L calculation skipped`);
+                    console.error(`[PositionManager] ⚠️ No current price for ${position.symbol} (${symbolNoSlash}) - P&L calculation skipped`);
                 }
             }
         });
 
         console.log(`[PositionManager] 📊 Total Unrealized P&L: $${totalUnrealized.toFixed(2)} (${this.positions.length} positions)`);
         return totalUnrealized;
+    }
+
+    /**
+     * Update all open positions with current prices and calculate unrealized P&L
+     * This ensures the database always has up-to-date price and P&L information
+     * @param {Object} currentPrices - Map of symbol (without /) to current price
+     */
+    async updatePositionsWithCurrentPrices(currentPrices = null) {
+        try {
+            // Use provided prices or fallback to scanner service prices
+            const prices = currentPrices || this.scannerService?.currentPrices || {};
+            
+            if (!prices || Object.keys(prices).length === 0) {
+                console.warn('[PositionManager] ⚠️ No current prices available for position updates');
+                return;
+            }
+
+            const openPositions = this.positions.filter(p => 
+                p.status === 'open' || p.status === 'trailing'
+            );
+
+            if (openPositions.length === 0) {
+                return;
+            }
+
+            console.log(`[PositionManager] 🔄 Updating ${openPositions.length} positions with current prices and P&L`);
+
+            const COMMISSION_RATE = 0.001; // 0.1% commission
+            const updatePromises = [];
+
+            for (const position of openPositions) {
+                const symbolNoSlash = (position.symbol || '').replace('/', '');
+                const currentPrice = prices[symbolNoSlash];
+
+                if (!currentPrice || typeof currentPrice !== 'number' || currentPrice <= 0) {
+                    // Try to fetch fresh price if not in cache
+                    if (this.scannerService?.priceManagerService) {
+                        try {
+                            const freshPrice = await this.scannerService.priceManagerService.getFreshCurrentPrice(position.symbol);
+                            if (freshPrice && freshPrice > 0) {
+                                prices[symbolNoSlash] = freshPrice;
+                                // Continue with fresh price
+                            } else {
+                                console.warn(`[PositionManager] ⚠️ No valid price for ${position.symbol}, skipping update`);
+                                continue;
+                            }
+                        } catch (err) {
+                            console.warn(`[PositionManager] ⚠️ Failed to fetch price for ${position.symbol}:`, err.message);
+                            continue;
+                        }
+                    } else {
+                        console.warn(`[PositionManager] ⚠️ No price available for ${position.symbol}, skipping update`);
+                        continue;
+                    }
+                }
+
+                const entryPrice = Number(position.entry_price || 0);
+                const quantityCrypto = Number(position.quantity_crypto || 0);
+                const entryValueUsdt = Number(position.entry_value_usdt || 0);
+                const finalCurrentPrice = prices[symbolNoSlash];
+
+                if (entryPrice <= 0 || quantityCrypto <= 0) {
+                    console.warn(`[PositionManager] ⚠️ Invalid entry data for ${position.symbol}, skipping update`);
+                    continue;
+                }
+
+                // Calculate unrealized P&L (gross, before fees)
+                const grossPnl = position.direction === 'long'
+                    ? (finalCurrentPrice - entryPrice) * quantityCrypto
+                    : (entryPrice - finalCurrentPrice) * quantityCrypto;
+
+                // Calculate estimated exit fees (entry fees already paid, so only subtract exit fees)
+                const exitValueUsdt = finalCurrentPrice * quantityCrypto;
+                const exitFees = exitValueUsdt * COMMISSION_RATE;
+
+                // Net unrealized P&L (gross P&L minus estimated exit fees)
+                // Entry fees are already accounted for in entry_value_usdt
+                const unrealizedPnl = grossPnl - exitFees;
+
+                // Update position in memory
+                position.current_price = finalCurrentPrice;
+                position.unrealized_pnl = unrealizedPnl;
+                position.last_price_update = new Date().toISOString();
+
+                // Update in database
+                const updatePromise = queueEntityCall('LivePosition', 'update', position.id, {
+                    current_price: finalCurrentPrice,
+                    unrealized_pnl: unrealizedPnl,
+                    last_price_update: new Date().toISOString(),
+                    updated_date: new Date().toISOString()
+                }).catch(err => {
+                    console.error(`[PositionManager] ❌ Failed to update position ${position.id} (${position.symbol}):`, err.message);
+                });
+
+                updatePromises.push(updatePromise);
+            }
+
+            // Wait for all updates to complete
+            await Promise.allSettled(updatePromises);
+            
+            const successCount = updatePromises.length;
+            console.log(`[PositionManager] ✅ Updated ${successCount} positions with current prices and P&L`);
+
+        } catch (error) {
+            console.error('[PositionManager] ❌ Error updating positions with current prices:', error);
+        }
     }
 
 
@@ -1489,31 +1624,73 @@ export default class PositionManager {
      * @returns {number} Exit time in hours
      */
     calculateExitTimeFromStrategy(combination, currentPrice) {
-        console.log('[PositionManager] 🕐 Calculating exit time from strategy:', {
-            combination: combination,
-            currentPrice: currentPrice
+        // Commented out to reduce console flooding
+        /*
+        console.log('[PositionManager] 🕐 ========================================');
+        console.log('[PositionManager] 🕐 CALCULATING EXIT TIME FROM STRATEGY');
+        console.log('[PositionManager] 🕐 ========================================');
+        console.log('[PositionManager] 🕐 Combination Object:', {
+            combinationName: combination?.combinationName || combination?.combination_name || 'N/A',
+            coin: combination?.coin || 'N/A',
+            timeframe: combination?.timeframe || 'N/A',
+            strategyDirection: combination?.strategyDirection || combination?.strategy_direction || 'N/A',
+            estimatedExitTimeMinutes: combination?.estimatedExitTimeMinutes,
+            estimated_exit_time_minutes: combination?.estimated_exit_time_minutes,
+            successRate: combination?.successRate || combination?.success_rate,
+            occurrences: combination?.occurrences,
+            allKeys: Object.keys(combination || {})
         });
+        console.log('[PositionManager] 🕐 Current Price:', currentPrice);
+        */
         
         try {
             // Get estimatedExitTimeMinutes from BacktestCombination
-            const estimatedExitTimeMinutes = combination.estimatedExitTimeMinutes || combination.estimated_exit_time_minutes;
+            const estimatedExitTimeMinutes = combination?.estimatedExitTimeMinutes || combination?.estimated_exit_time_minutes;
+            
+            /*
+            console.log('[PositionManager] 🕐 Exit Time Value Check:');
+            console.log(`  - combination.estimatedExitTimeMinutes: ${combination?.estimatedExitTimeMinutes}`);
+            console.log(`  - combination.estimated_exit_time_minutes: ${combination?.estimated_exit_time_minutes}`);
+            console.log(`  - Final selected value: ${estimatedExitTimeMinutes}`);
+            console.log(`  - Type: ${typeof estimatedExitTimeMinutes}`);
+            console.log(`  - Is valid number: ${estimatedExitTimeMinutes && typeof estimatedExitTimeMinutes === 'number' && estimatedExitTimeMinutes > 0}`);
+            */
             
             if (estimatedExitTimeMinutes && typeof estimatedExitTimeMinutes === 'number' && estimatedExitTimeMinutes > 0) {
                 // Convert minutes to hours
                 const exitTimeHours = estimatedExitTimeMinutes / 60;
-                console.log('[PositionManager] 🕐 Strategy exit time calculated:', {
-                    estimatedExitTimeMinutes: estimatedExitTimeMinutes,
-                    exitTimeHours: exitTimeHours,
-                    source: 'BacktestCombination.estimatedExitTimeMinutes'
-                });
+                /*
+                console.log('[PositionManager] 🕐 ✅ Strategy exit time calculated:');
+                console.log(`  - Estimated Exit Time (Minutes): ${estimatedExitTimeMinutes} minutes`);
+                console.log(`  - Exit Time (Hours): ${exitTimeHours} hours`);
+                console.log(`  - Calculation: ${estimatedExitTimeMinutes} minutes ÷ 60 = ${exitTimeHours} hours`);
+                console.log(`  - Source: BacktestCombination.estimatedExitTimeMinutes`);
+                console.log(`  - Strategy: ${combination?.combinationName || combination?.combination_name || 'Unknown'}`);
+                console.log(`  - Coin: ${combination?.coin || 'N/A'}`);
+                console.log(`  - Timeframe: ${combination?.timeframe || 'N/A'}`);
+                if (combination?.successRate !== undefined) {
+                    console.log(`  - Success Rate: ${combination.successRate}%`);
+                }
+                if (combination?.occurrences !== undefined) {
+                    console.log(`  - Occurrences: ${combination.occurrences}`);
+                }
+                console.log('[PositionManager] 🕐 ========================================');
+                */
                 return exitTimeHours;
             } else {
                 // Fallback to default if no strategy-specific exit time
-                console.log('[PositionManager] ⚠️ No strategy exit time found, using default 24 hours');
+                // Commented out to reduce console flooding
+                /*
+                console.log('[PositionManager] 🕐 ⚠️ No strategy exit time found, using default 24 hours');
+                console.log(`  - Reason: ${!estimatedExitTimeMinutes ? 'Value is null/undefined' : typeof estimatedExitTimeMinutes !== 'number' ? 'Value is not a number' : estimatedExitTimeMinutes <= 0 ? 'Value is <= 0' : 'Unknown'}`);
+                console.log('[PositionManager] 🕐 ========================================');
+                */
                 return 24; // Default 24 hours
             }
         } catch (error) {
-            console.error('[PositionManager] ❌ Error calculating exit time from strategy:', error);
+            console.error('[PositionManager] 🕐 ❌ Error calculating exit time from strategy:', error);
+            console.error('[PositionManager] 🕐 Error stack:', error.stack);
+            console.log('[PositionManager] 🕐 ========================================');
             return 24; // Default 24 hours on error
         }
     }
@@ -1751,12 +1928,24 @@ export default class PositionManager {
      * This is the main function responsible for storing closed trades according to the schema
      */
     async processClosedTrade(livePosition, exitDetails) {
-        //console.log('[debug_closedTrade] ⚡⚡ PROCESS CLOSED TRADE - VERSION 3.1 - TIMESTAMP:', new Date().toISOString());
+        console.log('[PositionManager] 🔄 processClosedTrade called for:', livePosition?.symbol || 'UNKNOWN');
+        console.log('[PositionManager] 🔄 exitDetails:', {
+            exit_price: exitDetails?.exit_price,
+            exit_timestamp: exitDetails?.exit_timestamp,
+            duration_hours: exitDetails?.duration_hours,
+            duration_seconds: exitDetails?.duration_seconds,
+            exit_reason: exitDetails?.exit_reason
+        });
+        console.log('[PositionManager] 🔄 livePosition:', {
+            position_id: livePosition?.position_id,
+            symbol: livePosition?.symbol,
+            id: livePosition?.id
+        });
         
         // CRITICAL FIX: Check if this trade has already been processed to prevent duplicates
         const tradeId = livePosition?.position_id;
         if (this.processedTradeIds && this.processedTradeIds.has(tradeId)) {
-            //console.log('[debug_closedTrade] ⚠️ DUPLICATE PREVENTION: Trade already processed:', tradeId);
+            console.log('[PositionManager] ⚠️ DUPLICATE PREVENTION: Trade already processed:', tradeId);
             return {
                 success: false,
                 error: 'Trade already processed',
@@ -1793,7 +1982,7 @@ export default class PositionManager {
         
         // 🔍 DEBUG: Log analytics fields from livePosition
         try {
-            console.log('🔍 [PositionManager] Analytics fields from livePosition:', {
+        console.log('🔍 [PositionManager] Analytics fields from livePosition:', {
             position_id: livePosition?.position_id,
             fear_greed_score: livePosition?.fear_greed_score,
             fear_greed_classification: livePosition?.fear_greed_classification,
@@ -1823,19 +2012,87 @@ export default class PositionManager {
         }*/
     
         // 🧩 Now start main logic
+        console.log('[PositionManager] 🔄 STEP 1: About to enter main try block');
         try {
-            //console.log('[debug_closedTrade] 🔄 STEP 1: Entered main try block — beginning trade record construction');
-            //console.log('[debug_closedTrade] 🔄 STEP 1: UNIQUE TRACE ID:', Date.now());
+            //console.log('[debug_save] STEP 1: Entered main try block — beginning trade record construction');
+            //console.log('[PositionManager] 🔄 STEP 1: UNIQUE TRACE ID:', Date.now());
     
             // Defensive checks
-            //console.log('[debug_closedTrade] 🔍 STEP 1.5: Checking key properties...');
-            if (!livePosition?.position_id) console.error('[debug_closedTrade] ❌ Missing livePosition.position_id');
-            if (!livePosition?.strategy_name) console.error('[debug_closedTrade] ❌ Missing livePosition.strategy_name');
-            if (!livePosition?.symbol) console.error('[debug_closedTrade] ❌ Missing livePosition.symbol');
-            if (!exitDetails?.exit_price) console.error('[debug_closedTrade] ❌ Missing exitDetails.exit_price');
-            if (!exitDetails?.exit_value_usdt) console.error('[debug_closedTrade] ❌ Missing exitDetails.exit_value_usdt');
+            console.log('[PositionManager] 🔍 STEP 1.5: Checking key properties...');
+            if (!livePosition?.position_id) {
+                console.error('[PositionManager] ❌ Missing livePosition.position_id');
+            } else {
+                //console.log('[PositionManager] ✅ livePosition.position_id:', livePosition.position_id);
+            }
+            if (!livePosition?.strategy_name) {
+                console.error('[PositionManager] ❌ Missing livePosition.strategy_name');
+            } else {
+                //console.log('[PositionManager] ✅ livePosition.strategy_name:', livePosition.strategy_name);
+            }
+            if (!livePosition?.symbol) {
+                console.error('[PositionManager] ❌ Missing livePosition.symbol');
+            } else {
+                //console.log('[PositionManager] ✅ livePosition.symbol:', livePosition.symbol);
+            }
+            if (!exitDetails?.exit_price) {
+                console.error('[PositionManager] ❌ Missing exitDetails.exit_price');
+            } else {
+                //console.log('[PositionManager] ✅ exitDetails.exit_price:', exitDetails.exit_price);
+            }
+            if (!exitDetails?.exit_value_usdt) {
+                console.error('[PositionManager] ❌ Missing exitDetails.exit_value_usdt');
+            } else {
+                //console.log('[PositionManager] ✅ exitDetails.exit_value_usdt:', exitDetails.exit_value_usdt);
+            }
     
-            //console.log('[debug_closedTrade] 🔄 STEP 2: Constructing Trade payload...');
+            //console.log('[debug_save] STEP 2: Constructing Trade payload...');
+    
+            // ============================================
+            // NEW: Capture exit-time market conditions and metrics
+            // ============================================
+            const exitMarketConditions = await this._captureExitMarketConditions();
+            const exitMetrics = this._calculateExitMetrics(livePosition, exitDetails, exitMarketConditions);
+            
+            // ============================================
+            // NEW: Get strategy context and trade history context
+            // ============================================
+            const strategyContext = await this._getStrategyContextAtEntry(livePosition.strategy_name, livePosition.symbol);
+            const tradeHistoryContext = await this._getTradeHistoryContext(livePosition.strategy_name, livePosition.symbol, livePosition.entry_timestamp);
+            
+            // 🔍 DEBUG: Log exit market conditions and metrics
+            // Commented out to reduce console flooding
+            /*
+            console.log('='.repeat(80));
+            console.log('[PositionManager] 📊 EXIT ANALYTICS DATA CAPTURED');
+            console.log('='.repeat(80));
+            console.log('[Exit Analytics] Exit Market Conditions:');
+            console.log(`  - Market Regime: ${exitMarketConditions.market_regime || 'N/A'}`);
+            console.log(`  - Regime Confidence: ${exitMarketConditions.regime_confidence !== null && exitMarketConditions.regime_confidence !== undefined ? exitMarketConditions.regime_confidence.toFixed(2) : 'N/A'}`);
+            console.log(`  - Fear & Greed Score: ${exitMarketConditions.fear_greed_score !== null && exitMarketConditions.fear_greed_score !== undefined ? exitMarketConditions.fear_greed_score : 'N/A'}`);
+            console.log(`  - Fear & Greed Classification: ${exitMarketConditions.fear_greed_classification || 'N/A'}`);
+            console.log(`  - Volatility Score: ${exitMarketConditions.volatility_score !== null && exitMarketConditions.volatility_score !== undefined ? exitMarketConditions.volatility_score.toFixed(2) : 'N/A'}`);
+            console.log(`  - Volatility Label: ${exitMarketConditions.volatility_label || 'N/A'}`);
+            console.log(`  - BTC Price: ${exitMarketConditions.btc_price !== null && exitMarketConditions.btc_price !== undefined ? '$' + parseFloat(exitMarketConditions.btc_price).toFixed(2) : 'N/A'}`);
+            console.log(`  - LPM Score: ${exitMarketConditions.lpm_score !== null && exitMarketConditions.lpm_score !== undefined ? exitMarketConditions.lpm_score.toFixed(2) : 'N/A'}`);
+            console.log('');
+            console.log('[Exit Analytics] Exit Metrics:');
+            console.log(`  - Max Favorable Excursion (MFE): ${exitMetrics.max_favorable_excursion !== null && exitMetrics.max_favorable_excursion !== undefined ? exitMetrics.max_favorable_excursion.toFixed(8) : 'N/A'}`);
+            console.log(`  - Max Adverse Excursion (MAE): ${exitMetrics.max_adverse_excursion !== null && exitMetrics.max_adverse_excursion !== undefined ? exitMetrics.max_adverse_excursion.toFixed(8) : 'N/A'}`);
+            console.log(`  - Peak Profit (USDT): ${exitMetrics.peak_profit_usdt !== null && exitMetrics.peak_profit_usdt !== undefined ? '$' + exitMetrics.peak_profit_usdt.toFixed(4) : 'N/A'}`);
+            console.log(`  - Peak Loss (USDT): ${exitMetrics.peak_loss_usdt !== null && exitMetrics.peak_loss_usdt !== undefined ? '$' + exitMetrics.peak_loss_usdt.toFixed(4) : 'N/A'}`);
+            console.log(`  - Peak Profit (%): ${exitMetrics.peak_profit_percent !== null && exitMetrics.peak_profit_percent !== undefined ? exitMetrics.peak_profit_percent.toFixed(2) + '%' : 'N/A'}`);
+            console.log(`  - Peak Loss (%): ${exitMetrics.peak_loss_percent !== null && exitMetrics.peak_loss_percent !== undefined ? exitMetrics.peak_loss_percent.toFixed(2) + '%' : 'N/A'}`);
+            console.log(`  - Price Movement (%): ${exitMetrics.price_movement_percent !== null && exitMetrics.price_movement_percent !== undefined ? exitMetrics.price_movement_percent.toFixed(2) + '%' : 'N/A'}`);
+            console.log(`  - Distance to SL at Exit: ${exitMetrics.distance_to_sl_at_exit !== null && exitMetrics.distance_to_sl_at_exit !== undefined ? exitMetrics.distance_to_sl_at_exit.toFixed(2) + '%' : 'N/A'}`);
+            console.log(`  - Distance to TP at Exit: ${exitMetrics.distance_to_tp_at_exit !== null && exitMetrics.distance_to_tp_at_exit !== undefined ? exitMetrics.distance_to_tp_at_exit.toFixed(2) + '%' : 'N/A'}`);
+            console.log(`  - SL Hit: ${exitMetrics.sl_hit_boolean !== null && exitMetrics.sl_hit_boolean !== undefined ? (exitMetrics.sl_hit_boolean ? 'YES' : 'NO') : 'N/A'}`);
+            console.log(`  - TP Hit: ${exitMetrics.tp_hit_boolean !== null && exitMetrics.tp_hit_boolean !== undefined ? (exitMetrics.tp_hit_boolean ? 'YES' : 'NO') : 'N/A'}`);
+            console.log(`  - Exit vs Planned Exit Time (minutes): ${exitMetrics.exit_vs_planned_exit_time_minutes !== null && exitMetrics.exit_vs_planned_exit_time_minutes !== undefined ? exitMetrics.exit_vs_planned_exit_time_minutes : 'N/A'}`);
+            console.log(`  - Time in Profit (hours): ${exitMetrics.time_in_profit_hours !== null && exitMetrics.time_in_profit_hours !== undefined ? exitMetrics.time_in_profit_hours.toFixed(2) : 'N/A'}`);
+            console.log(`  - Time in Loss (hours): ${exitMetrics.time_in_loss_hours !== null && exitMetrics.time_in_loss_hours !== undefined ? exitMetrics.time_in_loss_hours.toFixed(2) : 'N/A'}`);
+            console.log('='.repeat(80));
+            console.log('');
+            */
     
             let newTradeRecord;
             try {
@@ -1843,6 +2100,7 @@ export default class PositionManager {
                 newTradeRecord = {
                     // Copy data from livePosition
                     trade_id: livePosition.position_id,
+                    position_id: livePosition.position_id, // CRITICAL: Required for duplicate detection in saveTradeToDB
                     strategy_name: livePosition.strategy_name,
                     symbol: livePosition.symbol,
                     direction: livePosition.direction,
@@ -1864,6 +2122,17 @@ export default class PositionManager {
                     fear_greed_score: livePosition.fear_greed_score,
                     fear_greed_classification: livePosition.fear_greed_classification,
                     lpm_score: livePosition.lpm_score,
+                    
+                    // NEW: Include position opening analytics in trade record
+                    stop_loss_price: livePosition.stop_loss_price,
+                    take_profit_price: livePosition.take_profit_price,
+                    volatility_at_open: livePosition.volatility_at_open,
+                    volatility_label_at_open: livePosition.volatility_label_at_open,
+                    regime_impact_on_strength: livePosition.regime_impact_on_strength,
+                    correlation_impact_on_strength: livePosition.correlation_impact_on_strength,
+                    effective_balance_risk_at_open: livePosition.effective_balance_risk_at_open,
+                    btc_price_at_open: livePosition.btc_price_at_open,
+                    exit_time: livePosition.exit_time, // Include calculated exit time from position opening
     
                     // Add data from exitDetails
                     exit_price: exitDetails.exit_price,
@@ -1871,52 +2140,269 @@ export default class PositionManager {
                     pnl_usdt: exitDetails.pnl_usdt,
                     pnl_percentage: exitDetails.pnl_percentage,
                     exit_timestamp: exitDetails.exit_timestamp,
-                    duration_seconds: exitDetails.duration_seconds,
-                    exit_reason: exitDetails.exit_reason,
+                    duration_hours: exitDetails.duration_hours, // Store duration in hours (decimal)
+                    duration_seconds: exitDetails.duration_hours ? Math.round(exitDetails.duration_hours * 3600) : 0, // Also store seconds for backwards compatibility
+                    exit_reason: exitDetails.exit_reason || 'timeout', // Ensure exit_reason is always set
     
                     // Calculate fees (assuming 0.1% trading fee)
-                    total_fees_usdt: (livePosition.entry_value_usdt + exitDetails.exit_value_usdt) * 0.001,
-                    commission_migrated: true
+                    total_fees_usdt: exitDetails.total_fees_usdt !== undefined 
+                        ? exitDetails.total_fees_usdt 
+                        : (livePosition.entry_value_usdt + exitDetails.exit_value_usdt) * 0.001,
+                    commission_migrated: true,
+                    
+                    // ============================================
+                    // NEW: Exit-time market conditions (Priority 1)
+                    // ============================================
+                    market_regime_at_exit: exitMarketConditions.market_regime,
+                    regime_confidence_at_exit: exitMarketConditions.regime_confidence,
+                    fear_greed_score_at_exit: exitMarketConditions.fear_greed_score,
+                    fear_greed_classification_at_exit: exitMarketConditions.fear_greed_classification,
+                    volatility_at_exit: exitMarketConditions.volatility_score,
+                    volatility_label_at_exit: exitMarketConditions.volatility_label,
+                    btc_price_at_exit: exitMarketConditions.btc_price,
+                    lpm_score_at_exit: exitMarketConditions.lpm_score,
+                    
+                    // ============================================
+                    // NEW: Price movement metrics - MFE/MAE (Priority 1)
+                    // ============================================
+                    max_favorable_excursion: exitMetrics.max_favorable_excursion,
+                    max_adverse_excursion: exitMetrics.max_adverse_excursion,
+                    peak_profit_usdt: exitMetrics.peak_profit_usdt,
+                    peak_loss_usdt: exitMetrics.peak_loss_usdt,
+                    peak_profit_percent: exitMetrics.peak_profit_percent,
+                    peak_loss_percent: exitMetrics.peak_loss_percent,
+                    price_movement_percent: exitMetrics.price_movement_percent,
+                    
+                    // ============================================
+                    // NEW: Exit quality metrics (Priority 1)
+                    // ============================================
+                    distance_to_sl_at_exit: exitMetrics.distance_to_sl_at_exit,
+                    distance_to_tp_at_exit: exitMetrics.distance_to_tp_at_exit,
+                    sl_hit_boolean: exitMetrics.sl_hit_boolean,
+                    tp_hit_boolean: exitMetrics.tp_hit_boolean,
+                    exit_vs_planned_exit_time_minutes: exitMetrics.exit_vs_planned_exit_time_minutes,
+                    
+                    // ============================================
+                    // NEW: Slippage tracking (Priority 2)
+                    // ============================================
+                    slippage_entry: exitMetrics.slippage_entry,
+                    slippage_exit: exitMetrics.slippage_exit,
+                    
+                    // ============================================
+                    // NEW: Trade lifecycle metrics (Priority 2)
+                    // ============================================
+                    time_in_profit_hours: exitMetrics.time_in_profit_hours,
+                    time_in_loss_hours: exitMetrics.time_in_loss_hours,
+                    time_at_peak_profit: exitMetrics.time_at_peak_profit,
+                    time_at_max_loss: exitMetrics.time_at_max_loss,
+                    regime_changes_during_trade: exitMetrics.regime_changes_during_trade,
+                    
+                    // ============================================
+                    // NEW: Order execution metrics (Priority 3)
+                    // ============================================
+                    entry_order_type: exitMetrics.entry_order_type,
+                    exit_order_type: exitMetrics.exit_order_type,
+                    entry_order_id: livePosition.binance_order_id || null,
+                    exit_order_id: exitDetails.exit_order_id || null,
+                    entry_fill_time_ms: exitMetrics.entry_fill_time_ms,
+                    exit_fill_time_ms: exitMetrics.exit_fill_time_ms,
+                    
+                    // ============================================
+                    // NEW: Strategy context metrics (Priority 3)
+                    // ============================================
+                    strategy_win_rate_at_entry: strategyContext.winRate !== null ? parseFloat(strategyContext.winRate) : null,
+                    strategy_occurrences_at_entry: strategyContext.occurrences !== null ? parseInt(strategyContext.occurrences, 10) : null,
+                    similar_trades_count: tradeHistoryContext.similarTradesCount !== null ? parseInt(tradeHistoryContext.similarTradesCount, 10) : null,
+                    consecutive_wins_before: tradeHistoryContext.consecutiveWinsBefore !== null ? parseInt(tradeHistoryContext.consecutiveWinsBefore, 10) : null,
+                    consecutive_losses_before: tradeHistoryContext.consecutiveLossesBefore !== null ? parseInt(tradeHistoryContext.consecutiveLossesBefore, 10) : null,
+                    
+                    // ============================================
+                    // NEW: Entry quality metrics (Priority 1)
+                    // ============================================
+                    entry_near_support: livePosition.entry_near_support !== undefined ? livePosition.entry_near_support : null,
+                    entry_near_resistance: livePosition.entry_near_resistance !== undefined ? livePosition.entry_near_resistance : null,
+                    entry_distance_to_support_percent: livePosition.entry_distance_to_support_percent !== undefined && livePosition.entry_distance_to_support_percent !== null ? parseFloat(livePosition.entry_distance_to_support_percent) : null,
+                    entry_distance_to_resistance_percent: livePosition.entry_distance_to_resistance_percent !== undefined && livePosition.entry_distance_to_resistance_percent !== null ? parseFloat(livePosition.entry_distance_to_resistance_percent) : null,
+                    entry_momentum_score: livePosition.entry_momentum_score !== undefined && livePosition.entry_momentum_score !== null ? parseFloat(livePosition.entry_momentum_score) : null,
+                    entry_relative_to_day_high_percent: livePosition.entry_relative_to_day_high_percent !== undefined && livePosition.entry_relative_to_day_high_percent !== null ? parseFloat(livePosition.entry_relative_to_day_high_percent) : null,
+                    entry_relative_to_day_low_percent: livePosition.entry_relative_to_day_low_percent !== undefined && livePosition.entry_relative_to_day_low_percent !== null ? parseFloat(livePosition.entry_relative_to_day_low_percent) : null,
+                    entry_volume_vs_average: livePosition.entry_volume_vs_average !== undefined && livePosition.entry_volume_vs_average !== null ? parseFloat(livePosition.entry_volume_vs_average) : null
                 };
                 //console.log('[debug_closedTrade] ✅ STEP 2.2: Trade object created');
                 
-                // 🔍 DEBUG: Log analytics fields in newTradeRecord before Trade.create
-                console.log('🔍 [PositionManager] Analytics fields in newTradeRecord before Trade.create:', {
-                    trade_id: newTradeRecord.trade_id,
-                    fear_greed_score: newTradeRecord.fear_greed_score,
-                    fear_greed_classification: newTradeRecord.fear_greed_classification,
-                    lpm_score: newTradeRecord.lpm_score,
-                    conviction_breakdown: newTradeRecord.conviction_breakdown,
-                    conviction_multiplier: newTradeRecord.conviction_multiplier,
-                    is_event_driven_strategy: newTradeRecord.is_event_driven_strategy,
-                    market_regime: newTradeRecord.market_regime,
-                    regime_confidence: newTradeRecord.regime_confidence,
-                    atr_value: newTradeRecord.atr_value,
-                    combined_strength: newTradeRecord.combined_strength,
-                    conviction_score: newTradeRecord.conviction_score,
-                    trigger_signals: newTradeRecord.trigger_signals
-                });
+                // 🔍 DEBUG: Log ALL analytics fields from open position being passed to trade record
+                // COMMENTED OUT: Too verbose, flooding console
+                /* 
+                console.log('='.repeat(80));
+                console.log('[PositionManager] 📊 ANALYTICS DATA FROM OPEN POSITION → TRADE RECORD');
+                console.log('='.repeat(80));
+                console.log(`[Analytics] Symbol: ${livePosition.symbol}`);
+                console.log(`[Analytics] Strategy: ${livePosition.strategy_name}`);
+                console.log(`[Analytics] Position ID: ${livePosition.position_id}`);
+                console.log(`[Analytics] Entry Price: $${livePosition.entry_price}`);
+                console.log(`[Analytics] Entry Value: $${livePosition.entry_value_usdt}`);
+                console.log('');
+                console.log('[Analytics] ⛔ Stop Loss & Take Profit:');
+                console.log(`  - Stop Loss Price: ${livePosition.stop_loss_price ? '$' + parseFloat(livePosition.stop_loss_price).toFixed(8) : 'NOT SET'}`);
+                console.log(`  - Take Profit Price: ${livePosition.take_profit_price ? '$' + parseFloat(livePosition.take_profit_price).toFixed(8) : 'NOT SET'}`);
+                if (livePosition.stop_loss_price && livePosition.entry_price) {
+                    const slPercent = ((livePosition.entry_price - parseFloat(livePosition.stop_loss_price)) / livePosition.entry_price * 100).toFixed(2);
+                    console.log(`  - Stop Loss Distance: ${slPercent}% below entry`);
+                }
+                if (livePosition.take_profit_price && livePosition.entry_price) {
+                    const tpPercent = ((parseFloat(livePosition.take_profit_price) - livePosition.entry_price) / livePosition.entry_price * 100).toFixed(2);
+                    console.log(`  - Take Profit Distance: ${tpPercent}% above entry`);
+                }
+                console.log('');
+                console.log('[Analytics] 📈 Volatility at Position Open:');
+                console.log(`  - Volatility Score: ${livePosition.volatility_at_open !== null && livePosition.volatility_at_open !== undefined ? livePosition.volatility_at_open + '/100' : 'NOT AVAILABLE'}`);
+                console.log(`  - Volatility Label: ${livePosition.volatility_label_at_open || 'NOT AVAILABLE'}`);
+                console.log('');
+                console.log('[Analytics] 🎯 Signal Strength Adjustments:');
+                console.log(`  - Regime Impact on Strength: ${livePosition.regime_impact_on_strength !== null && livePosition.regime_impact_on_strength !== undefined ? parseFloat(livePosition.regime_impact_on_strength).toFixed(4) : 'NOT AVAILABLE'}`);
+                console.log(`  - Correlation Impact on Strength: ${livePosition.correlation_impact_on_strength !== null && livePosition.correlation_impact_on_strength !== undefined ? parseFloat(livePosition.correlation_impact_on_strength).toFixed(4) : 'NOT AVAILABLE'}`);
+                console.log(`  - Combined Strength: ${livePosition.combined_strength || 'N/A'}`);
+                console.log('');
+                console.log('[Analytics] 💰 Risk & Market Context:');
+                console.log(`  - Effective Balance Risk (EBR): ${livePosition.effective_balance_risk_at_open !== null && livePosition.effective_balance_risk_at_open !== undefined ? livePosition.effective_balance_risk_at_open + '/100' : 'NOT AVAILABLE'}`);
+                console.log(`  - Bitcoin Price at Open: ${livePosition.btc_price_at_open !== null && livePosition.btc_price_at_open !== undefined ? '$' + parseFloat(livePosition.btc_price_at_open).toFixed(2) : 'NOT AVAILABLE'}`);
+                console.log(`  - Market Regime: ${livePosition.market_regime || 'N/A'} (Confidence: ${livePosition.regime_confidence ? (livePosition.regime_confidence * 100).toFixed(1) + '%' : 'N/A'})`);
+                console.log(`  - Conviction Score: ${livePosition.conviction_score || 'N/A'}`);
+                console.log(`  - ATR Value: ${livePosition.atr_value ? '$' + parseFloat(livePosition.atr_value).toFixed(8) : 'NOT AVAILABLE'}`);
+                console.log('');
+                console.log('[Analytics] ⏰ Exit Time:');
+                console.log(`  - Exit Time (from DB): ${livePosition.exit_time ? new Date(livePosition.exit_time).toISOString() : 'NOT AVAILABLE'}`);
+                console.log(`  - Entry Timestamp: ${livePosition.entry_timestamp || 'N/A'}`);
+                console.log(`  - Time Exit Hours: ${livePosition.time_exit_hours || 'N/A'}`);
+                if (!livePosition.exit_time && livePosition.entry_timestamp && livePosition.time_exit_hours) {
+                    // Calculate what exit_time should be
+                    const entryTimestamp = new Date(livePosition.entry_timestamp);
+                    const exitTimeHours = parseFloat(livePosition.time_exit_hours) || 24;
+                    const calculatedExitTime = new Date(entryTimestamp.getTime() + (exitTimeHours * 60 * 60 * 1000));
+                    console.log(`  - ⚠️ exit_time is missing but can be calculated: ${calculatedExitTime.toISOString()}`);
+                    console.log(`  - ⚠️ This suggests exit_time was not saved when position was created`);
+                }
+                if (livePosition.exit_time) {
+                    const exitTime = new Date(livePosition.exit_time);
+                    const now = new Date();
+                    const timeUntilExit = exitTime.getTime() - now.getTime();
+                    const hoursUntilExit = Math.floor(timeUntilExit / (1000 * 60 * 60));
+                    const minutesUntilExit = Math.floor((timeUntilExit % (1000 * 60 * 60)) / (1000 * 60));
+                    console.log(`  - Exit Time (Local): ${exitTime.toLocaleString()}`);
+                    if (timeUntilExit > 0) {
+                        console.log(`  - Time Until Exit: ${hoursUntilExit}h ${minutesUntilExit}m`);
+                    } else {
+                        console.log(`  - ⚠️ Exit time has already passed (${Math.abs(hoursUntilExit)}h ${Math.abs(minutesUntilExit)}m ago)`);
+                    }
+                }
+                console.log('');
+                console.log('[Analytics] 📊 Additional Context:');
+                console.log(`  - Fear & Greed Score: ${livePosition.fear_greed_score !== null && livePosition.fear_greed_score !== undefined ? livePosition.fear_greed_score + '/100' : 'NOT AVAILABLE'}`);
+                console.log(`  - Fear & Greed Classification: ${livePosition.fear_greed_classification || 'NOT AVAILABLE'}`);
+                console.log(`  - Leading Performance Momentum (LPM): ${livePosition.lpm_score !== null && livePosition.lpm_score !== undefined ? parseFloat(livePosition.lpm_score).toFixed(2) : 'NOT AVAILABLE'}`);
+                console.log(`  - Trigger Signals Count: ${livePosition.trigger_signals?.length || 0}`);
+                if (livePosition.trigger_signals && livePosition.trigger_signals.length > 0) {
+                    console.log(`  - Signal Names: ${livePosition.trigger_signals.slice(0, 5).map(s => s.type || s.value || 'Unknown').join(', ')}${livePosition.trigger_signals.length > 5 ? '...' : ''}`);
+                }
+                console.log('');
+                console.log('[Analytics] ✅ All analytics fields being saved to trade record:');
+                console.log(`  - stop_loss_price: ${newTradeRecord.stop_loss_price !== undefined ? (newTradeRecord.stop_loss_price ? '$' + parseFloat(newTradeRecord.stop_loss_price).toFixed(8) : 'null') : 'MISSING'}`);
+                console.log(`  - take_profit_price: ${newTradeRecord.take_profit_price !== undefined ? (newTradeRecord.take_profit_price ? '$' + parseFloat(newTradeRecord.take_profit_price).toFixed(8) : 'null') : 'MISSING'}`);
+                console.log(`  - volatility_at_open: ${newTradeRecord.volatility_at_open !== undefined ? (newTradeRecord.volatility_at_open !== null ? newTradeRecord.volatility_at_open : 'null') : 'MISSING'}`);
+                console.log(`  - volatility_label_at_open: ${newTradeRecord.volatility_label_at_open !== undefined ? (newTradeRecord.volatility_label_at_open || 'null') : 'MISSING'}`);
+                console.log(`  - regime_impact_on_strength: ${newTradeRecord.regime_impact_on_strength !== undefined ? (newTradeRecord.regime_impact_on_strength !== null ? parseFloat(newTradeRecord.regime_impact_on_strength).toFixed(4) : 'null') : 'MISSING'}`);
+                console.log(`  - correlation_impact_on_strength: ${newTradeRecord.correlation_impact_on_strength !== undefined ? (newTradeRecord.correlation_impact_on_strength !== null ? parseFloat(newTradeRecord.correlation_impact_on_strength).toFixed(4) : 'null') : 'MISSING'}`);
+                console.log(`  - effective_balance_risk_at_open: ${newTradeRecord.effective_balance_risk_at_open !== undefined ? (newTradeRecord.effective_balance_risk_at_open !== null ? newTradeRecord.effective_balance_risk_at_open : 'null') : 'MISSING'}`);
+                console.log(`  - btc_price_at_open: ${newTradeRecord.btc_price_at_open !== undefined ? (newTradeRecord.btc_price_at_open !== null ? '$' + parseFloat(newTradeRecord.btc_price_at_open).toFixed(2) : 'null') : 'MISSING'}`);
+                console.log(`  - exit_time: ${newTradeRecord.exit_time !== undefined ? (newTradeRecord.exit_time ? new Date(newTradeRecord.exit_time).toISOString() : 'null') : 'MISSING'}`);
+                console.log('');
+                console.log('[Analytics] 📊 EXIT-TIME ANALYTICS (NEW FIELDS):');
+                console.log(`  - market_regime_at_exit: ${newTradeRecord.market_regime_at_exit !== undefined ? (newTradeRecord.market_regime_at_exit || 'null') : 'MISSING'}`);
+                console.log(`  - regime_confidence_at_exit: ${newTradeRecord.regime_confidence_at_exit !== undefined ? (newTradeRecord.regime_confidence_at_exit !== null ? parseFloat(newTradeRecord.regime_confidence_at_exit).toFixed(2) : 'null') : 'MISSING'}`);
+                console.log(`  - fear_greed_score_at_exit: ${newTradeRecord.fear_greed_score_at_exit !== undefined ? (newTradeRecord.fear_greed_score_at_exit !== null ? newTradeRecord.fear_greed_score_at_exit : 'null') : 'MISSING'}`);
+                console.log(`  - fear_greed_classification_at_exit: ${newTradeRecord.fear_greed_classification_at_exit !== undefined ? (newTradeRecord.fear_greed_classification_at_exit || 'null') : 'MISSING'}`);
+                console.log(`  - volatility_at_exit: ${newTradeRecord.volatility_at_exit !== undefined ? (newTradeRecord.volatility_at_exit !== null ? parseFloat(newTradeRecord.volatility_at_exit).toFixed(2) : 'null') : 'MISSING'}`);
+                console.log(`  - volatility_label_at_exit: ${newTradeRecord.volatility_label_at_exit !== undefined ? (newTradeRecord.volatility_label_at_exit || 'null') : 'MISSING'}`);
+                console.log(`  - btc_price_at_exit: ${newTradeRecord.btc_price_at_exit !== undefined ? (newTradeRecord.btc_price_at_exit !== null ? '$' + parseFloat(newTradeRecord.btc_price_at_exit).toFixed(2) : 'null') : 'MISSING'}`);
+                console.log(`  - lpm_score_at_exit: ${newTradeRecord.lpm_score_at_exit !== undefined ? (newTradeRecord.lpm_score_at_exit !== null ? parseFloat(newTradeRecord.lpm_score_at_exit).toFixed(2) : 'null') : 'MISSING'}`);
+                console.log('');
+                console.log('[Analytics] 📊 EXIT METRICS (MFE/MAE):');
+                console.log(`  - max_favorable_excursion: ${newTradeRecord.max_favorable_excursion !== undefined ? (newTradeRecord.max_favorable_excursion !== null ? parseFloat(newTradeRecord.max_favorable_excursion).toFixed(8) : 'null') : 'MISSING'}`);
+                console.log(`  - max_adverse_excursion: ${newTradeRecord.max_adverse_excursion !== undefined ? (newTradeRecord.max_adverse_excursion !== null ? parseFloat(newTradeRecord.max_adverse_excursion).toFixed(8) : 'null') : 'MISSING'}`);
+                console.log(`  - peak_profit_usdt: ${newTradeRecord.peak_profit_usdt !== undefined ? (newTradeRecord.peak_profit_usdt !== null ? '$' + parseFloat(newTradeRecord.peak_profit_usdt).toFixed(4) : 'null') : 'MISSING'}`);
+                console.log(`  - peak_loss_usdt: ${newTradeRecord.peak_loss_usdt !== undefined ? (newTradeRecord.peak_loss_usdt !== null ? '$' + parseFloat(newTradeRecord.peak_loss_usdt).toFixed(4) : 'null') : 'MISSING'}`);
+                console.log(`  - peak_profit_percent: ${newTradeRecord.peak_profit_percent !== undefined ? (newTradeRecord.peak_profit_percent !== null ? parseFloat(newTradeRecord.peak_profit_percent).toFixed(2) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - peak_loss_percent: ${newTradeRecord.peak_loss_percent !== undefined ? (newTradeRecord.peak_loss_percent !== null ? parseFloat(newTradeRecord.peak_loss_percent).toFixed(2) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - price_movement_percent: ${newTradeRecord.price_movement_percent !== undefined ? (newTradeRecord.price_movement_percent !== null ? parseFloat(newTradeRecord.price_movement_percent).toFixed(2) + '%' : 'null') : 'MISSING'}`);
+                console.log('');
+                console.log('[Analytics] 📊 EXIT QUALITY METRICS:');
+                console.log(`  - distance_to_sl_at_exit: ${newTradeRecord.distance_to_sl_at_exit !== undefined ? (newTradeRecord.distance_to_sl_at_exit !== null ? parseFloat(newTradeRecord.distance_to_sl_at_exit).toFixed(2) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - distance_to_tp_at_exit: ${newTradeRecord.distance_to_tp_at_exit !== undefined ? (newTradeRecord.distance_to_tp_at_exit !== null ? parseFloat(newTradeRecord.distance_to_tp_at_exit).toFixed(2) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - sl_hit_boolean: ${newTradeRecord.sl_hit_boolean !== undefined ? (newTradeRecord.sl_hit_boolean !== null ? (newTradeRecord.sl_hit_boolean ? 'true' : 'false') : 'null') : 'MISSING'}`);
+                console.log(`  - tp_hit_boolean: ${newTradeRecord.tp_hit_boolean !== undefined ? (newTradeRecord.tp_hit_boolean !== null ? (newTradeRecord.tp_hit_boolean ? 'true' : 'false') : 'null') : 'MISSING'}`);
+                console.log(`  - exit_vs_planned_exit_time_minutes: ${newTradeRecord.exit_vs_planned_exit_time_minutes !== undefined ? (newTradeRecord.exit_vs_planned_exit_time_minutes !== null ? newTradeRecord.exit_vs_planned_exit_time_minutes : 'null') : 'MISSING'}`);
+                console.log('');
+                console.log('[Analytics] 📊 TRADE LIFECYCLE METRICS:');
+                console.log(`  - time_in_profit_hours: ${newTradeRecord.time_in_profit_hours !== undefined ? (newTradeRecord.time_in_profit_hours !== null ? parseFloat(newTradeRecord.time_in_profit_hours).toFixed(2) : 'null') : 'MISSING'}`);
+                console.log(`  - time_in_loss_hours: ${newTradeRecord.time_in_loss_hours !== undefined ? (newTradeRecord.time_in_loss_hours !== null ? parseFloat(newTradeRecord.time_in_loss_hours).toFixed(2) : 'null') : 'MISSING'}`);
+                console.log(`  - time_at_peak_profit: ${newTradeRecord.time_at_peak_profit !== undefined ? (newTradeRecord.time_at_peak_profit !== null ? newTradeRecord.time_at_peak_profit : 'null') : 'MISSING'}`);
+                console.log(`  - time_at_max_loss: ${newTradeRecord.time_at_max_loss !== undefined ? (newTradeRecord.time_at_max_loss !== null ? newTradeRecord.time_at_max_loss : 'null') : 'MISSING'}`);
+                console.log(`  - regime_changes_during_trade: ${newTradeRecord.regime_changes_during_trade !== undefined ? (newTradeRecord.regime_changes_during_trade !== null ? newTradeRecord.regime_changes_during_trade : 'null') : 'MISSING'}`);
+                console.log(`  - slippage_entry: ${newTradeRecord.slippage_entry !== undefined ? (newTradeRecord.slippage_entry !== null ? parseFloat(newTradeRecord.slippage_entry).toFixed(8) : 'null') : 'MISSING'}`);
+                console.log(`  - slippage_exit: ${newTradeRecord.slippage_exit !== undefined ? (newTradeRecord.slippage_exit !== null ? parseFloat(newTradeRecord.slippage_exit).toFixed(8) : 'null') : 'MISSING'}`);
+                console.log('');
+                console.log('[Analytics] 📊 ORDER EXECUTION METRICS:');
+                console.log(`  - entry_order_type: ${newTradeRecord.entry_order_type !== undefined ? (newTradeRecord.entry_order_type !== null ? newTradeRecord.entry_order_type : 'null') : 'MISSING'}`);
+                console.log(`  - exit_order_type: ${newTradeRecord.exit_order_type !== undefined ? (newTradeRecord.exit_order_type !== null ? newTradeRecord.exit_order_type : 'null') : 'MISSING'}`);
+                console.log(`  - entry_order_id: ${newTradeRecord.entry_order_id !== undefined ? (newTradeRecord.entry_order_id !== null ? newTradeRecord.entry_order_id : 'null') : 'MISSING'}`);
+                console.log(`  - exit_order_id: ${newTradeRecord.exit_order_id !== undefined ? (newTradeRecord.exit_order_id !== null ? newTradeRecord.exit_order_id : 'null') : 'MISSING'}`);
+                console.log(`  - entry_fill_time_ms: ${newTradeRecord.entry_fill_time_ms !== undefined ? (newTradeRecord.entry_fill_time_ms !== null ? newTradeRecord.entry_fill_time_ms + ' ms' : 'null') : 'MISSING'}`);
+                console.log(`  - exit_fill_time_ms: ${newTradeRecord.exit_fill_time_ms !== undefined ? (newTradeRecord.exit_fill_time_ms !== null ? newTradeRecord.exit_fill_time_ms + ' ms' : 'null') : 'MISSING'}`);
+                console.log('');
+                console.log('[Analytics] 📊 ENTRY QUALITY VERIFICATION:');
+                console.log(`  - entry_fill_time_ms source: ${livePosition.entry_fill_time_ms !== undefined ? (livePosition.entry_fill_time_ms !== null ? livePosition.entry_fill_time_ms + ' ms' : 'null in livePosition') : 'MISSING in livePosition'}`);
+                console.log(`  - entry_fill_time_ms in trade: ${newTradeRecord.entry_fill_time_ms !== undefined ? (newTradeRecord.entry_fill_time_ms !== null ? newTradeRecord.entry_fill_time_ms + ' ms' : 'null') : 'MISSING'}`);
+                console.log(`  - entry_distance_to_support_percent source: ${livePosition.entry_distance_to_support_percent !== undefined ? (livePosition.entry_distance_to_support_percent !== null ? livePosition.entry_distance_to_support_percent + '%' : 'null in livePosition') : 'MISSING in livePosition'}`);
+                console.log(`  - entry_distance_to_support_percent in trade: ${newTradeRecord.entry_distance_to_support_percent !== undefined ? (newTradeRecord.entry_distance_to_support_percent !== null ? newTradeRecord.entry_distance_to_support_percent + '%' : 'null') : 'MISSING'}`);
+                console.log('');
+                console.log('[Analytics] 📊 STRATEGY CONTEXT METRICS:');
+                console.log(`  - strategy_win_rate_at_entry: ${newTradeRecord.strategy_win_rate_at_entry !== undefined ? (newTradeRecord.strategy_win_rate_at_entry !== null ? parseFloat(newTradeRecord.strategy_win_rate_at_entry).toFixed(2) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - strategy_occurrences_at_entry: ${newTradeRecord.strategy_occurrences_at_entry !== undefined ? (newTradeRecord.strategy_occurrences_at_entry !== null ? newTradeRecord.strategy_occurrences_at_entry : 'null') : 'MISSING'}`);
+                console.log(`  - similar_trades_count: ${newTradeRecord.similar_trades_count !== undefined ? (newTradeRecord.similar_trades_count !== null ? newTradeRecord.similar_trades_count : 'null') : 'MISSING'}`);
+                console.log(`  - consecutive_wins_before: ${newTradeRecord.consecutive_wins_before !== undefined ? (newTradeRecord.consecutive_wins_before !== null ? newTradeRecord.consecutive_wins_before : 'null') : 'MISSING'}`);
+                console.log(`  - consecutive_losses_before: ${newTradeRecord.consecutive_losses_before !== undefined ? (newTradeRecord.consecutive_losses_before !== null ? newTradeRecord.consecutive_losses_before : 'null') : 'MISSING'}`);
+                console.log('');
+                console.log('[Analytics] 📊 ENTRY QUALITY METRICS:');
+                console.log(`  - entry_near_support: ${newTradeRecord.entry_near_support !== undefined ? (newTradeRecord.entry_near_support !== null ? (newTradeRecord.entry_near_support ? 'true' : 'false') : 'null') : 'MISSING'}`);
+                console.log(`  - entry_near_resistance: ${newTradeRecord.entry_near_resistance !== undefined ? (newTradeRecord.entry_near_resistance !== null ? (newTradeRecord.entry_near_resistance ? 'true' : 'false') : 'null') : 'MISSING'}`);
+                console.log(`  - entry_distance_to_support_percent: ${newTradeRecord.entry_distance_to_support_percent !== undefined ? (newTradeRecord.entry_distance_to_support_percent !== null ? parseFloat(newTradeRecord.entry_distance_to_support_percent).toFixed(4) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - entry_distance_to_resistance_percent: ${newTradeRecord.entry_distance_to_resistance_percent !== undefined ? (newTradeRecord.entry_distance_to_resistance_percent !== null ? parseFloat(newTradeRecord.entry_distance_to_resistance_percent).toFixed(4) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - entry_momentum_score: ${newTradeRecord.entry_momentum_score !== undefined ? (newTradeRecord.entry_momentum_score !== null ? parseFloat(newTradeRecord.entry_momentum_score).toFixed(2) : 'null') : 'MISSING'}`);
+                console.log(`  - entry_relative_to_day_high_percent: ${newTradeRecord.entry_relative_to_day_high_percent !== undefined ? (newTradeRecord.entry_relative_to_day_high_percent !== null ? parseFloat(newTradeRecord.entry_relative_to_day_high_percent).toFixed(4) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - entry_relative_to_day_low_percent: ${newTradeRecord.entry_relative_to_day_low_percent !== undefined ? (newTradeRecord.entry_relative_to_day_low_percent !== null ? parseFloat(newTradeRecord.entry_relative_to_day_low_percent).toFixed(4) + '%' : 'null') : 'MISSING'}`);
+                console.log(`  - entry_volume_vs_average: ${newTradeRecord.entry_volume_vs_average !== undefined ? (newTradeRecord.entry_volume_vs_average !== null ? parseFloat(newTradeRecord.entry_volume_vs_average).toFixed(4) : 'null') : 'MISSING'}`);
+                console.log('='.repeat(80));
+                */
             } catch (constructionError) {
                 //console.error('[debug_closedTrade] ❌ STEP 2.3: Error during trade object construction:', constructionError);
                 throw constructionError;
             }
     
-            console.log(' 🔄 STEP 3: Trade record constructed successfully');
-            /*console.log('[debug_closedTrade] 🧩 Trade preview:', {
-                id: newTradeRecord.trade_id,
-                symbol: newTradeRecord.symbol,
-                pnl_usdt: newTradeRecord.pnl_usdt
-            });*/
+            //console.log('[debug_save] STEP 3: Trade record constructed successfully');
+            //console.log('[debug_save] STEP 3.5: About to enter database save block');
+            //console.log('[debug_save] STEP 3.5: newTradeRecord keys:', Object.keys(newTradeRecord));
+            //console.log('[debug_save] STEP 3.5: newTradeRecord.position_id:', newTradeRecord.position_id);
+            //console.log('[debug_save] STEP 3.5: newTradeRecord.duration_hours:', newTradeRecord.duration_hours);
+            //console.log('[debug_save] STEP 3.5: newTradeRecord.exit_reason:', newTradeRecord.exit_reason);
     
             // Store in database
-            //console.log('[debug_closedTrade] 🔄 STEP 4: Storing trade record in DB...');
+            //console.log('[debug_save] STEP 4: Storing trade record in DB...');
             let createdTrade;
             try {
-                //console.log('[debug_closedTrade] 🔄 STEP 5: Calling queueEntityCall → Trade.create');
-                //console.log('[debug_closedTrade] 🔄 STEP 5: Trade record payload:', JSON.stringify(newTradeRecord, null, 2));
+                //console.log('[debug_save] STEP 4.5: Entered try block for Trade.create');
                 
                 // 🔍 DEBUG: Log analytics fields specifically before Trade.create
-                console.log('🔍 [PositionManager] Analytics fields in newTradeRecord before Trade.create:', {
+                /*console.log('🔍 [PositionManager] Analytics fields in newTradeRecord before Trade.create:', {
                     trade_id: newTradeRecord.trade_id,
                     fear_greed_score: newTradeRecord.fear_greed_score,
                     fear_greed_classification: newTradeRecord.fear_greed_classification,
@@ -1930,14 +2416,125 @@ export default class PositionManager {
                     combined_strength: newTradeRecord.combined_strength,
                     conviction_score: newTradeRecord.conviction_score,
                     trigger_signals: newTradeRecord.trigger_signals
-                });
+                });*/
                 
-                createdTrade = await queueEntityCall('Trade', 'create', newTradeRecord);
-                //console.log('[debug_closedTrade] ✅ STEP 6: Trade record created in DB');
-                //console.log('[debug_closedTrade] ✅ STEP 6: Created trade result:', JSON.stringify(createdTrade, null, 2));
+                //console.log('[debug_save] STEP 5: Calling queueEntityCall → Trade.create');
+                //console.log('[debug_save] STEP 5: Trade record payload keys:', Object.keys(newTradeRecord));
+                //console.log('[debug_save] STEP 5: Trade has duration_hours:', newTradeRecord.duration_hours !== undefined);
+                //console.log('[debug_save] STEP 5: Trade has duration_seconds:', newTradeRecord.duration_seconds !== undefined);
+                //console.log('[debug_save] STEP 5: Trade has exit_reason:', newTradeRecord.exit_reason !== undefined);
+                //console.log('[debug_save] STEP 5: Trade has position_id:', newTradeRecord.position_id !== undefined);
+                //console.log('[debug_save] STEP 5: Trade position_id value:', newTradeRecord.position_id);
+                //console.log('[debug_save] STEP 5: About to call queueEntityCall with Trade.create');
+                
+                // 🔍 FINAL VERIFICATION: Log complete summary of all analytics fields being sent to database
+                // Commented out to reduce console flooding
+                /*
+                console.log('='.repeat(80));
+                console.log('[PositionManager] ✅ FINAL VERIFICATION: All Analytics Fields Ready for Database Save');
+                console.log('='.repeat(80));
+                console.log(`[Verification] Trade Record Fields Count: ${Object.keys(newTradeRecord).length}`);
+                console.log(`[Verification] Position ID: ${newTradeRecord.position_id}`);
+                console.log(`[Verification] Symbol: ${newTradeRecord.symbol}`);
+                console.log('');
+                
+                // Count analytics fields by category
+                const openingFields = ['stop_loss_price', 'take_profit_price', 'volatility_at_open', 'volatility_label_at_open', 
+                    'regime_impact_on_strength', 'correlation_impact_on_strength', 'effective_balance_risk_at_open', 
+                    'btc_price_at_open', 'exit_time'];
+                const exitTimeFields = ['market_regime_at_exit', 'regime_confidence_at_exit', 'fear_greed_score_at_exit', 
+                    'fear_greed_classification_at_exit', 'volatility_at_exit', 'volatility_label_at_exit', 
+                    'btc_price_at_exit', 'lpm_score_at_exit'];
+                const mfeMaeFields = ['max_favorable_excursion', 'max_adverse_excursion', 'peak_profit_usdt', 'peak_loss_usdt', 
+                    'peak_profit_percent', 'peak_loss_percent', 'price_movement_percent'];
+                const exitQualityFields = ['distance_to_sl_at_exit', 'distance_to_tp_at_exit', 'sl_hit_boolean', 'tp_hit_boolean', 
+                    'exit_vs_planned_exit_time_minutes'];
+                const lifecycleFields = ['time_in_profit_hours', 'time_in_loss_hours', 'time_at_peak_profit', 'time_at_max_loss', 
+                    'regime_changes_during_trade'];
+                const orderFields = ['entry_order_type', 'exit_order_type', 'entry_order_id', 'exit_order_id', 
+                    'entry_fill_time_ms', 'exit_fill_time_ms'];
+                const strategyContextFields = ['strategy_win_rate_at_entry', 'strategy_occurrences_at_entry', 
+                    'similar_trades_count', 'consecutive_wins_before', 'consecutive_losses_before'];
+                const entryQualityFields = ['entry_near_support', 'entry_near_resistance', 'entry_distance_to_support_percent',
+                    'entry_distance_to_resistance_percent', 'entry_momentum_score', 'entry_relative_to_day_high_percent',
+                    'entry_relative_to_day_low_percent', 'entry_volume_vs_average'];
+                
+                const allAnalyticsFields = [...openingFields, ...exitTimeFields, ...mfeMaeFields, ...exitQualityFields, ...lifecycleFields, ...orderFields, ...strategyContextFields, ...entryQualityFields];
+                const presentFields = allAnalyticsFields.filter(field => newTradeRecord.hasOwnProperty(field));
+                const missingFields = allAnalyticsFields.filter(field => !newTradeRecord.hasOwnProperty(field));
+                
+                console.log(`[Verification] 📊 Analytics Fields Status:`);
+                console.log(`  - Opening Analytics: ${openingFields.filter(f => newTradeRecord.hasOwnProperty(f)).length}/${openingFields.length}`);
+                console.log(`  - Exit-Time Analytics: ${exitTimeFields.filter(f => newTradeRecord.hasOwnProperty(f)).length}/${exitTimeFields.length}`);
+                console.log(`  - MFE/MAE Metrics: ${mfeMaeFields.filter(f => newTradeRecord.hasOwnProperty(f)).length}/${mfeMaeFields.length}`);
+                console.log(`  - Exit Quality Metrics: ${exitQualityFields.filter(f => newTradeRecord.hasOwnProperty(f)).length}/${exitQualityFields.length}`);
+                console.log(`  - Lifecycle Metrics: ${lifecycleFields.filter(f => newTradeRecord.hasOwnProperty(f)).length}/${lifecycleFields.length}`);
+                console.log(`  - Order Execution Metrics: ${orderFields.filter(f => newTradeRecord.hasOwnProperty(f)).length}/${orderFields.length}`);
+                console.log(`  - Strategy Context Metrics: ${strategyContextFields.filter(f => newTradeRecord.hasOwnProperty(f)).length}/${strategyContextFields.length}`);
+                console.log(`  - Entry Quality Metrics: ${entryQualityFields.filter(f => newTradeRecord.hasOwnProperty(f)).length}/${entryQualityFields.length}`);
+                console.log(`  - Total Analytics Fields Present: ${presentFields.length}/${allAnalyticsFields.length}`);
+                
+                if (missingFields.length > 0) {
+                    console.warn(`[Verification] ⚠️ Missing Analytics Fields: ${missingFields.join(', ')}`);
+                } else {
+                    console.log(`[Verification] ✅ All ${allAnalyticsFields.length} analytics fields are present in trade record`);
+                }
+                
+                console.log('='.repeat(80));
+                console.log('');
+                */
+                
+                try {
+                    //console.log('[debug_save] STEP 5.1: Calling queueEntityCall NOW...');
+                    createdTrade = await queueEntityCall('Trade', 'create', newTradeRecord);
+                    //console.log('[debug_save] ✅ STEP 6: Trade record created in DB');
+                    //console.log('[debug_save] ✅ STEP 6: Created trade result:', createdTrade?.id || createdTrade?.trade_id || 'NO ID RETURNED');
+                    //console.log('[debug_save] ✅ STEP 6: Created trade success:', createdTrade?.success !== false ? 'YES' : 'NO');
+                    //console.log('[debug_save] ✅ STEP 6: Full createdTrade object:', createdTrade);
+                } catch (queueError) {
+                    console.error('[debug_save] ❌ STEP 6 ERROR: queueEntityCall failed:', queueError);
+                    console.error('[debug_save] ❌ STEP 6 ERROR message:', queueError.message);
+                    console.error('[debug_save] ❌ STEP 6 ERROR stack:', queueError.stack);
+                    throw queueError;
+                }
+                
+                // CRITICAL FIX: Recalculate total realized P&L from database (source of truth)
+                // This ensures P&L is always accurate by summing directly from database
+                try {
+                    const tradingMode = livePosition.trading_mode || 'testnet';
+                    const walletManager = this.scannerService?.walletManagerService;
+                    if (walletManager?.centralWalletStateManager) {
+                        await walletManager.centralWalletStateManager.recalculateRealizedPnlFromDatabase(tradingMode);
+                        console.log('[PositionManager] ✅ Recalculated total realized P&L from database after trade save');
+                    }
+                } catch (recalcError) {
+                    console.warn('[PositionManager] ⚠️ Failed to recalculate P&L from database:', recalcError.message);
+                    // Don't throw - trade was saved successfully, just log the warning
+                }
+
+                // Update historical performance tracking for regime learning
+                try {
+                    if (newTradeRecord.market_regime && newTradeRecord.pnl_usdt !== undefined) {
+                        const { getRegimeContextWeighting } = await import('@/components/utils/unifiedStrengthCalculator');
+                        const regimeWeighting = getRegimeContextWeighting();
+                        const wasSuccessful = newTradeRecord.pnl_usdt > 0;
+                        regimeWeighting.updateHistoricalPerformance(newTradeRecord.market_regime, wasSuccessful);
+                    }
+                } catch (perfError) {
+                    console.warn('[PositionManager] ⚠️ Failed to update historical performance:', perfError.message);
+                    // Don't throw - trade was saved successfully
+                }
             } catch (dbError) {
-                //console.error('[debug_closedTrade] ❌ STEP 6: Database error during Trade.create:', dbError.message);
-                //console.error('[debug_closedTrade] ❌ STEP 6: Database error stack:', dbError.stack);
+                console.error('[PositionManager] ❌ STEP 6: Database error during Trade.create:', dbError.message);
+                console.error('[PositionManager] ❌ STEP 6: Database error stack:', dbError.stack);
+                console.error('[PositionManager] ❌ STEP 6: Trade record that failed:', {
+                    trade_id: newTradeRecord.trade_id,
+                    position_id: newTradeRecord.position_id,
+                    symbol: newTradeRecord.symbol,
+                    duration_hours: newTradeRecord.duration_hours,
+                    duration_seconds: newTradeRecord.duration_seconds,
+                    exit_reason: newTradeRecord.exit_reason
+                });
                 throw dbError;
             }
     
@@ -1945,7 +2542,25 @@ export default class PositionManager {
             //console.log('[debug_closedTrade] 🔄 STEP 7: Deleting LivePosition ID:', livePosition.id);
             try {
                 await queueEntityCall('LivePosition', 'delete', livePosition.id);
-                console.log('[debug_closedTrade] ✅ STEP 8: LivePosition deleted');
+                // console.log('[debug_closedTrade] ✅ STEP 8: LivePosition deleted');
+                
+                // CRITICAL FIX: Remove position from in-memory array immediately after deletion
+                const positionIdToRemove = livePosition.id || livePosition.db_record_id || livePosition.position_id;
+                const positionIdBeforeRemove = this.positions.length;
+                //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 🗑️ Removing closed position from memory: ${livePosition.symbol} (${positionIdToRemove?.substring(0, 8)})`);
+                
+                this.positions = this.positions.filter(pos => {
+                    const posId = pos.id || pos.db_record_id || pos.position_id;
+                    const shouldKeep = posId !== positionIdToRemove;
+                    if (!shouldKeep) {
+                        //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 🗑️ Removed position: ${pos.symbol} (${posId?.substring(0, 8)})`);
+                    }
+                    return shouldKeep;
+                });
+                
+                const positionIdAfterRemove = this.positions.length;
+                //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ✅ Positions in memory: ${positionIdBeforeRemove} → ${positionIdAfterRemove} (removed ${positionIdBeforeRemove - positionIdAfterRemove})`);
+                
             } catch (deleteError) {
                 //console.error('[debug_closedTrade] ❌ STEP 8: Error deleting LivePosition:', deleteError.message);
                 throw deleteError;
@@ -1968,13 +2583,32 @@ export default class PositionManager {
                 deletedPosition: livePosition.id
             };
     
+            // Dispatch event to refresh trade history page
+            //console.log('[debug_save] PositionManager: About to dispatch tradeDataRefresh event');
+            //console.log('[debug_save] PositionManager: window exists:', typeof window !== 'undefined');
+            //console.log('[debug_save] PositionManager: dispatchEvent exists:', typeof window !== 'undefined' && typeof window.dispatchEvent === 'function');
+            if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+                const event = new CustomEvent('tradeDataRefresh');
+                //console.log('[debug_save] PositionManager: Created CustomEvent:', event.type);
+                window.dispatchEvent(event);
+                //console.log('[debug_save] PositionManager: ✅ Dispatched tradeDataRefresh event after trade save');
+                //console.log('[PositionManager] ✅ Dispatched tradeDataRefresh event after trade save');
+            } else {
+                console.error('[debug_save] PositionManager: ❌ Cannot dispatch event - window or dispatchEvent not available');
+            }
+    
             //console.log('[debug_closedTrade] 🔄 STEP 10: Returning result:', result);
             return result;
     
         } catch (error) {
-            //console.error('[debug_closedTrade] ❌ STEP ERROR: Failed in processClosedTrade');
-            //console.error('[debug_closedTrade] ❌ Message:', error.message);
-            //console.error('[debug_closedTrade] ❌ Stack:', error.stack);
+            console.error('[PositionManager] ❌ STEP ERROR: Failed in processClosedTrade');
+            console.error('[PositionManager] ❌ Message:', error.message);
+            console.error('[PositionManager] ❌ Stack:', error.stack);
+            console.error('[PositionManager] ❌ Error details:', {
+                name: error.name,
+                code: error.code,
+                message: error.message
+            });
             this.addLog(`[PROCESS_CLOSED_TRADE] ❌ ${error.message}`, 'error');
             throw error;
         }
@@ -1989,11 +2623,19 @@ export default class PositionManager {
      * @returns {Object} Trade data object ready for database insertion
      */
     generateTradeFromPosition(position, exitPrice, exitReason, additionalData = {}) {
-        const pnlUsdtForTradeGeneration = this.calculatePnL(position, exitPrice);
+        const COMMISSION_RATE = 0.001; // 0.1% trading fee (Binance spot)
+        
+        // Calculate gross P&L first
+        const pnlUsdtGross = this.calculatePnL(position, exitPrice);
         const exitTrend = this.determineExitTrend(position, exitPrice);
         const now = new Date();
-        const entryTime = new Date(position.entry_timestamp);
-        const durationSeconds = Math.floor((now - entryTime) / 1000);
+        // Ensure entry_timestamp exists before calculating duration
+        const entryTime = position.entry_timestamp ? new Date(position.entry_timestamp) : null;
+        // Calculate duration in hours (decimal) for better readability
+        const durationHours = entryTime 
+            ? (now.getTime() - entryTime.getTime()) / (1000 * 3600)
+            : 0; // Default to 0 if entry_timestamp is missing
+        const durationSeconds = Math.round(durationHours * 3600); // Also calculate seconds for backwards compatibility
 
         // Re-calculate pnl_percentage and exit_value_usdt for full trade payload
         const entryValue = position.entry_value_usdt;
@@ -2001,8 +2643,16 @@ export default class PositionManager {
         if (position.direction === 'long') {
             exitValue = position.quantity_crypto * exitPrice;
         } else if (position.direction === 'short') { // Not used in current spot trading but good to keep
-            exitValue = entryValue + pnlUsdtForTradeGeneration;
+            exitValue = entryValue + pnlUsdtGross;
         }
+        
+        // CRITICAL FIX: Deduct fees from P&L (matching prepareBatchClose logic)
+        const entryFees = entryValue * COMMISSION_RATE;
+        const exitFees = exitValue * COMMISSION_RATE;
+        const totalFees = entryFees + exitFees;
+        const pnlUsdtForTradeGeneration = pnlUsdtGross - totalFees;
+        
+        // Calculate percentage based on NET P&L (after fees)
         const pnlPercentage = entryValue > 0 ? (pnlUsdtForTradeGeneration / entryValue) * 100 : 0;
 
         // 🔍 DEBUG: Log analytics fields from position before creating trade
@@ -2063,6 +2713,7 @@ export default class PositionManager {
 
         const tradeData = {
             trade_id: position.position_id, // This will now be the Binance orderId for positions opened by the scanner
+            position_id: position.position_id, // CRITICAL: All positions have position_id for duplicate detection
             strategy_name: position.strategy_name,
             symbol: position.symbol,
             direction: position.direction,
@@ -2071,11 +2722,13 @@ export default class PositionManager {
             quantity_crypto: position.quantity_crypto,
             entry_value_usdt: entryValue,
             exit_value_usdt: exitValue,
-            pnl_usdt: pnlUsdtForTradeGeneration,
-            pnl_percentage: pnlPercentage,
+            pnl_usdt: pnlUsdtForTradeGeneration, // NET P&L (after fees)
+            pnl_percentage: pnlPercentage, // NET P&L percentage (after fees)
+            total_fees_usdt: totalFees, // CRITICAL: Include fees in trade data
             entry_timestamp: position.entry_timestamp,
             exit_timestamp: now.toISOString(),
-            duration_seconds: durationSeconds,
+            duration_hours: durationHours, // Store duration in hours (decimal)
+            duration_seconds: durationSeconds, // Also store seconds for backwards compatibility
             exit_reason: exitReason,
             exit_trend: exitTrend,
             leverage: position.leverage || 1,
@@ -2174,8 +2827,11 @@ export default class PositionManager {
                 
                 // If max attempts exceeded, reset attempts to allow future reconciliations
                 if (result.error === 'Max attempts exceeded') {
-                    this.addLog(`[RECONCILE] 🔄 Resetting reconciliation attempts for wallet ${walletId}`, 'info');
+                    this.addLog(`[RECONCILE] 🔄 Resetting reconciliation attempts for wallet ${walletId} (was ${result.attempts}/${robustReconcileService.maxReconcileAttempts})`, 'info');
                     robustReconcileService.resetAttempts(this.getTradingMode(), walletId);
+                    
+                    // Also trigger auto-reset for stale attempts
+                    robustReconcileService.autoResetStaleAttempts();
                 }
                 
                 return {
@@ -2611,7 +3267,8 @@ export default class PositionManager {
             tradingMode, 
             proxyUrl 
         });
-        console.log('🔍 [EXECUTION_TRACE] step_8: _executeBinanceMarketSellOrder entry point reached');
+        // Commented out to reduce console flooding
+        // console.log('🔍 [EXECUTION_TRACE] step_8: _executeBinanceMarketSellOrder entry point reached');
         
         const logPrefix = '[BINANCE_SELL]';
         
@@ -3211,7 +3868,7 @@ export default class PositionManager {
                                 const initialPositionCount = this.positions?.length || 0;
                                 const refreshed = await LivePosition.filter({ trading_mode: tradingMode, status: 'open' }, '-created_date', 500);
                                 this.positions = Array.isArray(refreshed) ? refreshed : [];
-                                console.log(`🔥🔥🔥 POSITIONS IN MEMORY: ${initialPositionCount} → ${this.positions.length} (removed ${initialPositionCount - this.positions.length}) 🔥🔥🔥`);
+                                // console.log(`🔥🔥🔥 POSITIONS IN MEMORY: ${initialPositionCount} → ${this.positions.length} (removed ${initialPositionCount - this.positions.length}) 🔥🔥🔥`);
                             } catch (refreshErr) {
                                 console.warn('[PositionManager] ⚠️ [POST_VC_REFRESH] Failed to reload positions after early VC:', refreshErr?.message);
                             }
@@ -3474,7 +4131,7 @@ export default class PositionManager {
                                     const initialPositionCount = this.positions?.length || 0;
                                     const refreshed = await LivePosition.filter({ trading_mode: tradingMode, status: 'open' }, '-created_date', 500);
                                     this.positions = Array.isArray(refreshed) ? refreshed : [];
-                                    console.log(`🔥🔥🔥 POSITIONS IN MEMORY: ${initialPositionCount} → ${this.positions.length} (removed ${initialPositionCount - this.positions.length}) 🔥🔥🔥`);
+                                    // console.log(`🔥🔥🔥 POSITIONS IN MEMORY: ${initialPositionCount} → ${this.positions.length} (removed ${initialPositionCount - this.positions.length}) 🔥🔥🔥`);
                                 } catch (refreshErr) {
                                     console.warn('[PositionManager] ⚠️ [POST_VC_REFRESH] Failed to reload positions after VC:', refreshErr?.message);
                                 }
@@ -3854,40 +4511,34 @@ export default class PositionManager {
      * @returns {Object} An object containing arrays of trades to create and position IDs to close.
      */
     async monitorAndClosePositions(currentPrices = null) {
-        console.log('[position_manager_debug] 🔍 ===== MONITOR_AND_CLOSE_POSITIONS ENTRY =====');
-        console.log('[position_manager_debug] 🔍 Function called at:', new Date().toISOString());
-        console.log('[position_manager_debug] 🔍 Current prices provided:', !!currentPrices);
-        console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_3: monitorAndClosePositions entry point reached');
-        console.log('[position_manager_debug] 🔍 Current prices keys:', currentPrices ? Object.keys(currentPrices).length : 0);
-        console.log('[position_manager_debug] 🔍 isMonitoring flag:', this.isMonitoring);
-        console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL TEST LOG - IF YOU SEE THIS, THE FUNCTION IS BEING CALLED');
-        console.log('[position_manager_debug] 🔍 PositionManager instance:', !!this);
-        console.log('[position_manager_debug] 🔍 Scanner service exists:', !!this.scannerService);
-        console.log('[position_manager_debug] 🔍 Positions array length:', this.positions?.length || 0);
+        const _monitorCloseStartTime = Date.now();
+        const functionId = `monitor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] MONITOR_AND_CLOSE_POSITIONS ENTRY (0ms) 🔴🔴🔴`);
         
         // Prevent concurrent monitoring to avoid duplicate position processing
         if (this.isMonitoring) {
-            console.log('[position_manager_debug] 🔍 Monitoring already in progress, skipping...');
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] ALREADY MONITORING, RETURNING EARLY (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
             return { tradesToCreate: [], positionIdsToClose: [] };
         }
         
         this.isMonitoring = true;
-        console.log('[position_manager_debug] 🔍 ===== MONITOR_AND_CLOSE_POSITIONS ENTRY =====');
-        console.log('[position_manager_debug] 🔍 MONITORING POSITIONS - START');
-        console.log('[position_manager_debug] 🔍 Scanner running:', this.scannerService.state.isRunning);
-        console.log('[position_manager_debug] 🔍 Positions count:', this.positions.length);
-        console.log('[position_manager_debug] 🔍 Current prices available:', currentPrices ? Object.keys(currentPrices).length : 0);
-        console.log('[position_manager_debug] 🔍 Sample positions being monitored:', this.positions.slice(0, 3).map(p => ({
+        // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] isMonitoring SET TO TRUE (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+        //console.log('[position_manager_debug] 🔍 ===== MONITOR_AND_CLOSE_POSITIONS ENTRY =====');
+        //console.log('[position_manager_debug] 🔍 MONITORING POSITIONS - START');
+        //console.log('[position_manager_debug] 🔍 Scanner running:', this.scannerService.state.isRunning);
+        //console.log('[position_manager_debug] 🔍 Positions count:', this.positions.length);
+        //console.log('[position_manager_debug] 🔍 Current prices available:', currentPrices ? Object.keys(currentPrices).length : 0);
+        /*console.log('[position_manager_debug] 🔍 Sample positions being monitored:', this.positions.slice(0, 3).map(p => ({
             id: p.id,
             db_record_id: p.db_record_id,
             position_id: p.position_id,
             symbol: p.symbol,
             status: p.status,
             entry_timestamp: p.entry_timestamp
-        })));
-        console.log('[position_manager_debug] 🔍 MONITORING FUNCTION CALLED - TIMESTAMP:', new Date().toISOString());
-        console.log('[position_manager_debug] 🔍 MONITORING FUNCTION CALLED - THIS IS A TEST LOG TO VERIFY FUNCTION IS BEING CALLED');
-        console.log('[position_manager_debug] 🔍 About to start position monitoring loop...');
+        })));*/
+        //console.log('[position_manager_debug] 🔍 MONITORING FUNCTION CALLED - TIMESTAMP:', new Date().toISOString());
+        //console.log('[position_manager_debug] 🔍 MONITORING FUNCTION CALLED - THIS IS A TEST LOG TO VERIFY FUNCTION IS BEING CALLED');
+        //console.log('[position_manager_debug] 🔍 About to start position monitoring loop...');
         
         // Initialize local arrays for this cycle - MOVED OUTSIDE TRY BLOCK TO FIX SCOPE ISSUE
         const tradesToCreate = [];
@@ -3897,9 +4548,18 @@ export default class PositionManager {
         let uniquePositionIdsToClose = [];
         
         try {
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] TRY BLOCK ENTERED (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+            
             // CRITICAL FIX: Clean up ghost positions BEFORE attempting to close them
-            console.log('[position_manager_debug] 🔍 Checking for ghost positions before monitoring...');
-            console.log('[position_manager_debug] 🔍 About to call reconcileWithBinance...');
+            // BUT: Only reconcile occasionally to avoid hitting max attempts limit
+            // Reconciliation is throttled to 5 minutes, so it will auto-throttle if called too frequently
+            const shouldReconcile = Math.random() < 0.1; // Only 10% of the time, or use scan count
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] shouldReconcile: ${shouldReconcile} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+            
+            if (shouldReconcile) {
+                // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] STARTING RECONCILE (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+            //console.log('[position_manager_debug] 🔍 Checking for ghost positions before monitoring...');
+            //console.log('[position_manager_debug] 🔍 About to call reconcileWithBinance...');
             
             // Add timeout to reconcileWithBinance to prevent hanging
             const reconcilePromise = this.reconcileWithBinance();
@@ -3907,32 +4567,27 @@ export default class PositionManager {
                 setTimeout(() => reject(new Error('reconcileWithBinance timeout after 15 seconds')), 15000);
             });
             
-            console.log('[position_manager_debug] 🔍 Starting reconcileWithBinance with timeout...');
+            //console.log('[position_manager_debug] 🔍 Starting reconcileWithBinance with timeout...');
+                try {
             const reconcileResult = await Promise.race([reconcilePromise, reconcileTimeout]);
-            console.log('[position_manager_debug] 🔍 reconcileWithBinance completed successfully');
+            //console.log('[position_manager_debug] 🔍 reconcileWithBinance completed successfully');
             
             if (reconcileResult.success && reconcileResult.summary.ghostPositionsCleaned > 0) {
-                console.log(`[position_manager_debug] 🧹 Cleaned ${reconcileResult.summary.ghostPositionsCleaned} ghost positions`);
+                //console.log(`[position_manager_debug] 🧹 Cleaned ${reconcileResult.summary.ghostPositionsCleaned} ghost positions`);
                 this.addLog(`[MONITOR] 🧹 Cleaned ${reconcileResult.summary.ghostPositionsCleaned} ghost positions before monitoring`, 'info');
+                    }
+                } catch (reconcileError) {
+                    // Silently handle reconciliation errors to avoid disrupting monitoring
+                    //console.log('[position_manager_debug] 🔍 Reconciliation skipped or timed out:', reconcileError.message);
+                }
             }
             
             // DEBUG: Log current positions after reconciliation
-            console.log('[position_manager_debug] 🔍 Positions after reconciliation:', this.positions.length);
-            console.log('[position_manager_debug] 🔍 About to start position monitoring loop...');
-            console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - IF YOU SEE THIS, RECONCILIATION COMPLETED');
-            
-            if (this.positions.length > 0) {
-                console.log('[position_manager_debug] 🔍 Sample positions after reconciliation:', this.positions.slice(0, 3).map(p => ({
-                    symbol: p.symbol,
-                    position_id: p.position_id,
-                    quantity_crypto: p.quantity_crypto,
-                    status: p.status
-                })));
-            }
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] AFTER RECONCILE, positions count: ${this.positions.length} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
             
             // DEBUG: Log position details for first 3 positions
             if (this.positions.length > 0) {
-                console.log('[PositionManager] 🔍 Sample positions (first 3):', this.positions.slice(0, 3).map(p => ({
+                /*console.log('[PositionManager] 🔍 Sample positions (first 3):', this.positions.slice(0, 3).map(p => ({
                     symbol: p.symbol,
                     position_id: p.position_id,
                     entry_timestamp: p.entry_timestamp,
@@ -3942,7 +4597,7 @@ export default class PositionManager {
                     take_profit_price: p.take_profit_price,
                     status: p.status,
                     shouldCloseByTime: ((Date.now() - new Date(p.entry_timestamp).getTime()) / (1000 * 60 * 60)) >= (p.time_exit_hours || 0)
-                })));
+                })));*/
             }
 
             const now = Date.now();
@@ -3986,19 +4641,19 @@ export default class PositionManager {
             // DEBUG: Log only DOGE positions to reduce console flooding
             const dogePositions = this.positions.filter(p => p.symbol.includes('DOGE') || p.symbol.replace('/', '') === 'DOGEUSDT');
             if (dogePositions.length > 0) {
-                console.log(`[MONITOR_DEBUG] ==========================================`);
-                console.log(`[MONITOR_DEBUG] POSITION MONITORING STARTED`);
-                console.log(`[MONITOR_DEBUG] ==========================================`);
-                console.log(`[MONITOR_DEBUG] Total positions: ${this.positions.length}, DOGE positions: ${dogePositions.length}`);
-                console.log(`[MONITOR_DEBUG] DOGE Positions:`, dogePositions.map(p => ({
+                //console.log(`[MONITOR_DEBUG] ==========================================`);
+                //console.log(`[MONITOR_DEBUG] POSITION MONITORING STARTED`);
+                //console.log(`[MONITOR_DEBUG] ==========================================`);
+                //console.log(`[MONITOR_DEBUG] Total positions: ${this.positions.length}, DOGE positions: ${dogePositions.length}`);
+                /*console.log(`[MONITOR_DEBUG] DOGE Positions:`, dogePositions.map(p => ({
                     symbol: p.symbol,
                     id: p.id,
                     position_id: p.position_id,
                     status: p.status,
                     cleanSymbol: p.symbol.replace('/', ''),
                     isDOGE: true
-                })));
-                console.log(`[MONITOR_DEBUG] ==========================================`);
+                })));*/
+                //console.log(`[MONITOR_DEBUG] ==========================================`);
             }
 
             const maxPositionAgeHours = 12; // Force close after 12 hours regardless of other conditions
@@ -4010,32 +4665,34 @@ export default class PositionManager {
             // eslint-disable-next-line no-unused-vars
             let loopIterations = 0;
 
-            console.log('[position_manager_debug] 🔍 Starting main position monitoring loop...');
-            console.log('[position_manager_debug] 🔍 About to iterate over', this.positions.length, 'positions');
-            console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING POSITION LOOP');
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] ABOUT TO START POSITION LOOP, positions: ${this.positions.length} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
 
-            // Add timeout to position loop to prevent hanging
+            // Add timeout to position loop to prevent hanging (increased to 120 seconds to allow for batch operations)
             const positionLoopTimeout = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Position loop timeout after 20 seconds')), 20000);
+                setTimeout(() => reject(new Error('Position loop timeout after 120 seconds')), 120000);
             });
 
             const positionLoopPromise = (async () => {
+                // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] POSITION LOOP STARTED (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
             for (const position of this.positions) { // Looping directly over this.positions
                 loopIterations++;
+                if (loopIterations % 10 === 0 || loopIterations === 1) {
+                    // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] POSITION LOOP ITERATION ${loopIterations}/${this.positions.length} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+                }
                 
                 // DEBUG: Track position loop progress
-                console.log(`[position_manager_debug] 🔍 Processing position ${loopIterations}/${this.positions.length}: ${position.symbol} (${position.status})`);
+                //console.log(`[position_manager_debug] 🔍 Processing position ${loopIterations}/${this.positions.length}: ${position.symbol} (${position.status})`);
                 
                 // DEBUG: Log only DOGE positions to reduce console flooding
                 if (position.symbol.includes('DOGE') || position.symbol.replace('/', '') === 'DOGEUSDT') {
-                    console.log(`[POSITION_DEBUG] Processing DOGE position:`, {
+                    /*console.log(`[POSITION_DEBUG] Processing DOGE position:`, {
                         symbol: position.symbol,
                         id: position.id,
                         position_id: position.position_id,
                         status: position.status,
                         cleanSymbol: position.symbol.replace('/', ''),
                         isDOGE: true
-                    });
+                    });*/
                 }
                 
                 // CRITICAL FIX: Validate that position has an ID before processing
@@ -4075,23 +4732,101 @@ export default class PositionManager {
                     const cleanSymbol = position.symbol.replace('/', '');
                     let currentPrice = pricesSource[cleanSymbol];
                     
-                    // CRITICAL FIX: If price is missing from pricesSource, try to fetch it dynamically
-                    if (!currentPrice || isNaN(currentPrice) || currentPrice <= 0) {
-                        // Try to get price from scannerService.currentPrices
-                        if (this.scannerService.currentPrices?.[cleanSymbol]) {
-                            currentPrice = this.scannerService.currentPrices[cleanSymbol];
+                    // CRITICAL FIX: Detect stale prices and log error (but don't reject)
+                    // If price seems unrealistic (>50% different from entry), log error but allow to proceed
+                    const entryPrice = Number(position.entry_price || 0);
+                    if (currentPrice && entryPrice > 0) {
+                        const priceDiffPercent = Math.abs((currentPrice - entryPrice) / entryPrice) * 100;
+                        if (priceDiffPercent > 50) {
+                            console.error(`[PositionManager] 🚨 STALE PRICE DETECTED: Cached price ${currentPrice} is >50% different from entry ${entryPrice} (${priceDiffPercent.toFixed(2)}%) for ${position.symbol}`);
+                            console.error(`[PositionManager] 🚨 This may indicate cached price is from 24hr ticker's lastPrice (stale) rather than current price`);
+                            if (position.symbol === 'ETH/USDT' && (currentPrice === 4160.88 || Math.abs(currentPrice - 4160.88) < 0.01)) {
+                                console.error(`[PositionManager] 🚨🚨🚨 CONFIRMED: 4160.88 detected in cached price for ETH! 🚨🚨🚨`);
+                            }
+                            // Force fresh fetch but don't reject
+                            currentPrice = null;
                         }
-                        
-                        // Try to get price from priceManagerService
-                        if ((!currentPrice || isNaN(currentPrice) || currentPrice <= 0) && this.scannerService.priceManagerService) {
-                            try {
-                                const fetchedPrice = await this.scannerService.priceManagerService.getCurrentPrice(position.symbol);
+                    }
+                    
+                    // CRITICAL FIX: ALWAYS fetch FRESH price from Binance when closing positions (bypass cache completely)
+                    // This prevents stale prices like 1889.03 or 4160.88 for ETH (should be ~3800-3900)
+                    // Use getFreshCurrentPrice() which directly calls /api/v3/ticker/price (current price, not 24hr ticker)
+                    if (this.scannerService.priceManagerService) {
+                        try {
+                            const fetchedPrice = await this.scannerService.priceManagerService.getFreshCurrentPrice(position.symbol);
                                 if (fetchedPrice && !isNaN(fetchedPrice) && fetchedPrice > 0) {
+                                // CRITICAL: Detect stale prices and log error (but don't reject)
+                                if (entryPrice > 0) {
+                                    const fetchedDiffPercent = Math.abs((fetchedPrice - entryPrice) / entryPrice) * 100;
+                                    if (fetchedDiffPercent > 50) {
+                                        console.error(`[PositionManager] 🚨 STALE PRICE DETECTED: Fresh price ${fetchedPrice} is >50% different from entry ${entryPrice} for ${position.symbol}`);
+                                        console.error(`[PositionManager] 🚨 Price difference: ${fetchedDiffPercent.toFixed(2)}% - This may indicate wrong price from Binance API`);
+                                        if (position.symbol === 'ETH/USDT' && (fetchedPrice === 4160.88 || Math.abs(fetchedPrice - 4160.88) < 0.01)) {
+                                            console.error(`[PositionManager] 🚨🚨🚨 CONFIRMED: 4160.88 detected in fresh price for ETH! 🚨🚨🚨`);
+                                        }
+                                        this.scannerService.addLog(`[POSITION_MONITOR] ⚠️ Warning: Fresh price ${fetchedPrice} differs significantly from entry ${entryPrice} (${fetchedDiffPercent.toFixed(2)}%) for ${position.symbol}`, 'warning');
+                                        // Still use the fetched price (it's from Binance API, source of truth)
+                                        // But log the error for investigation
+                                    }
+                                }
                                     currentPrice = fetchedPrice;
-                                    console.log(`[PositionManager] ✅ Fetched price for ${position.symbol}: ${currentPrice}`);
+                                console.log(`[PositionManager] ✅ Fetched FRESH price (bypassing cache) for ${position.symbol}: ${currentPrice}`);
+                                
+                                // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
+                                if (position.symbol === 'ETH/USDT') {
+                                    const ETH_ALERT_MIN = 3500;
+                                    const ETH_ALERT_MAX = 4000;
+                                    if (currentPrice < ETH_ALERT_MIN || currentPrice > ETH_ALERT_MAX) {
+                                        //console.error(`[PositionManager] 🚨🚨🚨 ETH PRICE ALERT 🚨🚨🚨`);
+                                        //console.error(`[PositionManager] 🚨 ETH price ${currentPrice} is outside alert range [${ETH_ALERT_MIN}, ${ETH_ALERT_MAX}]`);
+                                        /*console.error(`[PositionManager] 🚨 Full details:`, {
+                                            symbol: position.symbol,
+                                            currentPrice: currentPrice,
+                                            entryPrice: entryPrice,
+                                            positionId: position.position_id || position.id,
+                                            priceDifference: currentPrice < ETH_ALERT_MIN ? 
+                                                `${(ETH_ALERT_MIN - currentPrice).toFixed(2)} below minimum` : 
+                                                `${(currentPrice - ETH_ALERT_MAX).toFixed(2)} above maximum`,
+                                            percentDifference: currentPrice < ETH_ALERT_MIN ? 
+                                                `${((ETH_ALERT_MIN - currentPrice) / ETH_ALERT_MIN * 100).toFixed(2)}%` : 
+                                                `${((currentPrice - ETH_ALERT_MAX) / ETH_ALERT_MAX * 100).toFixed(2)}%`,
+                                            priceDiffFromEntry: entryPrice > 0 ? `${((currentPrice - entryPrice) / entryPrice * 100).toFixed(2)}%` : 'N/A',
+                                            timestamp: new Date().toISOString(),
+                                            source: 'monitorAndClosePositions_early',
+                                            tradingMode: this.tradingMode
+                                        });*/
+                                        //console.error(`[PositionManager] 🚨🚨🚨 END ETH PRICE ALERT 🚨🚨🚨`);
+                                    }
+                                }
+                            } else {
+                                console.warn(`[PositionManager] ⚠️ Fresh price fetch returned invalid value for ${position.symbol}: ${fetchedPrice}`);
                                 }
                             } catch (error) {
-                                console.log(`[PositionManager] ⚠️ Could not fetch price for ${position.symbol}:`, error.message);
+                            console.error(`[PositionManager] ❌ Failed to fetch fresh price for ${position.symbol}:`, error.message);
+                        }
+                    }
+                    
+                    // LAST RESORT: Only use cached price if fresh fetch completely failed AND cached price is valid
+                    // Log error if stale price detected but don't reject
+                    if ((!currentPrice || isNaN(currentPrice) || currentPrice <= 0) && this.scannerService.currentPrices?.[cleanSymbol]) {
+                        const cachedPrice = this.scannerService.currentPrices[cleanSymbol];
+                        // Detect stale prices and log error (but allow to proceed)
+                        if (entryPrice > 0) {
+                            const cachedDiffPercent = Math.abs((cachedPrice - entryPrice) / entryPrice) * 100;
+                            if (cachedDiffPercent > 50) {
+                                console.error(`[PositionManager] 🚨 STALE PRICE DETECTED: Cached price ${cachedPrice} is >50% different from entry ${entryPrice} (${cachedDiffPercent.toFixed(2)}%) for ${position.symbol}`);
+                                console.error(`[PositionManager] 🚨 This may be stale 24hr ticker lastPrice - using as last resort but price is likely wrong`);
+                                if (position.symbol === 'ETH/USDT' && (cachedPrice === 4160.88 || Math.abs(cachedPrice - 4160.88) < 0.01)) {
+                                    console.error(`[PositionManager] 🚨🚨🚨 CONFIRMED: 4160.88 detected in cached price for ETH! 🚨🚨🚨`);
+                                }
+                            }
+                            // Use cached price even if stale (last resort)
+                            currentPrice = cachedPrice;
+                            console.warn(`[PositionManager] ⚠️ Using cached price as last resort for ${position.symbol}: ${currentPrice} (fresh fetch failed)`);
+                        } else {
+                            // No entry_price to validate - still use cached but log warning
+                            currentPrice = cachedPrice;
+                            console.warn(`[PositionManager] ⚠️ Using cached price as last resort for ${position.symbol}: ${currentPrice} (no entry_price to validate - this may be stale)`);
                             }
                         }
                         
@@ -4099,7 +4834,6 @@ export default class PositionManager {
                 if (!currentPrice || isNaN(currentPrice) || currentPrice <= 0) {
                     this.scannerService.addLog(`[POSITION_MONITOR] ⚠️ Skipping ${position.symbol} (ID: ${position.position_id}) - invalid/missing price. Current price: ${currentPrice}.`, 'warning');
                     continue;
-                        }
                 }
                     
                     const entryTime = new Date(position.entry_timestamp).getTime();
@@ -4122,9 +4856,9 @@ export default class PositionManager {
                         this.lastDogeLogTimes = {};
                     }
                     this.lastDogeLogTimes[lastLogKey] = now;
-                    console.log('🐕 [DOGE_EXISTING] ==========================================');
-                    console.log('🐕 [DOGE_EXISTING] EXISTING DOGE POSITION ANALYSIS');
-                    console.log('🐕 [DOGE_EXISTING] ==========================================');
+                    //console.log('🐕 [DOGE_EXISTING] ==========================================');
+                    //console.log('🐕 [DOGE_EXISTING] EXISTING DOGE POSITION ANALYSIS');
+                    //console.log('🐕 [DOGE_EXISTING] ==========================================');
                     
                     // Get ATR data for DOGE with comprehensive debugging
                     const symbolIndicators = this.scannerService.state.indicators?.[cleanSymbol];
@@ -4132,7 +4866,7 @@ export default class PositionManager {
                     let atrValue = 0;
                     
                     // ATR Data Investigation - Debug all possible sources
-                    console.log('🐕 [DOGE_EXISTING] ATR DATA INVESTIGATION:', {
+                    /*console.log('🐕 [DOGE_EXISTING] ATR DATA INVESTIGATION:', {
                         cleanSymbol: cleanSymbol,
                         hasScannerService: !!this.scannerService,
                         hasState: !!this.scannerService?.state,
@@ -4145,38 +4879,169 @@ export default class PositionManager {
                         atrDataLength: atrData?.length || 0,
                         atrDataType: Array.isArray(atrData) ? 'Array' : typeof atrData,
                         atrDataSample: Array.isArray(atrData) && atrData.length > 0 ? atrData.slice(-3) : 'no data'
-                    });
+                    });*/
                     
                     if (Array.isArray(atrData) && atrData.length > 0) {
                         for (let i = atrData.length - 1; i >= 0; i--) {
                             if (atrData[i] !== null && atrData[i] !== undefined && !isNaN(atrData[i])) {
                                 atrValue = atrData[i];
-                                console.log('🐕 [DOGE_EXISTING] ✅ FOUND SYMBOL-SPECIFIC ATR:', {
+                                /*console.log('🐕 [DOGE_EXISTING] ✅ FOUND SYMBOL-SPECIFIC ATR:', {
                                     atrValue: atrValue,
                                     source: 'symbol-specific',
                                     index: i,
                                     totalLength: atrData.length
-                                });
+                                });*/
                                 break;
                             }
                         }
                     }
                     
-                    // Error if no ATR data found
+                    // If no ATR data found, calculate it on-demand
                     if (atrValue === 0) {
-                        console.error('🐕 [DOGE_EXISTING] ❌ ATR DATA MISSING:', {
+                        console.warn('🐕 [DOGE_EXISTING] ⚠️ ATR DATA MISSING - Calculating on-demand:', {
                             cleanSymbol: cleanSymbol,
                             hasSymbolIndicators: !!symbolIndicators,
-                            atrDataLength: atrData?.length || 0,
-                            error: 'No valid ATR data found for DOGE position analysis'
+                            atrDataLength: atrData?.length || 0
                         });
+                        
+                        try {
+                            // Fetch kline data for ATR calculation
+                            const timeframe = position.timeframe || position.strategy_timeframe || '15m';
+                            const limit = 100; // Enough for ATR period 14
+                            
+                            //console.log(`🐕 [DOGE_EXISTING] 🔄 Fetching kline data for ATR calculation: ${position.symbol}, timeframe: ${timeframe}, cleanSymbol: ${cleanSymbol}`);
+                            
+                            const klineResponse = await getKlineData({
+                                symbols: [cleanSymbol],
+                                interval: timeframe,
+                                limit: limit,
+                                priority: 1 // High priority for position monitoring
+                            });
+                            
+                            /*console.log(`🐕 [DOGE_EXISTING] 📊 Kline response received:`, {
+                                success: klineResponse?.success,
+                                hasData: !!klineResponse?.data,
+                                hasSymbolData: !!klineResponse?.data?.[cleanSymbol],
+                                symbolDataSuccess: klineResponse?.data?.[cleanSymbol]?.success,
+                                symbolDataKeys: klineResponse?.data?.[cleanSymbol] ? Object.keys(klineResponse.data[cleanSymbol]) : 'no symbol data',
+                                error: klineResponse?.error || klineResponse?.data?.[cleanSymbol]?.error
+                            });*/
+                            
+                            if (klineResponse?.success && klineResponse?.data?.[cleanSymbol]) {
+                                const symbolData = klineResponse.data[cleanSymbol];
+                                
+                                if (symbolData.success && Array.isArray(symbolData.data)) {
+                                    const klineData = symbolData.data;
+                                    
+                                    /*console.log(`🐕 [DOGE_EXISTING] 📊 Kline data array received:`, {
+                                        length: klineData.length,
+                                        firstCandle: klineData[0] ? (Array.isArray(klineData[0]) ? 'array format' : 'object format') : 'empty',
+                                        lastCandle: klineData[klineData.length - 1] ? (Array.isArray(klineData[klineData.length - 1]) ? 'array format' : 'object format') : 'empty'
+                                    });*/
+                                    
+                                    if (klineData.length >= 14) {
+                                        // Calculate ATR with period 14 (standard)
+                                        //console.log(`🐕 [DOGE_EXISTING] 🔄 Calculating ATR from ${klineData.length} candles...`);
+                                        const atrValues = unifiedCalculateATR(klineData, 14, { debug: false, validateData: true });
+                                        
+                                        /*console.log(`🐕 [DOGE_EXISTING] 📊 ATR calculation result:`, {
+                                            atrValuesLength: atrValues?.length || 0,
+                                            hasValues: !!atrValues,
+                                            isArray: Array.isArray(atrValues),
+                                            sampleValues: Array.isArray(atrValues) ? atrValues.slice(-3) : 'not array'
+                                        });*/
+                                        
+                                        if (atrValues && Array.isArray(atrValues) && atrValues.length > 0) {
+                                            // Find the latest valid ATR value
+                                            for (let i = atrValues.length - 1; i >= 0; i--) {
+                                                if (atrValues[i] !== null && atrValues[i] !== undefined && !isNaN(atrValues[i]) && atrValues[i] > 0) {
+                                                    atrValue = atrValues[i];
+                                                    //console.log(`🐕 [DOGE_EXISTING] ✅ Found valid ATR value at index ${i}: ${atrValue}`);
+                                                    break;
+                                                }
+                                            }
+                                            
+                                            if (atrValue > 0) {
+                                                // Store in scanner service state for future use
+                                                if (!this.scannerService.state.indicators) {
+                                                    this.scannerService.state.indicators = {};
+                                                }
+                                                if (!this.scannerService.state.indicators[cleanSymbol]) {
+                                                    this.scannerService.state.indicators[cleanSymbol] = {};
+                                                }
+                                                this.scannerService.state.indicators[cleanSymbol].atr = atrValues;
+                                                
+                                                /*console.log('🐕 [DOGE_EXISTING] ✅ ATR Calculated and Stored:', {
+                                                    atrValue: atrValue,
+                                                    source: 'on-demand-calculation',
+                                                    klineDataLength: klineData.length,
+                                                    atrValuesLength: atrValues.length,
+                                                    stored: true,
+                                                    symbol: cleanSymbol
+                                                });*/
+                                            } else {
+                                                console.error('🐕 [DOGE_EXISTING] ❌ No valid ATR values found in calculated array:', {
+                                                    atrValuesLength: atrValues.length,
+                                                    allNulls: atrValues.every(v => v === null || v === undefined || isNaN(v)),
+                                                    sampleValues: atrValues.slice(-5)
+                                                });
+                                            }
+                                        } else {
+                                            console.error('🐕 [DOGE_EXISTING] ❌ ATR calculation returned invalid result:', {
+                                                hasValues: !!atrValues,
+                                                isArray: Array.isArray(atrValues),
+                                                type: typeof atrValues,
+                                                value: atrValues
+                                            });
+                                        }
+                                    } else {
+                                        console.error('🐕 [DOGE_EXISTING] ❌ Insufficient kline data for ATR calculation:', {
+                                            klineDataLength: klineData.length,
+                                            required: 14,
+                                            hasData: klineData.length > 0
+                                        });
+                                    }
+                                } else {
+                                    console.error('🐕 [DOGE_EXISTING] ❌ Invalid kline data format:', {
+                                        symbolDataSuccess: symbolData.success,
+                                        hasDataArray: Array.isArray(symbolData.data),
+                                        dataType: typeof symbolData.data,
+                                        error: symbolData.error
+                                    });
+                                }
+                            } else {
+                                console.error('🐕 [DOGE_EXISTING] ❌ Failed to fetch kline data:', {
+                                    responseSuccess: klineResponse?.success,
+                                    hasData: !!klineResponse?.data,
+                                    hasSymbolData: !!klineResponse?.data?.[cleanSymbol],
+                                    responseError: klineResponse?.error,
+                                    symbolError: klineResponse?.data?.[cleanSymbol]?.error,
+                                    fullResponse: klineResponse
+                                });
+                            }
+                        } catch (error) {
+                            console.error('🐕 [DOGE_EXISTING] ❌ Error calculating ATR on-demand:', {
+                                error: error.message,
+                                stack: error.stack,
+                                errorType: error.constructor.name
+                            });
+                        }
+                        
+                        if (atrValue === 0) {
+                            console.error('🐕 [DOGE_EXISTING] ❌ ATR DATA MISSING (on-demand calculation failed):', {
+                                cleanSymbol: cleanSymbol,
+                                hasSymbolIndicators: !!symbolIndicators,
+                                atrDataLength: atrData?.length || 0,
+                                error: 'No valid ATR data found for DOGE position analysis'
+                            });
+                        }
                     }
                     
-                    console.log('🐕 [DOGE_EXISTING] FINAL ATR VALUE:', {
+                    /*console.log('🐕 [DOGE_EXISTING] FINAL ATR VALUE:', {
                         atrValue: atrValue,
                         hasValue: atrValue > 0,
                         source: atrValue > 0 ? 'symbol-specific' : 'none'
-                    });
+                    });*/
                     
                     // Fix quantity access - use quantity_crypto as primary, fallback to quantity
                     const positionQuantity = position.quantity_crypto || position.quantity || 0;
@@ -4190,7 +5055,7 @@ export default class PositionManager {
                             positionQuantity: positionQuantity,
                             reason: 'Invalid or missing quantity data'
                         });
-                        console.log('🐕 [DOGE_EXISTING] ==========================================');
+                        //console.log('🐕 [DOGE_EXISTING] ==========================================');
                         continue; // Skip this position's detailed analysis
                     }
                     
@@ -4200,7 +5065,7 @@ export default class PositionManager {
                             currentPrice: currentPrice,
                             reason: 'Invalid or missing price data'
                         });
-                        console.log('🐕 [DOGE_EXISTING] ==========================================');
+                        //console.log('🐕 [DOGE_EXISTING] ==========================================');
                         
                         // RECONCILIATION TRACKING: Add to reconciliationNeeded array
                         reconciliationNeeded.push({
@@ -4216,7 +5081,7 @@ export default class PositionManager {
                         continue; // Skip this position's detailed analysis
                     }
                     
-                    console.log('🐕 [DOGE_EXISTING] Position Details:', {
+                    /*console.log('🐕 [DOGE_EXISTING] Position Details:', {
                         symbol: position.symbol,
                         positionId: position.position_id,
                         entryPrice: position.entry_price,
@@ -4228,16 +5093,16 @@ export default class PositionManager {
                         status: position.status,
                         entryTime: position.entry_timestamp,
                         ageHours: ((now - entryTime) / (1000 * 60 * 60)).toFixed(2)
-                    });
+                    });*/
                     
-                    console.log('🐕 [DOGE_EXISTING] Current SL/TP Status:', {
+                    /*console.log('🐕 [DOGE_EXISTING] Current SL/TP Status:', {
                         currentStopLoss: position.stop_loss_price || 'Not set',
                         currentTakeProfit: position.take_profit_price || 'Not set',
                         stopLossHit: position.stop_loss_price && currentPrice <= position.stop_loss_price,
                         takeProfitHit: position.take_profit_price && currentPrice >= position.take_profit_price,
                         distanceToSL: position.stop_loss_price ? Math.abs(currentPrice - position.stop_loss_price) : 'N/A',
                         distanceToTP: position.take_profit_price ? Math.abs(position.take_profit_price - currentPrice) : 'N/A'
-                    });
+                    });*/
                     
                     if (atrValue > 0) {
                         // Calculate ATR-based SL/TP recommendations
@@ -4258,7 +5123,7 @@ export default class PositionManager {
                         const stopLossPercent = (atrStopLoss / currentPrice * 100);
                         const takeProfitPercent = (atrTakeProfit / currentPrice * 100);
                         
-                        console.log('🐕 [DOGE_EXISTING] ATR-Based Recommendations:', {
+                        /*console.log('🐕 [DOGE_EXISTING] ATR-Based Recommendations:', {
                             atrValue: atrValue,
                             atrAsPercentOfPrice: ((atrValue / currentPrice) * 100).toFixed(4) + '%',
                             recommendedStopLoss: `$${recommendedStopLoss.toFixed(6)}`,
@@ -4271,7 +5136,7 @@ export default class PositionManager {
                             currentVsRecommendedTP: position.take_profit_price ? 
                                 `Current: $${position.take_profit_price.toFixed(6)} vs Recommended: $${recommendedTakeProfit.toFixed(6)}` : 
                                 'No current TP set'
-                        });
+                        });*/
                         
                         // Calculate potential P&L using the corrected quantity with NaN protection
                         const potentialLoss = Math.abs(currentPrice - recommendedStopLoss) * positionQuantity;
@@ -4291,7 +5156,7 @@ export default class PositionManager {
                         const safeMaxLossPercent = isNaN(maxLossPercent) ? 0 : maxLossPercent;
                         const safeMaxProfitPercent = isNaN(maxProfitPercent) ? 0 : maxProfitPercent;
                         
-                        console.log('🐕 [DOGE_EXISTING] Risk Analysis:', {
+                        /*console.log('🐕 [DOGE_EXISTING] Risk Analysis:', {
                             positionValue: `$${safePositionValue.toFixed(2)}`,
                             potentialLoss: `$${safePotentialLoss.toFixed(2)}`,
                             potentialProfit: `$${safePotentialProfit.toFixed(2)}`,
@@ -4299,7 +5164,7 @@ export default class PositionManager {
                             maxLossPercent: `${safeMaxLossPercent.toFixed(2)}%`,
                             maxProfitPercent: `${safeMaxProfitPercent.toFixed(2)}%`,
                             calculationStatus: 'All values validated and safe'
-                        });
+                        });*/
                         
                         // Check if current SL/TP needs adjustment
                         const slAdjustmentNeeded = position.stop_loss_price && 
@@ -4307,7 +5172,7 @@ export default class PositionManager {
                         const tpAdjustmentNeeded = position.take_profit_price && 
                             Math.abs(position.take_profit_price - recommendedTakeProfit) > (atrValue * 0.1);
                         
-                        console.log('🐕 [DOGE_EXISTING] Adjustment Recommendations:', {
+                        /*console.log('🐕 [DOGE_EXISTING] Adjustment Recommendations:', {
                             slAdjustmentNeeded: slAdjustmentNeeded,
                             tpAdjustmentNeeded: tpAdjustmentNeeded,
                             slAdjustmentReason: slAdjustmentNeeded ? 'Current SL differs significantly from ATR-based recommendation' : 'SL is appropriate',
@@ -4315,7 +5180,7 @@ export default class PositionManager {
                             recommendation: !position.stop_loss_price || !position.take_profit_price ? 
                                 'Consider setting SL/TP based on ATR analysis' : 
                                 'Current SL/TP settings appear appropriate'
-                        });
+                        });*/
                         
                     } else {
                         console.log('🐕 [DOGE_EXISTING] ⚠️ NO ATR DATA AVAILABLE:', {
@@ -4326,7 +5191,7 @@ export default class PositionManager {
                         });
                     }
                     
-                    console.log('🐕 [DOGE_EXISTING] ==========================================');
+                    //console.log('🐕 [DOGE_EXISTING] ==========================================');
                 }
 
                 let tempPosition = { ...position }; // Working copy
@@ -4468,16 +5333,16 @@ export default class PositionManager {
             // Race the position loop against the timeout
             try {
                 await Promise.race([positionLoopPromise, positionLoopTimeout]);
-                console.log('[position_manager_debug] 🔍 Position loop completed successfully');
+                //console.log('[position_manager_debug] 🔍 Position loop completed successfully');
             } catch (timeoutError) {
                 console.error('[position_manager_debug] ❌ Position loop timeout:', timeoutError.message);
                 this.addLog(`[MONITOR] ❌ Position loop timeout: ${timeoutError.message}`, 'error');
                 // Continue with the function even if the loop times out
             }
 
-            console.log('[position_manager_debug] 🔍 About to process post-loop logic...');
-            console.log('[position_manager_debug] 🔍 Current tradesToCreate count:', tradesToCreate.length);
-            console.log('[position_manager_debug] 🔍 Current positionIdsToClose count:', positionIdsToClose.length);
+            //console.log('[position_manager_debug] 🔍 About to process post-loop logic...');
+            //console.log('[position_manager_debug] 🔍 Current tradesToCreate count:', tradesToCreate.length);
+            //console.log('[position_manager_debug] 🔍 Current positionIdsToClose count:', positionIdsToClose.length);
 
         // Persist updates for positions that are still open
         if (positionsUpdatedButStillOpen.length > 0) {
@@ -4495,6 +5360,9 @@ export default class PositionManager {
             this.needsWalletSave = true; // Mark for persistence if any position tracking updated
         }
 
+        // Update all open positions with current prices and unrealized P&L
+        await this.updatePositionsWithCurrentPrices(currentPrices);
+
         // If any position tracking updates happened, persist the wallet state
         if (this.needsWalletSave) {
             await this.persistWalletChangesAndWait();
@@ -4502,6 +5370,8 @@ export default class PositionManager {
             this.scannerService.addLog('[MONITOR] ✅ Wallet state saved after tracking updates.', 'success');
         }
 
+        // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] POSITION LOOP COMPLETE, tradesToCreate: ${tradesToCreate.length} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+        
         console.log(`[PositionManager] 🔍 MONITORING COMPLETE:`, {
             tradesToCreate: tradesToCreate.length,
             positionIdsToClose: positionIdsToClose.length,
@@ -4512,18 +5382,21 @@ export default class PositionManager {
         });
 
         if (tradesToCreate.length > 0) {
-            console.log(`[PositionManager] 🔄 Executing batch close for ${tradesToCreate.length} positions`);
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] ABOUT TO VALIDATE POSITIONS FOR CLOSURE (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+            //console.log(`[PositionManager] 🔄 Executing batch close for ${tradesToCreate.length} positions`);
             this.addLog(`[MONITOR] 🔄 Identified ${tradesToCreate.length} positions for closure.`, 'info', { level: 1 });
             
             // PRE-CLOSE VALIDATION: Group positions into validClosures[] and dustClosures[]
-            console.log('[PositionManager] 🔍 [PRE-CLOSE_VALIDATION] Starting pre-close validation...');
+            //console.log('[PositionManager] 🔍 [PRE-CLOSE_VALIDATION] Starting pre-close validation...');
             this.addLog(`[PRE-CLOSE_VALIDATION] 🔍 Validating ${tradesToCreate.length} positions before closure...`, 'info');
             
+            const _validationStartTime = Date.now();
             const { validClosures, dustClosures } = await this._validateAndGroupPositionsForClosure(
                 tradesToCreate, 
                 positionIdsToClose, 
                 currentPrices
             );
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] VALIDATION COMPLETE, took ${Date.now() - _validationStartTime}ms, total: ${Date.now() - _monitorCloseStartTime}ms 🔴🔴🔴`);
             
             console.log('[PositionManager] 🔍 [PRE-CLOSE_VALIDATION] Validation complete:', {
                 validClosures: validClosures.length,
@@ -4538,6 +5411,7 @@ export default class PositionManager {
             
             // Execute valid closures first
             if (validClosures.length > 0) {
+                // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] VALID CLOSURES FOUND: ${validClosures.length} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
                 const validTradesToCreate = validClosures.map(v => v.tradeData);
                 const validPositionIdsToClose = validClosures.map(v => v.positionId);
                 
@@ -4550,24 +5424,42 @@ export default class PositionManager {
                 //console.log('🔥🔥🔥 POSITION IDS TO CLOSE:', validPositionIdsToClose);
                 //console.log('🔥🔥🔥 POSITIONS IN MEMORY COUNT:', this.positions.length);
                 
-                //console.log('[position_manager_debug] 🔍 About to call executeBatchClose...');
-                //console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - CALLING EXECUTE_BATCH_CLOSE');
-                //console.log('[PositionManager] 🔍 [EXECUTION_TRACE] STEP 4: About to call executeBatchClose');
+                // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] ABOUT TO CALL executeBatchClose, positions: ${validClosures.length} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
                 
-                // Add timeout to executeBatchClose to prevent hanging - increased to 60 seconds to allow for all positions
+                // Add timeout to executeBatchClose to prevent hanging
+                // Timeout calculation: 
+                // - Each position: ~10-15s (price fetch 2s + Binance sell 5-10s + processing 2-3s)
+                // - For N positions: N * 15s + buffer
+                // - Minimum: 120s (2 minutes) for small batches
+                // - Scale up: 15s per position + 60s buffer
+                const positionsCount = validClosures.length;
+                const calculatedTimeout = Math.max(120000, (positionsCount * 15000) + 60000); // 15s per position + 60s buffer, minimum 120s
+                const timeoutSeconds = Math.ceil(calculatedTimeout / 1000);
+                
+                console.log(`[PositionManager] ⏱️ Setting executeBatchClose timeout: ${timeoutSeconds}s for ${positionsCount} positions`);
+                this.addLog(`[MONITOR] ⏱️ Closing ${positionsCount} positions (timeout: ${timeoutSeconds}s)`, 'info');
+                
                 const executeBatchCloseTimeout = new Promise((_, reject) => {
-                    setTimeout(() => reject(new Error('executeBatchClose timeout after 60 seconds')), 60000);
+                    setTimeout(() => {
+                        const elapsed = Date.now() - _executeBatchCloseStartTime;
+                        reject(new Error(`executeBatchClose timeout after ${timeoutSeconds} seconds (${(elapsed/1000).toFixed(1)}s elapsed)`));
+                    }, calculatedTimeout);
                 });
                 
+                const _executeBatchCloseStartTime = Date.now();
+                console.log(`[PositionManager] 🚀 Calling executeBatchClose for ${positionsCount} positions (timeout: ${timeoutSeconds}s)`);
                 const executeBatchClosePromise = this.executeBatchClose(validTradesToCreate, validPositionIdsToClose);
                 
                 let closeResult;
                 try {
                     closeResult = await Promise.race([executeBatchClosePromise, executeBatchCloseTimeout]);
-                    console.log('[position_manager_debug] 🔍 executeBatchClose completed successfully');
-                    console.log('[position_manager_debug] 🔍 Close result:', closeResult);
+                    const elapsed = Date.now() - _executeBatchCloseStartTime;
+                    console.log(`[PositionManager] ✅ executeBatchClose completed in ${(elapsed/1000).toFixed(1)}s`);
                 } catch (timeoutError) {
-                    console.error('[position_manager_debug] ❌ executeBatchClose timeout:', timeoutError.message);
+                    const elapsed = Date.now() - _executeBatchCloseStartTime;
+                    console.error(`[position_manager_debug] ❌ executeBatchClose timeout after ${(elapsed/1000).toFixed(1)}s:`, timeoutError.message);
+                    console.error(`[position_manager_debug] ⚠️ This indicates ${positionsCount} positions took longer than ${timeoutSeconds}s to close`);
+                    console.error(`[position_manager_debug] ⚠️ Check for slow price fetches, Binance API delays, or network issues`);
                     this.addLog(`[MONITOR] ❌ executeBatchClose timeout: ${timeoutError.message}`, 'error');
                     closeResult = { success: false, error: timeoutError.message, closed: 0 };
                 }
@@ -4691,11 +5583,8 @@ export default class PositionManager {
             }, 30000); // 30 seconds delay as per schema
         }
 
-        console.log('[position_manager_debug] 🔍 About to return final result...');
-        console.log('[position_manager_debug] 🔍 Final tradesToCreate count:', tradesToCreate.length);
-        console.log('[position_manager_debug] 🔍 Final positionIdsToClose count:', uniquePositionIdsToClose.length);
-        console.log('[position_manager_debug] 🔍 Final reconciliationNeeded count:', reconciliationNeeded.length);
-        console.log('[position_manager_debug] 🔍 THIS IS THE FINAL RETURN STATEMENT - FUNCTION COMPLETING');
+        const _totalTime = Date.now() - _monitorCloseStartTime;
+        // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] ABOUT TO RETURN, total time: ${_totalTime}ms (${(_totalTime/1000).toFixed(2)}s) 🔴🔴🔴`);
 
         return {
             tradesToCreate: tradesToCreate.length,
@@ -4706,11 +5595,15 @@ export default class PositionManager {
         } catch (error) {
             // Ensure lock is released even on error
             this.isMonitoring = false;
+            const _errorTime = Date.now() - _monitorCloseStartTime;
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] ERROR in monitorAndClosePositions after ${_errorTime}ms 🔴🔴🔴`);
             console.error('[PositionManager] ❌ Error in monitorAndClosePositions:', error);
             this.addLog(`[DEBUG_MONITOR] ❌ Error in monitoring: ${error.message}`, 'error');
             return { tradesToCreate: [], positionIdsToClose: [] };
         } finally {
             this.isMonitoring = false;
+            const _finallyTime = Date.now() - _monitorCloseStartTime;
+            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] FINALLY BLOCK, total time: ${_finallyTime}ms (${(_finallyTime/1000).toFixed(2)}s) 🔴🔴🔴`);
         }
     }
 
@@ -4737,7 +5630,13 @@ export default class PositionManager {
             const pnlPercentage = position.entry_value_usdt > 0 ? (pnlUsdt / position.entry_value_usdt) * 100 : 0;
 
             const exitTimestamp = new Date().toISOString();
-            const durationSeconds = Math.floor((new Date(exitTimestamp).getTime() - new Date(position.entry_timestamp).getTime()) / 1000);
+            // Ensure entry_timestamp exists before calculating duration
+            const entryTimestamp = position.entry_timestamp ? new Date(position.entry_timestamp) : null;
+            // Calculate duration in hours (decimal) for better readability
+            const durationHours = entryTimestamp 
+                ? (new Date(exitTimestamp).getTime() - entryTimestamp.getTime()) / (1000 * 3600)
+                : 0; // Default to 0 if entry_timestamp is missing
+            const durationSeconds = Math.round(durationHours * 3600); // Also calculate seconds for backwards compatibility
 
             const tradeData = {
                 trade_id: position.position_id, // This will be the Binance order ID
@@ -4754,8 +5653,9 @@ export default class PositionManager {
                 total_fees_usdt: totalFees, // CRITICAL: Ensure total_fees_usdt is included here
                 entry_timestamp: position.entry_timestamp,
                 exit_timestamp: exitTimestamp,
-                duration_seconds: durationSeconds,
-                exit_reason: reason,
+                duration_hours: durationHours, // Store duration in hours (decimal)
+                duration_seconds: durationSeconds, // Also store seconds for backwards compatibility
+                exit_reason: reason || 'timeout', // Ensure exit_reason is always set
                 leverage: position.leverage || 1,
                 take_profit_price: position.take_profit_price,
                 wallet_allocation_percentage: position.wallet_allocation_percentage,
@@ -4788,12 +5688,12 @@ export default class PositionManager {
             }
         }
         
-        console.log('[position_manager_debug] 🔍 About to return from monitorAndClosePositions...');
-        console.log('[position_manager_debug] 🔍 Final result:', { 
+        //console.log('[position_manager_debug] 🔍 About to return from monitorAndClosePositions...');
+        /*console.log('[position_manager_debug] 🔍 Final result:', { 
             tradesToCreate: tradesToCreate.length, 
             positionIdsToClose: positionIdsToClose.length 
-        });
-        console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - FUNCTION COMPLETING SUCCESSFULLY');
+        });*/
+        //console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - FUNCTION COMPLETING SUCCESSFULLY');
         
         // This return statement is unreachable due to the earlier return statement
         // return { tradesToCreate, positionIdsToClose };
@@ -4983,9 +5883,9 @@ export default class PositionManager {
                     currentAllocated = managedAllocated;
                 } else {
                     // Fallback to wallet summary if available
-                    const walletSummary = this.scannerService?.walletManagerService?.walletSummary;
-                    if (walletSummary && walletSummary.balanceInTrades) {
-                        currentAllocated = parseFloat(walletSummary.balanceInTrades);
+                const walletSummary = this.scannerService?.walletManagerService?.walletSummary;
+                if (walletSummary && walletSummary.balanceInTrades) {
+                    currentAllocated = parseFloat(walletSummary.balanceInTrades);
                     }
                 }
             } catch (error) {
@@ -5017,21 +5917,42 @@ export default class PositionManager {
                     // The signal object can have two structures:
                     // 1. Direct properties: { strategy_name, symbol, currentPrice, ... }
                     // 2. Nested in combination: { combination: { strategy_name, symbol }, currentPrice, ... }
-                    const combination = signal.combination || signal;
+                    const combination = signal.combination || signal.originalStrategy || signal;
                     const currentPrice = signal.currentPrice;
                     const convictionScore = signal.convictionScore || signal.conviction_score;
                     const convictionDetails = signal.convictionDetails || signal.conviction_breakdown;
+                    
+                    // DEBUG: Log combination details for exit time investigation
+                    // Commented out to reduce console flooding
+                    /*
+                    console.log('[PositionManager] 🔍 COMBINATION EXTRACTION FOR EXIT TIME:');
+                    console.log(`  - Signal has combination: ${!!signal.combination}`);
+                    console.log(`  - Signal has originalStrategy: ${!!signal.originalStrategy}`);
+                    console.log(`  - Using: ${signal.combination ? 'signal.combination' : signal.originalStrategy ? 'signal.originalStrategy' : 'signal'}`);
+                    if (combination) {
+                        console.log(`  - Combination Name: ${combination.combinationName || combination.combination_name || 'N/A'}`);
+                        console.log(`  - estimatedExitTimeMinutes: ${combination.estimatedExitTimeMinutes ?? 'undefined'}`);
+                        console.log(`  - estimated_exit_time_minutes: ${combination.estimated_exit_time_minutes ?? 'undefined'}`);
+                        console.log(`  - Coin: ${combination.coin || 'N/A'}`);
+                        console.log(`  - Timeframe: ${combination.timeframe || 'N/A'}`);
+                        console.log(`  - Success Rate: ${(combination.successRate ?? combination.success_rate) || 'N/A'}`);
+                        console.log(`  - Occurrences: ${combination.occurrences ?? 'N/A'}`);
+                    }
+                    */
                     
                     // Extract symbol and strategy_name from either direct properties or combination
                     const symbol = signal.symbol || combination.symbol || combination.coin;
                     const strategy_name = signal.strategy_name || combination.strategy_name || combination.combinationName;
                     
+                    // Commented out to reduce console flooding
+                    /*
                     console.log('[PositionManager] 🔍 Extracted data:', {
                         symbol: symbol,
                         strategy_name: strategy_name,
                         currentPrice: currentPrice,
                         convictionScore: convictionScore
                     });
+                    */
                     
                     if (!symbol || !strategy_name || !currentPrice) {
                         console.log('[PositionManager] ⚠️ Invalid signal data, skipping:', {
@@ -5047,12 +5968,15 @@ export default class PositionManager {
                     }
                     
                        // Calculate proper position size using the position sizing logic
+                       // Commented out to reduce console flooding
+                       /*
                        console.log('[PositionManager] 🔍 Calculating position size for:', {
                            symbol: symbol,
                            currentPrice: currentPrice,
                            convictionScore: convictionScore,
                            strategy_name: strategy_name
                        });
+                       */
                        
                        // Import position sizing function
                        const { calculatePositionSize } = await import('@/components/utils/dynamicPositionSizing');
@@ -5086,6 +6010,8 @@ export default class PositionManager {
                        }
                        
                        // DEBUG: Log ATR validation before using it
+                       // Commented out to reduce console flooding
+                       /*
                        console.log('[PositionManager] 🔍 ATR validation before use:', {
                            symbol: symbol,
                            symbolNoSlash: symbolNoSlash,
@@ -5099,6 +6025,7 @@ export default class PositionManager {
                            symbolIndicatorsPresent: !!symbolIndicators,
                            symbolIndicatorsKeys: symbolIndicators ? Object.keys(symbolIndicators) : 'no indicators for symbol'
                        });
+                       */
 
                        
                        // SAFETY CHECK: Cap ATR if it's still too high (fallback protection)
@@ -5363,7 +6290,8 @@ export default class PositionManager {
                            error: positionSizeResult.error
                        });
                        
-                       // Execute Binance buy order
+                       // Execute Binance buy order - Track fill time
+                       const orderStartTime = Date.now();
                        const binanceBuyResult = await this._executeBinanceMarketBuyOrder(
                            symbolNoSlash, 
                            positionSizeResult.quantityCrypto, 
@@ -5374,8 +6302,17 @@ export default class PositionManager {
                                positionSizeResult: positionSizeResult
                            }
                        );
+                       const orderEndTime = Date.now();
+                       const entryFillTimeMs = orderEndTime - orderStartTime;
                        
                        console.log('[PositionManager] 🚀 Binance buy result:', binanceBuyResult);
+                       console.log('[PositionManager] ⏱️ Entry order fill time:', {
+                           orderStartTime: new Date(orderStartTime).toISOString(),
+                           orderEndTime: new Date(orderEndTime).toISOString(),
+                           entryFillTimeMs: entryFillTimeMs,
+                           entryFillTimeSeconds: (entryFillTimeMs / 1000).toFixed(2),
+                           status: entryFillTimeMs < 5000 ? '✅ Fast fill (< 5 seconds)' : entryFillTimeMs < 10000 ? '⚠️ Moderate fill (5-10 seconds)' : '❌ Slow fill (> 10 seconds)'
+                       });
                        console.log('[PositionManager] 🚀 Binance buy result details:', {
                            success: binanceBuyResult.success,
                            error: binanceBuyResult.error,
@@ -5383,6 +6320,21 @@ export default class PositionManager {
                            reason: binanceBuyResult.reason,
                            orderResult: binanceBuyResult.orderResult
                        });
+                       
+                       // CRITICAL: Log the raw Binance response to track price source
+                       if (binanceBuyResult.orderResult) {
+                           console.log(`[PositionManager] 🔍 RAW Binance orderResult for ${symbol}:`, {
+                               avgPrice: binanceBuyResult.orderResult.avgPrice,
+                               price: binanceBuyResult.orderResult.price,
+                               fills: binanceBuyResult.orderResult.fills ? 
+                                   binanceBuyResult.orderResult.fills.map(f => ({ price: f.price, qty: f.qty || f.quantity })) : 
+                                   'no fills',
+                               symbol: binanceBuyResult.orderResult.symbol,
+                               orderId: binanceBuyResult.orderResult.orderId,
+                               status: binanceBuyResult.orderResult.status,
+                               executedQty: binanceBuyResult.orderResult.executedQty
+                           });
+                       }
                        
                        if (!binanceBuyResult.success) {
                            console.log('[PositionManager] ❌ Binance buy order failed:', binanceBuyResult.error);
@@ -5400,9 +6352,149 @@ export default class PositionManager {
                        
                        console.log('[PositionManager] ✅ Creating database record after wallet sync');
                        
+                       // CRITICAL FIX: Get the ACTUAL executed price from Binance (source of truth)
+                       // Priority: avgPrice > price > calculate from fills > currentPrice (cached)
+                       let executedPrice = null;
+                       
+                       // Try avgPrice first (most reliable)
+                       if (binanceBuyResult.orderResult?.avgPrice && 
+                           typeof binanceBuyResult.orderResult.avgPrice === 'number' &&
+                           !isNaN(binanceBuyResult.orderResult.avgPrice) &&
+                           binanceBuyResult.orderResult.avgPrice > 0) {
+                           executedPrice = parseFloat(binanceBuyResult.orderResult.avgPrice);
+                           console.log(`[PositionManager] ✅ Using Binance avgPrice for ${symbol}: $${executedPrice}`);
+                       }
+                       // Fallback to price field
+                       else if (binanceBuyResult.orderResult?.price &&
+                                typeof binanceBuyResult.orderResult.price === 'number' &&
+                                !isNaN(binanceBuyResult.orderResult.price) &&
+                                binanceBuyResult.orderResult.price > 0) {
+                           executedPrice = parseFloat(binanceBuyResult.orderResult.price);
+                           console.log(`[PositionManager] ✅ Using Binance price field for ${symbol}: $${executedPrice}`);
+                       }
+                       // Fallback: Calculate from fills array if available
+                       else if (Array.isArray(binanceBuyResult.orderResult?.fills) && binanceBuyResult.orderResult.fills.length > 0) {
+                           const fills = binanceBuyResult.orderResult.fills;
+                           let totalQty = 0;
+                           let totalCost = 0;
+                           fills.forEach(fill => {
+                               const qty = parseFloat(fill.qty || fill.quantity || 0);
+                               const price = parseFloat(fill.price || 0);
+                               if (qty > 0 && price > 0) {
+                                   totalQty += qty;
+                                   totalCost += qty * price;
+                               }
+                           });
+                           if (totalQty > 0 && totalCost > 0) {
+                               executedPrice = totalCost / totalQty;
+                               console.log(`[PositionManager] ✅ Calculated executed price from fills for ${symbol}: $${executedPrice} (${fills.length} fills)`);
+                           }
+                       }
+                       
+                       // VALIDATION: Ensure executed price is realistic (not mock/test data)
+                       // For ETH, price should be around $3000-5000, not $1889
+                       if (executedPrice && currentPrice && currentPrice > 0) {
+                           const priceDiff = Math.abs(executedPrice - currentPrice);
+                           const priceDiffPercent = (priceDiff / currentPrice) * 100;
+                           
+                           // If executed price differs by more than 20% from current price, log a warning
+                           if (priceDiffPercent > 20) {
+                               console.warn(`[PositionManager] ⚠️ Executed price differs significantly from current price for ${symbol}:`, {
+                                   executedPrice: executedPrice,
+                                   currentPrice: currentPrice,
+                                   difference: priceDiff,
+                                   differencePercent: `${priceDiffPercent.toFixed(2)}%`,
+                                   warning: 'Price difference exceeds 20% - possible stale/mock data'
+                               });
+                           }
+                           
+                           // CRITICAL: If executed price is way off (more than 50% different), use currentPrice as fallback but log error
+                           if (priceDiffPercent > 50) {
+                               console.error(`[PositionManager] ❌ CRITICAL: Executed price is way off for ${symbol}, using currentPrice instead:`, {
+                                   executedPrice: executedPrice,
+                                   currentPrice: currentPrice,
+                                   difference: priceDiff,
+                                   differencePercent: `${priceDiffPercent.toFixed(2)}%`,
+                                   action: 'Using currentPrice as fallback'
+                               });
+                               executedPrice = currentPrice; // Use currentPrice as last resort
+                           }
+                       }
+                       
+                      // CRITICAL: Define expected price ranges to detect unrealistic prices from Binance
+                      // Updated ranges to reflect current market conditions (2024-2025)
+                      const EXPECTED_PRICE_RANGES = {
+                          'ETH/USDT': { min: 1500, max: 6000 },      // Updated: ETH has been above 4000
+                          'BTC/USDT': { min: 20000, max: 150000 },   // Updated: BTC trading above 100k
+                          'SOL/USDT': { min: 50, max: 500 },         // Updated: SOL more volatile
+                          'BNB/USDT': { min: 150, max: 1000 },       // Updated: Wider range
+                          'ADA/USDT': { min: 0.3, max: 2.0 },
+                          'XRP/USDT': { min: 0.3, max: 3.0 },
+                          'DOGE/USDT': { min: 0.05, max: 0.5 }
+                      };
+                       
+                       const range = EXPECTED_PRICE_RANGES[symbol];
+                       
+                       // CRITICAL: Validate executedPrice against expected ranges
+                       if (executedPrice && range && (executedPrice < range.min || executedPrice > range.max)) {
+                           console.error(`[PositionManager] ❌ CRITICAL: Binance executed price ${executedPrice} is outside expected range [${range.min}, ${range.max}] for ${symbol}`);
+                           console.error(`[PositionManager] ❌ This indicates Binance API returned wrong data - using currentPrice as fallback`);
+                           executedPrice = null; // Invalidate it
+                       }
+                       
+                       // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
+                       if (symbol === 'ETH/USDT' && executedPrice) {
+                           const ETH_ALERT_MIN = 3500;
+                           const ETH_ALERT_MAX = 4000;
+                           if (executedPrice < ETH_ALERT_MIN || executedPrice > ETH_ALERT_MAX) {
+                               /*console.error(`[PositionManager] 🚨🚨🚨 ETH PRICE ALERT 🚨🚨🚨`);
+                               console.error(`[PositionManager] 🚨 ETH executed price ${executedPrice} is outside alert range [${ETH_ALERT_MIN}, ${ETH_ALERT_MAX}]`);
+                               console.error(`[PositionManager] 🚨 Full details:`, {
+                                   symbol: symbol,
+                                   executedPrice: executedPrice,
+                                   currentPrice: currentPrice,
+                                   priceDifference: executedPrice < ETH_ALERT_MIN ? 
+                                       `${(ETH_ALERT_MIN - executedPrice).toFixed(2)} below minimum` : 
+                                       `${(executedPrice - ETH_ALERT_MAX).toFixed(2)} above maximum`,
+                                   percentDifference: executedPrice < ETH_ALERT_MIN ? 
+                                       `${((ETH_ALERT_MIN - executedPrice) / ETH_ALERT_MIN * 100).toFixed(2)}%` : 
+                                       `${((executedPrice - ETH_ALERT_MAX) / ETH_ALERT_MAX * 100).toFixed(2)}%`,
+                                   timestamp: new Date().toISOString(),
+                                   binanceOrderResult: binanceBuyResult.orderResult,
+                                   avgPrice: binanceBuyResult.orderResult?.avgPrice,
+                                   priceField: binanceBuyResult.orderResult?.price,
+                                   fills: binanceBuyResult.orderResult?.fills,
+                                   orderId: binanceBuyResult.orderResult?.orderId,
+                                   signal: signal,
+                                   strategyName: signal?.strategy_name,
+                                   tradingMode: this.tradingMode
+                               });*/
+                               //console.error(`[PositionManager] 🚨🚨🚨 END ETH PRICE ALERT 🚨🚨🚨`);
+                           }
+                       }
+                       
+                       // Final fallback to currentPrice if executedPrice is still invalid
+                       if (!executedPrice || executedPrice <= 0 || isNaN(executedPrice)) {
+                           // CRITICAL: Validate currentPrice before using as fallback
+                           if (currentPrice && range && (currentPrice < range.min || currentPrice > range.max)) {
+                               console.error(`[PositionManager] ❌ CRITICAL: Cannot use currentPrice ${currentPrice} as fallback - also outside expected range [${range.min}, ${range.max}] for ${symbol}`);
+                               console.error(`[PositionManager] ❌ Position cannot be opened - no valid price available from Binance or cache`);
+                               throw new Error(`Invalid price for ${symbol}: Binance returned ${executedPrice}, cache has ${currentPrice}, but both are outside expected range [${range.min}, ${range.max}]`);
+                           }
+                           
+                           console.warn(`[PositionManager] ⚠️ Could not get valid executed price from Binance for ${symbol}, using currentPrice:`, {
+                               executedPrice: executedPrice,
+                               currentPrice: currentPrice,
+                               orderResult: binanceBuyResult.orderResult
+                           });
+                           executedPrice = currentPrice;
+                       }
+                       
+                       console.log(`[PositionManager] ✅ Final executed price for ${symbol}: $${executedPrice} (source: Binance order result)`);
+                       
                        // CRITICAL: Check if the executed quantity is too small (dust)
                        const executedQty = binanceBuyResult.orderResult?.executedQty || 0;
-                       const executedValue = executedQty * (binanceBuyResult.orderResult?.avgPrice || currentPrice);
+                       const executedValue = executedQty * executedPrice;
                        
                        if (executedQty <= 0 || executedValue < 5) { // Less than $5 is considered dust
                            console.log('[PositionManager] ⚠️ Position too small (dust), skipping database creation:', {
@@ -5434,18 +6526,18 @@ export default class PositionManager {
                            takeProfitAtrMultiplier: combination.takeProfitAtrMultiplier || combination.take_profit_atr_multiplier,
                            direction: combination.strategyDirection || combination.direction,
                            atrValue: atrValue,
-                           currentPrice: currentPrice,
+                           executedPrice: executedPrice,
                            expectedStopLoss: combination.strategyDirection === 'long' 
-                               ? currentPrice - (atrValue * (combination.stopLossAtrMultiplier || combination.stop_loss_atr_multiplier || 0))
-                               : currentPrice + (atrValue * (combination.stopLossAtrMultiplier || combination.stop_loss_atr_multiplier || 0)),
+                               ? executedPrice - (atrValue * (combination.stopLossAtrMultiplier || combination.stop_loss_atr_multiplier || 0))
+                               : executedPrice + (atrValue * (combination.stopLossAtrMultiplier || combination.stop_loss_atr_multiplier || 0)),
                            expectedTakeProfit: combination.strategyDirection === 'long'
-                               ? currentPrice + (atrValue * (combination.takeProfitAtrMultiplier || combination.take_profit_atr_multiplier || 0))
-                               : currentPrice - (atrValue * (combination.takeProfitAtrMultiplier || combination.take_profit_atr_multiplier || 0))
+                               ? executedPrice + (atrValue * (combination.takeProfitAtrMultiplier || combination.take_profit_atr_multiplier || 0))
+                               : executedPrice - (atrValue * (combination.takeProfitAtrMultiplier || combination.take_profit_atr_multiplier || 0))
                        });
                        
-                       // Calculate SL/TP prices for new position
-                       const stopLossPrice = this.calculateStopLossPrice(combination, currentPrice, atrValue);
-                       const takeProfitPrice = this.calculateTakeProfitPrice(combination, currentPrice, atrValue);
+                       // Calculate SL/TP prices for new position using EXECUTED price (not cached currentPrice)
+                       const stopLossPrice = this.calculateStopLossPrice(combination, executedPrice, atrValue);
+                       const takeProfitPrice = this.calculateTakeProfitPrice(combination, executedPrice, atrValue);
                        
                        // NEW POSITION SL/TP CALCULATION LOGS
                        // console.log('🎯 [NEW_POSITION] ==========================================');
@@ -5472,8 +6564,8 @@ export default class PositionManager {
                            strategy_name: strategy_name,
                            symbol: symbol,
                            direction: combination.direction || 'long',
-                           entry_price: currentPrice,
-                           current_price: currentPrice, // CRITICAL FIX: Set current_price to prevent ghost detection
+                           entry_price: executedPrice, // CRITICAL FIX: Use Binance executed price, not cached currentPrice
+                           current_price: executedPrice, // CRITICAL FIX: Set current_price to executed price to prevent ghost detection
                            quantity_crypto: binanceBuyResult.orderResult?.executedQty || positionSizeResult.quantityCrypto || 0,
                            entry_value_usdt: positionSizeResult.positionValueUSDT || 0,
                            conviction_score: convictionScore || 0,
@@ -5495,9 +6587,11 @@ export default class PositionManager {
                            is_trailing: false,
                            trailing_stop_price: null,
                            trailing_peak_price: null,
-                           peak_price: currentPrice,
-                           trough_price: currentPrice,
-                           time_exit_hours: this.calculateExitTimeFromStrategy(combination, currentPrice), // Calculate from BacktestCombination.estimatedExitTimeMinutes
+                           peak_price: executedPrice,
+                           trough_price: executedPrice,
+                           time_exit_hours: (() => {
+                               return this.calculateExitTimeFromStrategy(combination, executedPrice); // Calculate from BacktestCombination.estimatedExitTimeMinutes
+                           })(),
                            trigger_signals: signal.trigger_signals || [],
                            // Add all analytics fields for complete data preservation
                            conviction_score: signal.convictionScore || 0,
@@ -5513,21 +6607,273 @@ export default class PositionManager {
                            fear_greed_score: this.scannerService.state.fearAndGreedData?.value || null,
                            fear_greed_classification: this.scannerService.state.fearAndGreedData?.value_classification || null,
                            lpm_score: this.scannerService.state.performanceMomentumScore || null,
+                           
+                           // NEW: Capture additional analytics at position opening
+                           // Calculate volatility from marketVolatility or ATR percentile
+                           volatility_at_open: this._calculateVolatilityAtOpen(atrValue, executedPrice, signal),
+                           volatility_label_at_open: this._getVolatilityLabel(atrValue, executedPrice, signal),
+                           
+                           // Get regime and correlation impacts from signal strength breakdown
+                           // Try multiple sources: direct fields, strength_breakdown object
+                           regime_impact_on_strength: signal.regime_impact_on_strength ?? signal.strength_breakdown?.regimeAdjustment ?? null,
+                           correlation_impact_on_strength: signal.correlation_impact_on_strength ?? signal.strength_breakdown?.correlationAdjustment ?? null,
+                           
+                           // Effective balance risk (EBR) at position opening
+                           effective_balance_risk_at_open: this.scannerService?.state?.adjustedBalanceRiskFactor || null,
+                           
+                           // Bitcoin price at position opening
+                           btc_price_at_open: await this._getBitcoinPriceAtOpen(),
+                           
+                           // NEW: Entry quality metrics
+                           ...(await (async () => {
+                               console.log(`[PositionManager] 🔍 About to call _calculateEntryQuality for ${symbol}`);
+                               const entryQuality = await this._calculateEntryQuality(symbol, executedPrice, signal);
+                               console.log(`[PositionManager] 🔍 Received entry quality result:`, entryQuality);
+                               console.log(`[PositionManager] 🔍 Entry quality result keys:`, Object.keys(entryQuality || {}));
+                               console.log(`[PositionManager] 🔍 Entry quality result values:`, Object.values(entryQuality || {}));
+                               return entryQuality;
+                           })()),
+                           
+                           entry_timestamp: new Date().toISOString(),
                            created_date: new Date().toISOString(),
                            last_updated_timestamp: new Date().toISOString(),
                            last_price_update: new Date().toISOString(), // Track when price was last updated
                            // Store Binance order details
                            binance_order_id: binanceBuyResult.orderResult?.orderId,
-                           binance_executed_price: binanceBuyResult.orderResult?.avgPrice || currentPrice,
-                           binance_executed_quantity: binanceBuyResult.orderResult?.executedQty || positionSizeResult.quantityCrypto
+                           binance_executed_price: executedPrice, // Use the validated executedPrice we calculated above
+                           binance_executed_quantity: binanceBuyResult.orderResult?.executedQty || positionSizeResult.quantityCrypto,
+                           
+                           // Order execution timing
+                           entry_fill_time_ms: entryFillTimeMs
                        };
+                    
+                    // ✅ ENTRY QUALITY VERIFICATION: Log all entry quality fields immediately after calculation
+                    console.log('='.repeat(80));
+                    // Commented out to reduce console flooding
+                    /*
+                    console.log('[PositionManager] 📊 ENTRY QUALITY METRICS - VERIFICATION');
+                    console.log('='.repeat(80));
+                    console.log(`[Entry Quality] Symbol: ${symbol}`);
+                    console.log(`[Entry Quality] Entry Price: $${executedPrice}`);
+                    console.log('');
+                    console.log('[Entry Quality] 📍 Support/Resistance Proximity:');
+                    console.log(`  - entry_near_support: ${positionData.entry_near_support !== undefined ? (positionData.entry_near_support !== null ? (positionData.entry_near_support ? 'true' : 'false') : 'NULL') : 'MISSING'}`);
+                    console.log(`  - entry_near_resistance: ${positionData.entry_near_resistance !== undefined ? (positionData.entry_near_resistance !== null ? (positionData.entry_near_resistance ? 'true' : 'false') : 'NULL') : 'MISSING'}`);
+                    console.log(`  - entry_distance_to_support_percent: ${positionData.entry_distance_to_support_percent !== undefined ? (positionData.entry_distance_to_support_percent !== null ? positionData.entry_distance_to_support_percent.toFixed(4) + '%' : 'NULL') : 'MISSING'}`);
+                    console.log(`  - entry_distance_to_resistance_percent: ${positionData.entry_distance_to_resistance_percent !== undefined ? (positionData.entry_distance_to_resistance_percent !== null ? positionData.entry_distance_to_resistance_percent.toFixed(4) + '%' : 'NULL') : 'MISSING'}`);
+                    console.log('');
+                    console.log('[Entry Quality] 📈 Momentum & Price Structure:');
+                    console.log(`  - entry_momentum_score: ${positionData.entry_momentum_score !== undefined ? (positionData.entry_momentum_score !== null ? positionData.entry_momentum_score.toFixed(2) + '/100' : 'NULL') : 'MISSING'}`);
+                    console.log(`  - entry_relative_to_day_high_percent: ${positionData.entry_relative_to_day_high_percent !== undefined ? (positionData.entry_relative_to_day_high_percent !== null ? positionData.entry_relative_to_day_high_percent.toFixed(4) + '%' : 'NULL') : 'MISSING'}`);
+                    console.log(`  - entry_relative_to_day_low_percent: ${positionData.entry_relative_to_day_low_percent !== undefined ? (positionData.entry_relative_to_day_low_percent !== null ? positionData.entry_relative_to_day_low_percent.toFixed(4) + '%' : 'NULL') : 'MISSING'}`);
+                    console.log(`  - entry_volume_vs_average: ${positionData.entry_volume_vs_average !== undefined ? (positionData.entry_volume_vs_average !== null ? positionData.entry_volume_vs_average.toFixed(2) + 'x' : 'NULL') : 'MISSING'}`);
+                    console.log('');
+                    console.log('[Entry Quality] ✅ All 8 entry quality fields present in positionData:', {
+                        entry_near_support: positionData.entry_near_support !== undefined,
+                        entry_near_resistance: positionData.entry_near_resistance !== undefined,
+                        entry_distance_to_support_percent: positionData.entry_distance_to_support_percent !== undefined,
+                        entry_distance_to_resistance_percent: positionData.entry_distance_to_resistance_percent !== undefined,
+                        entry_momentum_score: positionData.entry_momentum_score !== undefined,
+                        entry_relative_to_day_high_percent: positionData.entry_relative_to_day_high_percent !== undefined,
+                        entry_relative_to_day_low_percent: positionData.entry_relative_to_day_low_percent !== undefined,
+                        entry_volume_vs_average: positionData.entry_volume_vs_average !== undefined
+                    });
+                    console.log('='.repeat(80));
+                    console.log('');
+                    */
+                    
+                    // ✅ ORDER EXECUTION TIMING VERIFICATION: Log entry_fill_time_ms
+                    // COMMENTED OUT: Too verbose, flooding console
+                    /*
+                    console.log('='.repeat(80));
+                    console.log('[PositionManager] ⏱️ ORDER EXECUTION TIMING - VERIFICATION');
+                    console.log('='.repeat(80));
+                    console.log(`[Order Timing] Symbol: ${symbol}`);
+                    console.log(`[Order Timing] Order ID: ${positionData.binance_order_id || 'N/A'}`);
+                    console.log('');
+                    console.log('[Order Timing] 📊 Fill Time Metrics:');
+                    console.log(`  - entry_fill_time_ms: ${positionData.entry_fill_time_ms !== undefined ? (positionData.entry_fill_time_ms !== null ? positionData.entry_fill_time_ms + ' ms' : 'NULL') : 'MISSING'}`);
+                    if (positionData.entry_fill_time_ms !== undefined && positionData.entry_fill_time_ms !== null) {
+                        console.log(`  - entry_fill_time_seconds: ${(positionData.entry_fill_time_ms / 1000).toFixed(3)} seconds`);
+                        if (positionData.entry_fill_time_ms < 1000) {
+                            console.log(`  - Status: ✅ Very fast fill (< 1 second)`);
+                        } else if (positionData.entry_fill_time_ms < 5000) {
+                            console.log(`  - Status: ✅ Fast fill (< 5 seconds)`);
+                        } else if (positionData.entry_fill_time_ms < 30000) {
+                            console.log(`  - Status: ⚠️ Moderate fill (< 30 seconds)`);
+                        } else {
+                            console.log(`  - Status: ⚠️ Slow fill (>= 30 seconds)`);
+                        }
+                    }
+                    console.log('');
+                    console.log('[Order Timing] 📝 Timing Details:');
+                    console.log(`  - Order Start: ${new Date(orderStartTime).toISOString()}`);
+                    console.log(`  - Order End: ${new Date(orderEndTime).toISOString()}`);
+                    console.log(`  - Duration: ${entryFillTimeMs} ms`);
+                    console.log('='.repeat(80));
+                    console.log('');
+                    */
+                    
+                    // Calculate exit_time: entry_timestamp + time_exit_hours
+                    const entryTimestamp = new Date(positionData.entry_timestamp);
+                    const exitTimeHours = positionData.time_exit_hours || 24;
+                    const exitTime = new Date(entryTimestamp.getTime() + (exitTimeHours * 60 * 60 * 1000));
+                    positionData.exit_time = exitTime.toISOString();
+                    
+                    // CRITICAL VALIDATION: Ensure all required analytics fields are present before creating position
+                    const missingFields = [];
+                    if (!positionData.strategy_name) missingFields.push('strategy_name');
+                    if (!positionData.symbol) missingFields.push('symbol');
+                    if (!positionData.entry_price) missingFields.push('entry_price');
+                    if (!positionData.quantity_crypto) missingFields.push('quantity_crypto');
+                    if (positionData.combined_strength === undefined || positionData.combined_strength === null) missingFields.push('combined_strength');
+                    if (positionData.conviction_score === undefined || positionData.conviction_score === null) missingFields.push('conviction_score');
+                    if (positionData.market_regime === undefined || positionData.market_regime === null) missingFields.push('market_regime');
+                    
+                    if (missingFields.length > 0) {
+                        const errorMsg = `Cannot open position for ${positionData.symbol || 'UNKNOWN'}: Missing required fields: ${missingFields.join(', ')}`;
+                        console.error(`[PositionManager] ❌ ${errorMsg}`);
+                        this.addLog(`[POSITION_CREATE] ❌ ${errorMsg}`, 'error');
+                        throw new Error(errorMsg);
+                    }
                     
                     console.log('[PositionManager] 🚀 Creating position:', {
                         symbol: positionData.symbol,
                         strategy_name: positionData.strategy_name,
                         entry_price: positionData.entry_price,
                         quantity_crypto: positionData.quantity_crypto,
-                        entry_value_usdt: positionData.entry_value_usdt
+                        entry_value_usdt: positionData.entry_value_usdt,
+                        combined_strength: positionData.combined_strength,
+                        conviction_score: positionData.conviction_score,
+                        market_regime: positionData.market_regime
+                    });
+                    
+                    // DEBUG: Log ALL analytics fields being saved
+                    // COMMENTED OUT: Too verbose, flooding console
+                    /*
+                    console.log('='.repeat(80));
+                    console.log('[PositionManager] 📊 ANALYTICS DATA CAPTURED AT POSITION OPEN');
+                    console.log('='.repeat(80));
+                    console.log(`[Analytics] Symbol: ${positionData.symbol}`);
+                    console.log(`[Analytics] Strategy: ${positionData.strategy_name}`);
+                    console.log(`[Analytics] Entry Price: $${positionData.entry_price}`);
+                    console.log(`[Analytics] Entry Value: $${positionData.entry_value_usdt}`);
+                    console.log('');
+                    console.log('[Analytics] ⛔ Stop Loss & Take Profit:');
+                    console.log(`  - Stop Loss Price: ${positionData.stop_loss_price ? '$' + positionData.stop_loss_price.toFixed(8) : 'NOT SET'}`);
+                    console.log(`  - Take Profit Price: ${positionData.take_profit_price ? '$' + positionData.take_profit_price.toFixed(8) : 'NOT SET'}`);
+                    if (positionData.stop_loss_price && positionData.entry_price) {
+                        const slPercent = ((positionData.entry_price - positionData.stop_loss_price) / positionData.entry_price * 100).toFixed(2);
+                        console.log(`  - Stop Loss Distance: ${slPercent}% below entry`);
+                    }
+                    if (positionData.take_profit_price && positionData.entry_price) {
+                        const tpPercent = ((positionData.take_profit_price - positionData.entry_price) / positionData.entry_price * 100).toFixed(2);
+                        console.log(`  - Take Profit Distance: ${tpPercent}% above entry`);
+                    }
+                    console.log('');
+                    console.log('[Analytics] 📈 Volatility at Position Open:');
+                    console.log(`  - Volatility Score: ${positionData.volatility_at_open !== null && positionData.volatility_at_open !== undefined ? positionData.volatility_at_open + '/100' : 'NOT AVAILABLE'}`);
+                    console.log(`  - Volatility Label: ${positionData.volatility_label_at_open || 'NOT AVAILABLE'}`);
+                    console.log('');
+                    console.log('[Analytics] 🎯 Signal Strength Adjustments:');
+                    console.log(`  - Regime Impact on Strength: ${positionData.regime_impact_on_strength !== null && positionData.regime_impact_on_strength !== undefined ? positionData.regime_impact_on_strength.toFixed(4) : 'NOT AVAILABLE'}`);
+                    console.log(`  - Correlation Impact on Strength: ${positionData.correlation_impact_on_strength !== null && positionData.correlation_impact_on_strength !== undefined ? positionData.correlation_impact_on_strength.toFixed(4) : 'NOT AVAILABLE'}`);
+                    console.log(`  - Combined Strength: ${positionData.combined_strength || 'N/A'}`);
+                    console.log('');
+                    console.log('[Analytics] 💰 Risk & Market Context:');
+                    console.log(`  - Effective Balance Risk (EBR): ${positionData.effective_balance_risk_at_open !== null && positionData.effective_balance_risk_at_open !== undefined ? positionData.effective_balance_risk_at_open + '/100' : 'NOT AVAILABLE'}`);
+                    console.log(`  - Bitcoin Price at Open: ${positionData.btc_price_at_open !== null && positionData.btc_price_at_open !== undefined ? '$' + positionData.btc_price_at_open.toFixed(2) : 'NOT AVAILABLE'}`);
+                    console.log(`  - Market Regime: ${positionData.market_regime || 'N/A'} (Confidence: ${positionData.regime_confidence ? (positionData.regime_confidence * 100).toFixed(1) + '%' : 'N/A'})`);
+                    console.log(`  - Conviction Score: ${positionData.conviction_score || 'N/A'}`);
+                    console.log(`  - ATR Value: ${positionData.atr_value ? '$' + positionData.atr_value.toFixed(8) : 'NOT AVAILABLE'}`);
+                    console.log('');
+                    console.log('[Analytics] 📊 Additional Context:');
+                    console.log(`  - Fear & Greed Score: ${positionData.fear_greed_score !== null && positionData.fear_greed_score !== undefined ? positionData.fear_greed_score + '/100' : 'NOT AVAILABLE'}`);
+                    console.log(`  - Fear & Greed Classification: ${positionData.fear_greed_classification || 'NOT AVAILABLE'}`);
+                    console.log(`  - Leading Performance Momentum (LPM): ${positionData.lpm_score !== null && positionData.lpm_score !== undefined ? positionData.lpm_score.toFixed(2) : 'NOT AVAILABLE'}`);
+                    console.log(`  - Trigger Signals Count: ${positionData.trigger_signals?.length || 0}`);
+                    if (positionData.trigger_signals && positionData.trigger_signals.length > 0) {
+                        console.log(`  - Signal Names: ${positionData.trigger_signals.slice(0, 5).map(s => s.type || s.value || 'Unknown').join(', ')}${positionData.trigger_signals.length > 5 ? '...' : ''}`);
+                    }
+                    console.log('');
+                    console.log('[Analytics] ⏰ Exit Time Calculation:');
+                    console.log('  📋 Strategy/Combination Details:');
+                    console.log(`    - Strategy Name: ${combination?.combinationName || combination?.combination_name || signal.strategy_name || 'N/A'}`);
+                    console.log(`    - Coin: ${combination?.coin || 'N/A'}`);
+                    console.log(`    - Timeframe: ${combination?.timeframe || 'N/A'}`);
+                    console.log(`    - Strategy Direction: ${combination?.strategyDirection || combination?.strategy_direction || 'N/A'}`);
+                    if (combination?.successRate !== undefined) {
+                        console.log(`    - Success Rate: ${combination.successRate}%`);
+                    }
+                    if (combination?.occurrences !== undefined) {
+                        console.log(`    - Occurrences: ${combination.occurrences}`);
+                        const exitTimeMin = combination?.estimatedExitTimeMinutes || combination?.estimated_exit_time_minutes;
+                        if (combination.occurrences === 1) {
+                            console.log(`    - ⚠️ WARNING: Only 1 occurrence in backtest!`);
+                            console.log(`    - Exit time (${exitTimeMin ?? 'N/A'} min) is based on a single trade.`);
+                            console.log(`    - This is unreliable - consider reviewing the backtest results.`);
+                            console.log(`    - Recommendation: Run more backtests or use a minimum threshold (e.g., 5 occurrences).`);
+                        } else if (combination.occurrences < 5) {
+                            console.log(`    - ⚠️ WARNING: Only ${combination.occurrences} occurrences in backtest.`);
+                            console.log(`    - Exit time may be less reliable with such a small sample size.`);
+                        }
+                    }
+                    if (combination?.avgPriceMove !== undefined) {
+                        console.log(`    - Avg Price Move: ${combination.avgPriceMove}%`);
+                    }
+                    if (combination?.occurrenceDates && Array.isArray(combination.occurrenceDates) && combination.occurrenceDates.length > 0) {
+                        const successfulTrades = combination.occurrenceDates.filter(occ => occ.successful);
+                        if (successfulTrades.length > 0 && successfulTrades.length <= 5) {
+                            console.log(`    - Successful Trade Exit Times:`);
+                            successfulTrades.forEach((trade, idx) => {
+                                console.log(`      ${idx + 1}. Exit Time: ${trade.exitTime ?? 'N/A'} minutes, Price Move: ${trade.priceMove?.toFixed(2) ?? 'N/A'}%`);
+                            });
+                        }
+                    }
+                    console.log('  🔍 Exit Time Source Values:');
+                    console.log(`    - combination?.estimatedExitTimeMinutes: ${combination?.estimatedExitTimeMinutes ?? 'undefined'}`);
+                    console.log(`    - combination?.estimated_exit_time_minutes: ${combination?.estimated_exit_time_minutes ?? 'undefined'}`);
+                    console.log(`    - positionData.time_exit_hours: ${positionData.time_exit_hours ?? 'undefined'}`);
+                    // Reuse exitTimeHours and entryTimestamp already calculated above
+                    const estimatedExitTimeMinutes = combination?.estimatedExitTimeMinutes || combination?.estimated_exit_time_minutes || (exitTimeHours * 60);
+                    const calculatedExitTime = positionData.exit_time ? new Date(positionData.exit_time) : exitTime;
+                    console.log('  ⏱️ Calculated Values:');
+                    console.log(`    - Estimated Exit Time (Minutes): ${estimatedExitTimeMinutes} minutes`);
+                    console.log(`    - Exit Time Hours: ${exitTimeHours} hours`);
+                    console.log(`    - Calculation: ${estimatedExitTimeMinutes} minutes ÷ 60 = ${exitTimeHours} hours`);
+                    console.log('  📅 Timestamps:');
+                    console.log(`    - Entry Timestamp: ${entryTimestamp.toISOString()}`);
+                    console.log(`    - Calculated Exit Time: ${calculatedExitTime.toISOString()}`);
+                    console.log(`    - Exit Time (Local): ${calculatedExitTime.toLocaleString()}`);
+                    const timeUntilExit = calculatedExitTime.getTime() - Date.now();
+                    const hoursUntilExit = Math.floor(timeUntilExit / (1000 * 60 * 60));
+                    const minutesUntilExit = Math.floor((timeUntilExit % (1000 * 60 * 60)) / (1000 * 60));
+                    console.log(`    - Time Until Exit: ${hoursUntilExit}h ${minutesUntilExit}m`);
+                    if (estimatedExitTimeMinutes < 60) {
+                        console.log('  ⚠️ WARNING: Exit time is very short (< 1 hour)!');
+                        console.log(`    - This may indicate the strategy was optimized for quick scalping or the backtest data had very short successful trades.`);
+                        console.log(`    - Consider reviewing the backtest results for this strategy to verify the exit time is appropriate.`);
+                    }
+                    console.log('');
+                    console.log('[Analytics] 📊 Entry Quality Metrics:');
+                    console.log(`  - Entry Near Support: ${positionData.entry_near_support !== undefined && positionData.entry_near_support !== null ? (positionData.entry_near_support ? 'YES' : 'NO') : 'NOT AVAILABLE'}`);
+                    console.log(`  - Entry Near Resistance: ${positionData.entry_near_resistance !== undefined && positionData.entry_near_resistance !== null ? (positionData.entry_near_resistance ? 'YES' : 'NO') : 'NOT AVAILABLE'}`);
+                    console.log(`  - Distance to Support: ${positionData.entry_distance_to_support_percent !== undefined && positionData.entry_distance_to_support_percent !== null ? parseFloat(positionData.entry_distance_to_support_percent).toFixed(4) + '%' : 'NOT AVAILABLE'}`);
+                    console.log(`  - Distance to Resistance: ${positionData.entry_distance_to_resistance_percent !== undefined && positionData.entry_distance_to_resistance_percent !== null ? parseFloat(positionData.entry_distance_to_resistance_percent).toFixed(4) + '%' : 'NOT AVAILABLE'}`);
+                    console.log(`  - Entry Momentum Score: ${positionData.entry_momentum_score !== undefined && positionData.entry_momentum_score !== null ? parseFloat(positionData.entry_momentum_score).toFixed(2) + '/100' : 'NOT AVAILABLE'}`);
+                    console.log(`  - Entry Relative to Day High: ${positionData.entry_relative_to_day_high_percent !== undefined && positionData.entry_relative_to_day_high_percent !== null ? parseFloat(positionData.entry_relative_to_day_high_percent).toFixed(4) + '%' : 'NOT AVAILABLE'}`);
+                    console.log(`  - Entry Relative to Day Low: ${positionData.entry_relative_to_day_low_percent !== undefined && positionData.entry_relative_to_day_low_percent !== null ? parseFloat(positionData.entry_relative_to_day_low_percent).toFixed(4) + '%' : 'NOT AVAILABLE'}`);
+                    console.log(`  - Entry Volume vs Average: ${positionData.entry_volume_vs_average !== undefined && positionData.entry_volume_vs_average !== null ? parseFloat(positionData.entry_volume_vs_average).toFixed(4) : 'NOT AVAILABLE'}`);
+                    console.log('='.repeat(80));
+                    */
+
+                    // DEBUG: Verify exit_time is in positionData before creating position
+                    console.log('[PositionManager] 🔍 DEBUG: exit_time in positionData before LivePosition.create:', {
+                        exit_time: positionData.exit_time,
+                        exit_time_type: typeof positionData.exit_time,
+                        exit_time_value: positionData.exit_time ? new Date(positionData.exit_time).toISOString() : 'MISSING',
+                        entry_timestamp: positionData.entry_timestamp,
+                        time_exit_hours: positionData.time_exit_hours
                     });
 
                         // Emit SL/TP sample log on every new position open (no one-time guard)
@@ -5535,6 +6881,8 @@ export default class PositionManager {
                             const atrPct = positionData.atr_value && positionData.entry_price
                                 ? ((Number(positionData.atr_value) / Number(positionData.entry_price)) * 100).toFixed(3)
                                 : 'n/a';
+                            // Commented out to reduce console flooding
+                            /*
                             console.log('[SLTP_SAMPLE_OPEN]', {
                                 symbol: positionData.symbol,
                                 entry: positionData.entry_price,
@@ -5544,13 +6892,59 @@ export default class PositionManager {
                                 takeProfit: positionData.take_profit_price,
                                 enableTrailingTakeProfit: positionData.enableTrailingTakeProfit
                             });
+                            */
                         } catch (_) {}
                     
-                    // Create position in database using proper LivePosition entity
-                    console.log('[PositionManager] 🔍 Using LivePosition entity to create position...');
-                    const createdPosition = await LivePosition.create(positionData);
+                    console.log('[PositionManager] 🔍 CRITICAL: About to save position - checking if LivePosition is available...');
+                    console.log('[PositionManager] 🔍 LivePosition type:', typeof LivePosition);
+                    console.log('[PositionManager] 🔍 LivePosition.create type:', typeof LivePosition?.create);
                     
-                    console.log('[PositionManager] 🔍 Database creation result:', {
+                    // Create position in database using proper LivePosition entity
+                    console.log('[PositionManager] 💾 Attempting to save position to database...');
+                    console.log('[PositionManager] 💾 positionData keys:', Object.keys(positionData));
+                    console.log('[PositionManager] 💾 positionData summary:', {
+                        symbol: positionData.symbol,
+                        strategy_name: positionData.strategy_name,
+                        entry_price: positionData.entry_price,
+                        quantity_crypto: positionData.quantity_crypto,
+                        has_entry_fill_time_ms: positionData.entry_fill_time_ms !== undefined,
+                        entry_fill_time_ms: positionData.entry_fill_time_ms,
+                        has_all_entry_quality_fields: !!(
+                            positionData.entry_near_support !== undefined &&
+                            positionData.entry_near_resistance !== undefined &&
+                            positionData.entry_momentum_score !== undefined &&
+                            positionData.entry_volume_vs_average !== undefined
+                        )
+                    });
+                    
+                    let createdPosition;
+                    try {
+                        createdPosition = await LivePosition.create(positionData);
+                        console.log('[PositionManager] ✅ LivePosition.create() completed successfully');
+                    } catch (createError) {
+                        console.error('[PositionManager] ❌ ERROR: LivePosition.create() failed:', createError);
+                        console.error('[PositionManager] ❌ Error details:', {
+                            message: createError.message,
+                            stack: createError.stack,
+                            name: createError.name,
+                            positionData_keys: Object.keys(positionData),
+                            positionData_symbol: positionData.symbol
+                        });
+                        throw createError; // Re-throw to be caught by outer catch block
+                    }
+                    
+                    // DEBUG: Verify exit_time is in createdPosition after LivePosition.create
+                    console.log('[PositionManager] 🔍 DEBUG: exit_time in createdPosition after LivePosition.create:', {
+                        exit_time: createdPosition?.exit_time,
+                        exit_time_type: typeof createdPosition?.exit_time,
+                        exit_time_value: createdPosition?.exit_time ? new Date(createdPosition.exit_time).toISOString() : 'MISSING',
+                        entry_timestamp: createdPosition?.entry_timestamp,
+                        time_exit_hours: createdPosition?.time_exit_hours
+                    });
+                    console.log(`[PositionManager] ✅ Created position: ${createdPosition?.symbol} (${createdPosition?.id?.substring(0, 8)})`);
+                    
+                    if (!createdPosition?.id) {
+                        console.error('[PositionManager] ❌ Position created but missing ID!', {
                         createdPosition: createdPosition,
                         hasId: !!createdPosition?.id,
                         hasPositionId: !!createdPosition?.position_id,
@@ -5558,20 +6952,10 @@ export default class PositionManager {
                         idValue: createdPosition?.id,
                         positionIdValue: createdPosition?.position_id
                     });
-                    
-                    if (createdPosition && createdPosition.id) {
-                        console.log('[PositionManager] ✅ Position created successfully:', createdPosition.id);
-                        console.log('[PositionManager] ✅ Created position data:', {
-                            id: createdPosition.id,
-                            position_id: createdPosition.position_id,
-                            symbol: createdPosition.symbol,
-                            strategy_name: createdPosition.strategy_name,
-                            wallet_id: createdPosition.wallet_id,
-                            trading_mode: createdPosition.trading_mode,
-                            status: createdPosition.status
-                        });
+                    }
                         
-                        // Add to in-memory cache with proper mapping
+                        // CRITICAL FIX: Map ALL fields from createdPosition to ensure analytics fields are preserved
+                        // This matches the mapping in loadManagedState to ensure consistency
                         const mappedPosition = {
                             id: createdPosition.id, // Ensure the id field is set
                             position_id: createdPosition.position_id,
@@ -5592,22 +6976,114 @@ export default class PositionManager {
                             trailing_peak_price: createdPosition.trailing_peak_price,
                             peak_price: parseFloat(createdPosition.peak_price) || parseFloat(createdPosition.entry_price) || 0,
                             trough_price: parseFloat(createdPosition.trough_price) || parseFloat(createdPosition.entry_price) || 0,
+                            time_exit_hours: parseFloat(createdPosition.time_exit_hours) || 24,
+                            trigger_signals: createdPosition.trigger_signals || [],
+                            // CRITICAL: Include ALL analytics fields to prevent nulls in trades
+                            combined_strength: createdPosition.combined_strength,
+                            conviction_score: createdPosition.conviction_score,
+                            conviction_breakdown: createdPosition.conviction_breakdown,
+                            conviction_multiplier: createdPosition.conviction_multiplier,
+                            market_regime: createdPosition.market_regime,
+                            regime_confidence: createdPosition.regime_confidence,
+                            atr_value: createdPosition.atr_value,
+                            is_event_driven_strategy: createdPosition.is_event_driven_strategy || false,
+                            fear_greed_score: createdPosition.fear_greed_score,
+                            fear_greed_classification: createdPosition.fear_greed_classification,
+                            lpm_score: createdPosition.lpm_score,
+                            wallet_allocation_percentage: createdPosition.wallet_allocation_percentage,
+                            binance_order_id: createdPosition.binance_order_id,
                             wallet_id: createdPosition.wallet_id,
-                            trading_mode: createdPosition.trading_mode
+                            trading_mode: createdPosition.trading_mode,
+                            created_date: createdPosition.created_date || createdPosition.entry_timestamp || new Date().toISOString(),
+                        last_updated_timestamp: createdPosition.last_updated_timestamp || new Date().toISOString(),
+                        // Include new analytics fields for complete data preservation
+                        volatility_at_open: createdPosition.volatility_at_open,
+                        volatility_label_at_open: createdPosition.volatility_label_at_open,
+                        regime_impact_on_strength: createdPosition.regime_impact_on_strength,
+                        correlation_impact_on_strength: createdPosition.correlation_impact_on_strength,
+                        effective_balance_risk_at_open: createdPosition.effective_balance_risk_at_open,
+                        btc_price_at_open: createdPosition.btc_price_at_open,
+                        exit_time: createdPosition.exit_time || positionData.exit_time, // Fallback to positionData if createdPosition doesn't have it
+                        // NEW: Entry quality metrics (CRITICAL - must be included or they'll be null when closing)
+                        entry_near_support: createdPosition.entry_near_support !== undefined ? createdPosition.entry_near_support : null,
+                        entry_near_resistance: createdPosition.entry_near_resistance !== undefined ? createdPosition.entry_near_resistance : null,
+                        entry_distance_to_support_percent: createdPosition.entry_distance_to_support_percent !== undefined && createdPosition.entry_distance_to_support_percent !== null ? parseFloat(createdPosition.entry_distance_to_support_percent) : null,
+                        entry_distance_to_resistance_percent: createdPosition.entry_distance_to_resistance_percent !== undefined && createdPosition.entry_distance_to_resistance_percent !== null ? parseFloat(createdPosition.entry_distance_to_resistance_percent) : null,
+                        entry_momentum_score: createdPosition.entry_momentum_score !== undefined && createdPosition.entry_momentum_score !== null ? parseFloat(createdPosition.entry_momentum_score) : null,
+                        entry_relative_to_day_high_percent: createdPosition.entry_relative_to_day_high_percent !== undefined && createdPosition.entry_relative_to_day_high_percent !== null ? parseFloat(createdPosition.entry_relative_to_day_high_percent) : null,
+                        entry_relative_to_day_low_percent: createdPosition.entry_relative_to_day_low_percent !== undefined && createdPosition.entry_relative_to_day_low_percent !== null ? parseFloat(createdPosition.entry_relative_to_day_low_percent) : null,
+                        entry_volume_vs_average: createdPosition.entry_volume_vs_average !== undefined && createdPosition.entry_volume_vs_average !== null ? parseFloat(createdPosition.entry_volume_vs_average) : null,
+                        entry_fill_time_ms: createdPosition.entry_fill_time_ms !== undefined && createdPosition.entry_fill_time_ms !== null ? parseInt(createdPosition.entry_fill_time_ms, 10) : null
                         };
+                        
+                        // DEBUG: Verify exit_time and entry_fill_time_ms are in mappedPosition
+                        if (!mappedPosition.exit_time) {
+                            console.error('[PositionManager] ⚠️ WARNING: exit_time is missing in mappedPosition!', {
+                                from_createdPosition: createdPosition.exit_time,
+                                from_positionData: positionData.exit_time,
+                                entry_timestamp: mappedPosition.entry_timestamp,
+                                time_exit_hours: mappedPosition.time_exit_hours
+                            });
+                        } else {
+                            console.log('[PositionManager] ✅ exit_time successfully mapped to in-memory position:', {
+                                exit_time: mappedPosition.exit_time,
+                                exit_time_iso: new Date(mappedPosition.exit_time).toISOString()
+                            });
+                        }
+                        
+                        // DEBUG: Verify entry_fill_time_ms and entry quality fields are in mappedPosition
+                        console.log('[PositionManager] ✅ Entry fill time and quality fields mapped to in-memory position:', {
+                            entry_fill_time_ms: mappedPosition.entry_fill_time_ms,
+                            entry_near_support: mappedPosition.entry_near_support,
+                            entry_distance_to_support_percent: mappedPosition.entry_distance_to_support_percent,
+                            entry_momentum_score: mappedPosition.entry_momentum_score
+                        });
+                        
                         this.positions.push(mappedPosition);
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ✅ Added position to in-memory array: ${mappedPosition.symbol} (${mappedPosition.id?.substring(0, 8)}), status=${mappedPosition.status}, total positions in memory: ${this.positions.length}`);
+                    
+                    // CRITICAL FIX: Update CentralWalletStateManager immediately after adding position
+                    // This ensures UI reflects new positions immediately (same logic as manual open would need)
+                    try {
+                        const tradingMode = this.getTradingMode();
+                        const walletManager = this.scannerService?.walletManagerService;
+                        
+                        if (walletManager?.centralWalletStateManager && mappedPosition.status === 'open') {
+                            // Get current filtered positions from PositionManager (includes the new one)
+                            const filteredPositions = this.positions.filter(pos => 
+                                pos.trading_mode === tradingMode && 
+                                (pos.status === 'open' || pos.status === 'trailing')
+                            );
+                            
+                            // Update positions in CentralWalletStateManager directly
+                            const balanceInTrades = filteredPositions.reduce((total, pos) => {
+                                return total + (parseFloat(pos.entry_value_usdt) || 0);
+                            }, 0);
+                            
+                            // Update the state directly
+                            await walletManager.centralWalletStateManager.updateBalanceInTrades(balanceInTrades);
+                            walletManager.centralWalletStateManager.currentState.positions = filteredPositions;
+                            walletManager.centralWalletStateManager.currentState.open_positions_count = filteredPositions.length;
+                            
+                            //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ✅ Updated CentralWalletStateManager after adding position: ${filteredPositions.length} positions`);
+                        }
+                    } catch (updateError) {
+                        console.warn('[PositionManager] ⚠️ Failed to update CentralWalletStateManager after adding position:', updateError.message);
+                        // Don't fail position creation if UI update fails
+                    }
                         
                         result.opened++;
                         result.openedPositions.push(mappedPosition);
                         
                         // CRITICAL FIX: Update cumulative position value for subsequent signals in the batch
-                        const positionValue = positionSizeResult.positionValueUSDT || 0;
-                        cumulativePositionValue += positionValue;
+                        // Reuse positionValue from earlier in the scope, or get from positionSizeResult
+                        const currentPositionValue = positionSizeResult.positionValueUSDT || 0;
+                        cumulativePositionValue += currentPositionValue;
                         successfulPositionsInBatch++;
                         
                         console.log(`[PositionManager] 💰 Updated cumulative position value:`, {
-                            previousCumulative: cumulativePositionValue - positionValue,
-                            positionValue: positionValue,
+                            previousCumulative: cumulativePositionValue - currentPositionValue,
+                            positionValue: currentPositionValue,
                             newCumulative: cumulativePositionValue,
                             remainingCap: maxInvestmentCapPost ? maxInvestmentCapPost - (currentAllocated + cumulativePositionValue) : 'N/A',
                             successfulPositionsInBatch: successfulPositionsInBatch
@@ -5646,19 +7122,17 @@ export default class PositionManager {
                                 positionValue: positionValue,
                                 symbol: symbol,
                                 note: 'Balance will be refreshed from Binance after position close'
-                            });
-                        }
-                        
-                } else {
-                        console.log('[PositionManager] ❌ Failed to create position in database');
-                        result.errors.push({
-                            signal: signal,
-                            error: 'Failed to create position in database'
                         });
                     }
                     
                 } catch (signalError) {
                     console.error('[PositionManager] ❌ Error processing signal:', signalError);
+                    console.error('[PositionManager] ❌ Error stack:', signalError.stack);
+                    console.error('[PositionManager] ❌ Error occurred at signal:', {
+                        symbol: signal?.symbol,
+                        strategy_name: signal?.strategy_name,
+                        combination: signal?.combination?.combinationName
+                    });
                     result.errors.push({
                         signal: signal,
                         error: signalError.message
@@ -5668,6 +7142,10 @@ export default class PositionManager {
             
             // Notify subscribers after all positions are processed
             this.scannerService.notifyWalletSubscribers();
+
+            // NOTE: Event dispatch moved to SignalDetectionEngine after persistWalletChangesAndWait() completes
+            // This ensures positions are fully persisted before wallet page refreshes
+            // Event will be dispatched after wallet persistence in SignalDetectionEngine
 
             console.log(`[PositionManager] ✅ Batch open completed: ${result.opened} positions opened, ${result.errors.length} errors`);
 
@@ -6517,25 +7995,24 @@ export default class PositionManager {
      * @returns {Object} Result with success status and details
      */
     async executeBatchClose(tradesToCreate, positionIdsToClose) {
-        console.log('[position_manager_debug] 🔍 ===== EXECUTE_BATCH_CLOSE ENTRY =====');
-        console.log('[position_manager_debug] 🔍 Function called at:', new Date().toISOString());
-        console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL TEST LOG - EXECUTE_BATCH_CLOSE IS BEING CALLED');
-        console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_5: executeBatchClose entry point reached');
+        const _batchCloseStartTime = Date.now();
+        const positionsCount = positionIdsToClose.length;
+        console.log(`[PositionManager] 🚀 executeBatchClose started: ${positionsCount} positions to close`);
         
         //console.log('🔥🔥🔥 EXECUTING BATCH CLOSE - DEBUGGING VERSION 🔥🔥🔥');
         //console.log('🔥🔥🔥 RECEIVED ARRAYS:', { tradesToCreate: tradesToCreate.length, positionIdsToClose: positionIdsToClose.length });
         //console.log('🔥🔥🔥 RECEIVED POSITION IDS:', positionIdsToClose);
         //console.log('🔥🔥🔥 RECEIVED TRADES:', tradesToCreate);
-        console.log('[PositionManager] 🚀 EXECUTING BATCH CLOSE');
-        console.log('[PositionManager] 🔍 [EXECUTE_BATCH_CLOSE] Function entry - about to start processing...');
-        console.log('[PositionManager] 🚀 Trades to create:', tradesToCreate.length);
-        console.log('[PositionManager] 🚀 Positions to close:', positionIdsToClose.length);
-        console.log('[PositionManager] 🚀 Current time:', new Date().toISOString());
-        console.log('[PositionManager] 🚀 Position IDs to close (first 5):', positionIdsToClose.slice(0, 5));
-        console.log('[PositionManager] 🚀 Positions in memory (first 5):', this.positions.slice(0, 5).map(p => ({ id: p.id, db_record_id: p.db_record_id, position_id: p.position_id, symbol: p.symbol })));
+        //console.log('[PositionManager] 🚀 EXECUTING BATCH CLOSE');
+        //console.log('[PositionManager] 🔍 [EXECUTE_BATCH_CLOSE] Function entry - about to start processing...');
+        //console.log('[PositionManager] 🚀 Trades to create:', tradesToCreate.length);
+        //console.log('[PositionManager] 🚀 Positions to close:', positionIdsToClose.length);
+        //console.log('[PositionManager] 🚀 Current time:', new Date().toISOString());
+        //console.log('[PositionManager] 🚀 Position IDs to close (first 5):', positionIdsToClose.slice(0, 5));
+        //console.log('[PositionManager] 🚀 Positions in memory (first 5):', this.positions.slice(0, 5).map(p => ({ id: p.id, db_record_id: p.db_record_id, position_id: p.position_id, symbol: p.symbol })));
         
         // CRITICAL TEST: Check if ANY position IDs can be found in memory
-        console.log('[PositionManager] 🚀 CRITICAL TEST - CAN WE FIND ANY POSITIONS?');
+        //console.log('[PositionManager] 🚀 CRITICAL TEST - CAN WE FIND ANY POSITIONS?');
         let foundCount = 0;
         for (const positionId of positionIdsToClose) {
             const found = this.positions.find(p => p.id === positionId || p.db_record_id === positionId || p.position_id === positionId);
@@ -6549,28 +8026,28 @@ export default class PositionManager {
         //console.log(`🔥🔥🔥 CRITICAL TEST RESULT: Found ${foundCount}/${positionIdsToClose.length} positions in memory 🔥🔥🔥`);
         
         // DEBUG: Log each position that will be closed
-        console.log('[PositionManager] 🚀 DETAILED POSITION ANALYSIS:');
-        console.log('[PositionManager] 🚀 Position IDs to close:', positionIdsToClose);
-        console.log('[PositionManager] 🚀 Available positions in memory:', this.positions.map(p => ({ id: p.id, db_record_id: p.db_record_id, position_id: p.position_id, symbol: p.symbol })));
+        //console.log('[PositionManager] 🚀 DETAILED POSITION ANALYSIS:');
+        //console.log('[PositionManager] 🚀 Position IDs to close:', positionIdsToClose);
+        //console.log('[PositionManager] 🚀 Available positions in memory:', this.positions.map(p => ({ id: p.id, db_record_id: p.db_record_id, position_id: p.position_id, symbol: p.symbol })));
         
         // CRITICAL DEBUG: Check if any position IDs match
-        console.log('[PositionManager] 🚀 POSITION ID MATCHING ANALYSIS:');
-        console.log('[PositionManager] 🚀 Total positions in memory:', this.positions.length);
-        console.log('[PositionManager] 🚀 Positions to close:', positionIdsToClose.length);
-        console.log('[PositionManager] 🚀 Sample positions in memory:', this.positions.slice(0, 3).map(p => ({
+        //console.log('[PositionManager] 🚀 POSITION ID MATCHING ANALYSIS:');
+        //console.log('[PositionManager] 🚀 Total positions in memory:', this.positions.length);
+        //console.log('[PositionManager] 🚀 Positions to close:', positionIdsToClose.length);
+        /*console.log('[PositionManager] 🚀 Sample positions in memory:', this.positions.slice(0, 3).map(p => ({
             id: p.id,
             db_record_id: p.db_record_id,
             position_id: p.position_id,
             symbol: p.symbol,
             status: p.status
-        })));
+        })));*/
         
         for (const positionId of positionIdsToClose) {
             const foundById = this.positions.find(p => p.id === positionId);
             const foundByDbRecordId = this.positions.find(p => p.db_record_id === positionId);
             const foundByPositionId = this.positions.find(p => p.position_id === positionId);
             
-            console.log(`[PositionManager] 🚀 Position ID ${positionId}:`, {
+            /*console.log(`[PositionManager] 🚀 Position ID ${positionId}:`, {
                 foundById: !!foundById,
                 foundByDbRecordId: !!foundByDbRecordId,
                 foundByPositionId: !!foundByPositionId,
@@ -6578,28 +8055,28 @@ export default class PositionManager {
                 foundByIdSymbol: foundById?.symbol,
                 foundByDbRecordIdSymbol: foundByDbRecordId?.symbol,
                 foundByPositionIdSymbol: foundByPositionId?.symbol
-            });
+            });*/
         }
         
-        console.log('[position_manager_debug] 🔍 About to start main processing loop...');
-        console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING MAIN LOOP');
+        //console.log('[position_manager_debug] 🔍 About to start main processing loop...');
+        //console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING MAIN LOOP');
         
         for (let i = 0; i < positionIdsToClose.length; i++) {
-            console.log(`[position_manager_debug] 🔍 Processing position ${i + 1}/${positionIdsToClose.length}: ${positionIdsToClose[i]}`);
+            //console.log(`[position_manager_debug] 🔍 Processing position ${i + 1}/${positionIdsToClose.length}: ${positionIdsToClose[i]}`);
             const positionId = positionIdsToClose[i];
             
-            console.log(`[position_manager_debug] 🔍 Looking for position with ID: ${positionId}`);
+            //console.log(`[position_manager_debug] 🔍 Looking for position with ID: ${positionId}`);
             
             // Try multiple ways to find the position
             let position = this.positions.find(p => p.id === positionId);
-            console.log(`[position_manager_debug] 🔍 Found by id: ${!!position}`);
+            //console.log(`[position_manager_debug] 🔍 Found by id: ${!!position}`);
             if (!position) {
                 position = this.positions.find(p => p.db_record_id === positionId);
-                console.log(`[position_manager_debug] 🔍 Found by db_record_id: ${!!position}`);
+               // console.log(`[position_manager_debug] 🔍 Found by db_record_id: ${!!position}`);
             }
             if (!position) {
                 position = this.positions.find(p => p.position_id === positionId);
-                console.log(`[position_manager_debug] 🔍 Found by position_id: ${!!position}`);
+                //console.log(`[position_manager_debug] 🔍 Found by position_id: ${!!position}`);
             }
                 // CRITICAL FIX: Also try matching by the database UUID if positionId is a UUID
                 if (!position && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(positionId)) {
@@ -6622,15 +8099,15 @@ export default class PositionManager {
                 console.log(`[PositionManager] ⚠️ Position ${positionId} not found in this.positions array`);
             }
         }
-        console.log('[PositionManager] 🚀 Trades details:', tradesToCreate.map(t => ({ symbol: t.symbol, exit_reason: t.exit_reason, pnl: t.pnl_usdt })));
+        //console.log('[PositionManager] 🚀 Trades details:', tradesToCreate.map(t => ({ symbol: t.symbol, exit_reason: t.exit_reason, pnl: t.pnl_usdt })));
         
-        console.log('[position_manager_debug] 🔍 About to check early exit conditions...');
-        console.log('[position_manager_debug] 🔍 tradesToCreate.length:', tradesToCreate.length);
-        console.log('[position_manager_debug] 🔍 positionIdsToClose.length:', positionIdsToClose.length);
+        //console.log('[position_manager_debug] 🔍 About to check early exit conditions...');
+        //console.log('[position_manager_debug] 🔍 tradesToCreate.length:', tradesToCreate.length);
+        //console.log('[position_manager_debug] 🔍 positionIdsToClose.length:', positionIdsToClose.length);
         
         /*if (tradesToCreate.length === 0 || positionIdsToClose.length === 0) {
             console.log('[position_manager_debug] 🔍 EARLY EXIT - NO POSITIONS TO CLOSE');
-            console.log('🔥🔥🔥 EARLY EXIT - NO POSITIONS TO CLOSE 🔥🔥🔥');
+            // console.log('🔥🔥🔥 EARLY EXIT - NO POSITIONS TO CLOSE 🔥🔥🔥');
             console.log('[PositionManager] 🚀 No positions to close, returning success');
             console.log('[PositionManager] 🚀 tradesToCreate.length:', tradesToCreate.length);
             console.log('[PositionManager] 🚀 positionIdsToClose.length:', positionIdsToClose.length);
@@ -6659,8 +8136,8 @@ export default class PositionManager {
             const symbols = [...new Set(tradesToCreate.map(t => t.symbol))];
             //console.log(`🔥🔥🔥 Need prices for ${symbols.length} symbols:`, symbols);
             
-            console.log('[position_manager_debug] 🔍 About to fetch prices for all positions...');
-            console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - FETCHING PRICES');
+            //console.log('[position_manager_debug] 🔍 About to fetch prices for all positions...');
+            //console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - FETCHING PRICES');
             
             // Add timeout to price fetching to prevent hanging
             const priceFetchTimeout = new Promise((_, reject) => {
@@ -6669,7 +8146,7 @@ export default class PositionManager {
             
             const priceFetchPromise = Promise.all(
                 this.positions.map(async (p) => {
-                    console.log(`[position_manager_debug] 🔍 Processing position for price fetch: ${p.symbol}`);
+                    //console.log(`[position_manager_debug] 🔍 Processing position for price fetch: ${p.symbol}`);
                     const symbolNoSlash = p.symbol.replace('/', '');
                     try {
                         // Find the corresponding trade data for this position
@@ -6678,20 +8155,28 @@ export default class PositionManager {
                         );
                         const tradeData = tradeIndex >= 0 ? tradesToCreate[tradeIndex] : null;
                         
-                        // Try to get price from various sources
-                        let price = this.scannerService.currentPrices?.[symbolNoSlash];
+                // CRITICAL FIX: Always fetch FRESH price when closing positions (bypass cache)
+                // Use getFreshCurrentPrice() which directly calls Binance /api/v3/ticker/price
+                let price = null;
                         
-                        if (!price && this.scannerService.priceManagerService) {
+                if (this.scannerService.priceManagerService) {
                             try {
-                                price = await this.scannerService.priceManagerService.getCurrentPrice(p.symbol);
+                        price = await this.scannerService.priceManagerService.getFreshCurrentPrice(p.symbol);
+                        console.log(`[PositionManager] ✅ Fetched FRESH price for ${p.symbol}: ${price}`);
                             } catch (error) {
-                                console.log(`[PositionManager] ⚠️ Could not fetch price via priceManagerService:`, error);
-                            }
-                        }
-                        
-                        // Use tradeData exit_price as fallback
-                        if (!price && tradeData) {
-                            price = tradeData.exit_price;
+                        console.error(`[PositionManager] ❌ Failed to fetch fresh price for ${p.symbol}:`, error.message);
+                    }
+                }
+                
+                // Fallback to cached price only if fresh fetch completely failed
+                if ((!price || isNaN(price) || price <= 0) && this.scannerService.currentPrices?.[symbolNoSlash]) {
+                    price = this.scannerService.currentPrices[symbolNoSlash];
+                    console.warn(`[PositionManager] ⚠️ Using cached price as fallback for ${p.symbol}: ${price} (fresh fetch failed)`);
+                }
+                
+                // NEVER use tradeData.exit_price as fallback - it may be stale/wrong
+                if (!price || isNaN(price) || price <= 0) {
+                    console.error(`[PositionManager] ❌ CRITICAL: No valid price available for ${p.symbol} after all attempts`);
                         }
                         
                         return { symbol: p.symbol, symbolNoSlash, price };
@@ -6705,16 +8190,26 @@ export default class PositionManager {
             let allPositionsData;
             try {
                 allPositionsData = await Promise.race([priceFetchPromise, priceFetchTimeout]);
-                console.log('[position_manager_debug] 🔍 Price fetch completed successfully');
+                //console.log('[position_manager_debug] 🔍 Price fetch completed successfully');
             } catch (timeoutError) {
                 console.error('[position_manager_debug] ❌ Price fetch timeout:', timeoutError.message);
                 this.addLog(`[MONITOR] ❌ Price fetch timeout: ${timeoutError.message}`, 'error');
-                // Use fallback prices from trade data
-                allPositionsData = tradesToCreate.map(t => ({
+                // CRITICAL FIX: Don't use trade data prices as fallback - they may be stale/wrong
+            // Use entry prices as last resort (better than stale exit prices)
+                console.warn(`[PositionManager] ⚠️ Price fetch timeout - using entry prices as fallback (will fetch fresh prices later)`);
+                allPositionsData = tradesToCreate.map(t => {
+                    // Find the position to get entry_price
+                    const pos = this.positions.find(p => 
+                        p.id === t.trade_id || 
+                        p.position_id === t.trade_id || 
+                        p.db_record_id === t.trade_id
+                    );
+                    return {
                     symbol: t.symbol,
                     symbolNoSlash: t.symbol.replace('/', ''),
-                    price: t.exit_price
-                }));
+                        price: null // Set to null - will be fetched fresh in executeBatchClose
+                    };
+                });
             }
             
             //console.log('🔥🔥🔥 PRICES FETCHED:', allPositionsData.filter(p => p.price).map(p => `${p.symbol}: ${p.price}`));
@@ -6729,13 +8224,20 @@ export default class PositionManager {
             
             //console.log('🔥🔥🔥 PRICE MAP:', Object.keys(priceMap));
             
-            console.log('[position_manager_debug] 🔍 About to start main position processing loop...');
-            console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING POSITION PROCESSING LOOP');
+            //console.log('[position_manager_debug] 🔍 About to start main position processing loop...');
+            //console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING POSITION PROCESSING LOOP');
             
             // Process each position according to the schema
+            console.log(`[PositionManager] 🔄 Starting position processing loop: ${positionIdsToClose.length} positions`);
+            const _loopStartTime = Date.now();
+            
             for (let i = 0; i < positionIdsToClose.length; i++) {
-                console.log(`[position_manager_debug] 🔍 Processing position ${i + 1}/${positionIdsToClose.length} in main loop`);
-                const positionMarker = `[POSITION_${i + 1}]`; // Declare at the top of the loop
+                const positionMarker = `[POSITION_${i + 1}/${positionIdsToClose.length}]`;
+                const _positionStartTime = Date.now();
+                const elapsedSinceBatchStart = Date.now() - _batchCloseStartTime;
+                
+                console.log(`${positionMarker} 🚀 Starting position ${i + 1} (${(elapsedSinceBatchStart/1000).toFixed(1)}s since batch start)`);
+                
                 try {
                 const positionId = positionIdsToClose[i];
                 const tradeData = tradesToCreate[i];
@@ -6775,7 +8277,7 @@ export default class PositionManager {
                     //console.log(`🔥🔥🔥 ✅ FOUND POSITION: ${position.symbol} (${positionId}) 🔥🔥🔥`);
                 } else {
                     console.log(`[position_manager_debug] 🔍 ❌ POSITION NOT FOUND: ${positionId}`);
-                    console.log(`🔥🔥🔥 ❌ POSITION NOT FOUND: ${positionId} 🔥🔥🔥`);
+                    // console.log(`🔥🔥🔥 ❌ POSITION NOT FOUND: ${positionId} 🔥🔥🔥`);
                 }
                 // CRITICAL FIX: Also try matching by the database UUID if positionId is a UUID
                 if (!position && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(positionId)) {
@@ -6804,7 +8306,7 @@ export default class PositionManager {
                 const positionTradeId = position.position_id || position.id || position.db_record_id;
                 //console.log(`🔥🔥🔥 CHECKING DUPLICATE PREVENTION: positionTradeId=${positionTradeId}, processedTradeIds size=${this.processedTradeIds?.size || 0} 🔥🔥🔥`);
                 if (this.processedTradeIds && this.processedTradeIds.has(positionTradeId)) {
-                    console.log(`🔥🔥🔥 ❌ DUPLICATE BLOCKED: Position ${position.symbol} (${positionTradeId}) already processed, skipping 🔥🔥🔥`);
+                    // console.log(`🔥🔥🔥 ❌ DUPLICATE BLOCKED: Position ${position.symbol} (${positionTradeId}) already processed, skipping 🔥🔥🔥`);
                     continue;
                 }
                 //console.log(`🔥🔥🔥 ✅ PASSED DUPLICATE CHECK - PROCEEDING: ${position.symbol} (${positionTradeId}) 🔥🔥🔥`);
@@ -6814,21 +8316,132 @@ export default class PositionManager {
 
                 // Execute Binance sell order first
                 const symbolNoSlash = position.symbol.replace('/', '');
+                const entryPrice = Number(position.entry_price || 0);
                 
-                // CRITICAL FIX: Use priceMap instead of this.scannerService.currentPrices
-                const currentPrice = priceMap[symbolNoSlash] || tradeData.exit_price;
+                // CRITICAL FIX: ALWAYS fetch FRESH price from Binance when closing positions (bypass cache completely)
+                // This prevents stale prices like 1889.03 or 4160.88 for ETH (should be ~3800-3900)
+                // Use getFreshCurrentPrice() which directly calls /api/v3/ticker/price (current price, not 24hr ticker)
+                let currentPrice = null;
                 
-                //console.log(`🔥🔥🔥 PRICE CHECK: ${position.symbol} -> ${symbolNoSlash} -> ${currentPrice} 🔥🔥🔥`);
-                //console.log(`🔥🔥🔥 PRICE MAP HAS:`, Object.keys(priceMap).slice(0, 10));
-                //console.log(`🔥🔥🔥 PRICE MAP VALUES:`, Object.entries(priceMap).slice(0, 5).map(([k, v]) => `${k}=${v}`));
-                //console.log(`🔥🔥🔥 Looking for symbolNoSlash="${symbolNoSlash}", found price="${priceMap[symbolNoSlash]}", tradeData.exit_price="${tradeData.exit_price}" 🔥🔥🔥`);
+                const _priceFetchStartTime = Date.now();
+                if (this.scannerService.priceManagerService) {
+                    try {
+                        currentPrice = await this.scannerService.priceManagerService.getFreshCurrentPrice(position.symbol);
+                        const _priceFetchTime = Date.now() - _priceFetchStartTime;
+                        if (currentPrice && !isNaN(currentPrice) && currentPrice > 0) {
+                            console.log(`${positionMarker} ✅ Fetched FRESH price for ${position.symbol}: ${currentPrice} (${_priceFetchTime}ms)`);
+                            
+                            // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
+                            if (position.symbol === 'ETH/USDT') {
+                                const ETH_ALERT_MIN = 3500;
+                                const ETH_ALERT_MAX = 4000;
+                                if (currentPrice < ETH_ALERT_MIN || currentPrice > ETH_ALERT_MAX) {
+                                   /* console.error(`[PositionManager] 🚨🚨🚨 ETH PRICE ALERT 🚨🚨🚨`);
+                                    console.error(`[PositionManager] 🚨 ETH price ${currentPrice} is outside alert range [${ETH_ALERT_MIN}, ${ETH_ALERT_MAX}]`);
+                                    console.error(`[PositionManager] 🚨 Full details:`, {
+                                        symbol: position.symbol,
+                                        currentPrice: currentPrice,
+                                        entryPrice: entryPrice,
+                                        positionId: position.position_id || position.id,
+                                        priceDifference: currentPrice < ETH_ALERT_MIN ? 
+                                            `${(ETH_ALERT_MIN - currentPrice).toFixed(2)} below minimum` : 
+                                            `${(currentPrice - ETH_ALERT_MAX).toFixed(2)} above maximum`,
+                                        percentDifference: currentPrice < ETH_ALERT_MIN ? 
+                                            `${((ETH_ALERT_MIN - currentPrice) / ETH_ALERT_MIN * 100).toFixed(2)}%` : 
+                                            `${((currentPrice - ETH_ALERT_MAX) / ETH_ALERT_MAX * 100).toFixed(2)}%`,
+                                        priceDiffFromEntry: entryPrice > 0 ? `${((currentPrice - entryPrice) / entryPrice * 100).toFixed(2)}%` : 'N/A',
+                                        timestamp: new Date().toISOString(),
+                                        source: 'monitorAndClosePositions',
+                                        tradingMode: this.tradingMode,
+                                        exitReason: tradeData?.exit_reason
+                                    });*/
+                                    //console.error(`[PositionManager] 🚨🚨🚨 END ETH PRICE ALERT 🚨🚨🚨`);
+                                }
+                            }
+                        } else {
+                            console.warn(`[PositionManager] ⚠️ Fresh price fetch returned invalid value for ${position.symbol}: ${currentPrice}`);
+                        }
+                    } catch (error) {
+                        console.error(`[PositionManager] ❌ Failed to fetch fresh price for ${position.symbol}:`, error.message);
+                    }
+                }
                 
+                // LAST RESORT: Only use cached price if fresh fetch completely failed AND cached price is valid
+                // Log error if stale price detected but don't reject
+                if ((!currentPrice || isNaN(currentPrice) || currentPrice <= 0) && this.scannerService.currentPrices?.[symbolNoSlash]) {
+                    const cachedPrice = this.scannerService.currentPrices[symbolNoSlash];
+                    // Detect stale prices and log error (but allow to proceed)
+                    if (entryPrice > 0) {
+                        const cachedDiffPercent = Math.abs((cachedPrice - entryPrice) / entryPrice) * 100;
+                        if (cachedDiffPercent > 50) {
+                            console.error(`[PositionManager] 🚨 STALE PRICE DETECTED: Cached price ${cachedPrice} is >50% different from entry ${entryPrice} (${cachedDiffPercent.toFixed(2)}%) for ${position.symbol}`);
+                            console.error(`[PositionManager] 🚨 This may be stale 24hr ticker lastPrice - using as last resort but price is likely wrong`);
+                            if (position.symbol === 'ETH/USDT' && (cachedPrice === 4160.88 || Math.abs(cachedPrice - 4160.88) < 0.01)) {
+                                console.error(`[PositionManager] 🚨🚨🚨 CONFIRMED: 4160.88 detected in cached price for ETH! 🚨🚨🚨`);
+                            }
+                        }
+                        // Use cached price even if stale (last resort)
+                        currentPrice = cachedPrice;
+                        console.warn(`[PositionManager] ⚠️ Using cached price as last resort for ${position.symbol}: ${currentPrice} (fresh fetch failed)`);
+                    } else {
+                        // No entry_price to validate - still use cached but log warning
+                        currentPrice = cachedPrice;
+                        console.warn(`[PositionManager] ⚠️ Using cached price as last resort for ${position.symbol}: ${currentPrice} (no entry_price to validate - this may be stale)`);
+                    }
+                }
+                
+                // NEVER use tradeData.exit_price as fallback - it may be stale/wrong
+                // Final validation - if still no valid price, skip this position
                 if (!currentPrice || isNaN(currentPrice) || currentPrice <= 0) {
-                    console.log(`🔥🔥🔥 ❌ NO VALID PRICE - SKIPPING POSITION: ${position.symbol} 🔥🔥🔥`);
-                    console.log(`[PositionManager] ⚠️ No valid current price for ${position.symbol} (got: ${currentPrice}), skipping Binance order`);
-                    errors.push(`No valid price for ${position.symbol}: ${currentPrice}`);
+                    console.error(`[PositionManager] ❌ CRITICAL: No valid current price available for ${position.symbol} after all attempts`);
+                    console.error(`[PositionManager] ❌ Price sources checked: fresh fetch=failed, cached=${!!this.scannerService.currentPrices?.[symbolNoSlash]}`);
+                    console.error(`[PositionManager] ❌ tradeData.exit_price=${tradeData.exit_price} (NOT USED as it may be stale)`);
+                    errors.push(`No valid price for ${position.symbol} - all fetch attempts failed`);
                     continue;
                 }
+                    
+                // CRITICAL FIX: Detect stale exit price and log error (but don't reject)
+                // If exit price is >50% different from entry, log error but allow trade to proceed
+                if (entryPrice > 0 && currentPrice > 0) {
+                    const priceDiffPercent = Math.abs((currentPrice - entryPrice) / entryPrice) * 100;
+                    if (priceDiffPercent > 50) {
+                        console.error(`[PositionManager] 🚨 STALE EXIT PRICE DETECTED: Exit price ${currentPrice} is >50% different from entry ${entryPrice} for ${position.symbol}`);
+                        console.error(`[PositionManager] 🚨 Price difference: ${priceDiffPercent.toFixed(2)}% - This likely indicates stale lastPrice from 24hr ticker`);
+                        if (position.symbol === 'ETH/USDT' && (currentPrice === 4160.88 || Math.abs(currentPrice - 4160.88) < 0.01)) {
+                            console.error(`[PositionManager] 🚨🚨🚨 CONFIRMED: 4160.88 detected as exit price for ETH! 🚨🚨🚨`);
+                            console.error(`[PositionManager] 🚨 This confirms exit_price 4160.88 is from stale 24hr ticker lastPrice`);
+                        }
+                        // Don't skip - allow trade to proceed but log error
+                    }
+                }
+                
+                // CRITICAL FIX: Recalculate trade data with fresh price if it changed
+                if (Math.abs(tradeData.exit_price - currentPrice) > 0.01) {
+                    console.log(`[PositionManager] 🔄 Price changed from ${tradeData.exit_price} to ${currentPrice} - recalculating P&L`);
+                    
+                    // Recalculate with fresh price
+                    const COMMISSION_RATE = 0.001;
+                    const pnlGross = (currentPrice - position.entry_price) * position.quantity_crypto;
+                    const exitValueUsdt = currentPrice * position.quantity_crypto;
+                    const entryFees = position.entry_value_usdt * COMMISSION_RATE;
+                    const exitFees = exitValueUsdt * COMMISSION_RATE;
+                    const totalFees = entryFees + exitFees;
+                    const pnlUsdt = pnlGross - totalFees;
+                    const pnlPercentage = position.entry_value_usdt > 0 ? (pnlUsdt / position.entry_value_usdt) * 100 : 0;
+                    
+                    // Update tradeData with recalculated values
+                    tradeData.exit_price = currentPrice;
+                    tradeData.exit_value_usdt = exitValueUsdt;
+                    tradeData.pnl_usdt = pnlUsdt;
+                    tradeData.pnl_percentage = pnlPercentage;
+                    tradeData.total_fees_usdt = totalFees;
+                    
+                    console.log(`[PositionManager] ✅ Updated trade data: exit_price=${currentPrice}, pnl_usdt=${pnlUsdt}, pnl_percentage=${pnlPercentage.toFixed(2)}%`);
+                } else {
+                    tradeData.exit_price = currentPrice; // Ensure it's set even if same
+                }
+                
+                console.log(`[PositionManager] ✅ Using fresh price for ${position.symbol}: ${currentPrice}`);
                     
                 //console.log(`${positionMarker} 🔥🔥🔥 ✅ PRICE FOUND - PROCEEDING WITH CLOSE: ${position.symbol} at ${currentPrice} 🔥🔥🔥`);
                     
@@ -6864,22 +8477,25 @@ export default class PositionManager {
                         // Non-critical - continue with sell attempt using cached balance
                     }
                     
-                    console.log(`[position_manager_debug] 🔍 About to call _executeBinanceMarketSellOrder for position ${i + 1}/${positionIdsToClose.length}`);
-                    console.log(`${positionMarker} [PositionManager] 🚀 STEP 4: About to call _executeBinanceMarketSellOrder with:`, {
+                    //console.log(`[position_manager_debug] 🔍 About to call _executeBinanceMarketSellOrder for position ${i + 1}/${positionIdsToClose.length}`);
+                    /*console.log(`${positionMarker} [PositionManager] 🚀 STEP 4: About to call _executeBinanceMarketSellOrder with:`, {
                         symbol: position.symbol,
                         quantity: position.quantity_crypto,
                         currentPrice: currentPrice,
                         tradingMode: tradingMode,
                         proxyUrl: proxyUrl
-                    });
-                    console.log(`${positionMarker} [PositionManager] 🔍 [BINANCE_SELL_CALL] About to call _executeBinanceMarketSellOrder...`);
-                    console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_6: About to call _executeBinanceMarketSellOrder');
+                    });*/
+                    //console.log(`${positionMarker} [PositionManager] 🔍 [BINANCE_SELL_CALL] About to call _executeBinanceMarketSellOrder...`);
+                    //console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_6: About to call _executeBinanceMarketSellOrder');
                     
                     // CRITICAL: Add timeout to prevent hanging
-                    console.log(`${positionMarker} [PositionManager] 🚀 STEP 5: Creating Binance sell promise for ${position.symbol}...`);
-                    console.log(`${positionMarker} [PositionManager] 🔍 [BINANCE_SELL_CALL] Calling _executeBinanceMarketSellOrder now...`);
-                    console.log(`[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - CALLING _EXECUTE_BINANCE_MARKET_SELL_ORDER`);
+                    //console.log(`${positionMarker} [PositionManager] 🚀 STEP 5: Creating Binance sell promise for ${position.symbol}...`);
+                    //console.log(`${positionMarker} [PositionManager] 🔍 [BINANCE_SELL_CALL] Calling _executeBinanceMarketSellOrder now...`);
+                    //console.log(`[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - CALLING _EXECUTE_BINANCE_MARKET_SELL_ORDER`);
                     
+                    // Capture exit order timing
+                    const exitOrderStartTime = Date.now();
+                    console.log(`${positionMarker} 🚀 Executing Binance sell order for ${position.symbol}...`);
                     const binanceSellPromise = this._executeBinanceMarketSellOrder(position, { 
                         currentPrice,
                         tradingMode, 
@@ -6887,36 +8503,52 @@ export default class PositionManager {
                         exitReason: tradeData.exit_reason || 'timeout'
                     });
                     
-                    console.log(`${positionMarker} [PositionManager] ✅ STEP 5 COMPLETE: Binance sell promise created, setting up timeout...`);
                     const timeoutPromise = new Promise((_, reject) => 
                         setTimeout(() => reject(new Error('Binance sell timeout after 30s')), 30000)
                     );
                     
                     let binanceResult;
+                    let exitFillTimeMs = null;
                     try {
-                    console.log(`[position_manager_debug] [debug_next] 🔍 About to await Promise.race for position ${i + 1}/${positionIdsToClose.length}`);
-                    console.log(`${positionMarker} [PositionManager] [debug_next] 🚀 STEP 6: Awaiting Binance sell or timeout for ${position.symbol}...`);
-                    console.log(`${positionMarker} [PositionManager] [debug_next] 🔍 [PROMISE_RACE] Starting Promise.race with 30s timeout for ${position.symbol}`);
-                    
                     const raceStartTime = Date.now();
                     binanceResult = await Promise.race([binanceSellPromise, timeoutPromise]);
-                    const raceEndTime = Date.now();
-                    const raceDuration = raceEndTime - raceStartTime;
+                    const exitOrderEndTime = Date.now();
+                    exitFillTimeMs = exitOrderEndTime - exitOrderStartTime;
+                    const raceDuration = exitOrderEndTime - raceStartTime;
+                    const positionElapsed = Date.now() - _positionStartTime;
+                    console.log(`${positionMarker} ✅ Binance sell completed for ${position.symbol} in ${(raceDuration/1000).toFixed(1)}s (position total: ${(positionElapsed/1000).toFixed(1)}s)`);
                     
-                    console.log(`[position_manager_debug] [debug_next] 🔍 Promise.race completed successfully for position ${i + 1}/${positionIdsToClose.length} in ${raceDuration}ms`);
-                    console.log(`${positionMarker} [PositionManager] [debug_next] ✅ STEP 6 COMPLETE: Binance sell completed for ${position.symbol} (not timeout) in ${raceDuration}ms`);
-                    console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_7: _executeBinanceMarketSellOrder completed');
-                    console.log(`${positionMarker} [PositionManager] [debug_next] 🔍 [PROMISE_RACE] Result type: ${typeof binanceResult}, success: ${binanceResult?.success}`);
+                    console.log(`${positionMarker} [PositionManager] ⏱️ Exit order fill time for ${position.symbol}:`, {
+                        exitOrderStartTime: new Date(exitOrderStartTime).toISOString(),
+                        exitOrderEndTime: new Date(exitOrderEndTime).toISOString(),
+                        exitFillTimeMs: exitFillTimeMs,
+                        exitFillTimeSeconds: (exitFillTimeMs / 1000).toFixed(2),
+                        status: exitFillTimeMs < 5000 ? '✅ Fast fill (< 5 seconds)' : exitFillTimeMs < 10000 ? '⚠️ Moderate fill (5-10 seconds)' : '❌ Slow fill (> 10 seconds)'
+                    });
+                    
+                    //console.log(`[position_manager_debug] [debug_next] 🔍 Promise.race completed successfully for position ${i + 1}/${positionIdsToClose.length} in ${raceDuration}ms`);
+                    //console.log(`${positionMarker} [PositionManager] [debug_next] ✅ STEP 6 COMPLETE: Binance sell completed for ${position.symbol} (not timeout) in ${raceDuration}ms`);
+                    //console.log('[PositionManager] 🔍 [EXECUTION_TRACE] step_7: _executeBinanceMarketSellOrder completed');
+                    //console.log(`${positionMarker} [PositionManager] [debug_next] 🔍 [PROMISE_RACE] Result type: ${typeof binanceResult}, success: ${binanceResult?.success}`);
                     } catch (timeoutError) {
-                        console.log(`[position_manager_debug] [debug_next] 🔍 Promise.race failed for position ${i + 1}/${positionIdsToClose.length}: ${timeoutError.message}`);
-                        console.log(`${positionMarker} [PositionManager] [debug_next] ⚠️ STEP 6 ERROR: Binance sell timeout/failed for ${position.symbol}:`, timeoutError.message);
-                        console.log(`${positionMarker} [PositionManager] [debug_next] ⚠️ Timeout error stack:`, timeoutError.stack);
+                        // On timeout, still calculate fill time (will be >= 30000ms)
+                        const exitOrderEndTime = Date.now();
+                        exitFillTimeMs = exitOrderEndTime - exitOrderStartTime;
+                        console.warn(`${positionMarker} [PositionManager] ⚠️ Exit order timeout/failed for ${position.symbol}:`, {
+                            exitOrderStartTime: new Date(exitOrderStartTime).toISOString(),
+                            exitOrderEndTime: new Date(exitOrderEndTime).toISOString(),
+                            exitFillTimeMs: exitFillTimeMs,
+                            error: timeoutError.message
+                        });
+                        //console.log(`[position_manager_debug] [debug_next] 🔍 Promise.race failed for position ${i + 1}/${positionIdsToClose.length}: ${timeoutError.message}`);
+                        //console.log(`${positionMarker} [PositionManager] [debug_next] ⚠️ STEP 6 ERROR: Binance sell timeout/failed for ${position.symbol}:`, timeoutError.message);
+                        //console.log(`${positionMarker} [PositionManager] [debug_next] ⚠️ Timeout error stack:`, timeoutError.stack);
                         errors.push(`Binance sell timeout/failed for ${position.symbol}: ${timeoutError.message}`);
                         continue;
                     }
                     
-                    console.log(`${positionMarker} [PositionManager] 🚀 STEP 7: Binance result for ${position.symbol}:`, binanceResult);
-                    console.log(`${positionMarker} [PositionManager] 🚀 Binance result type check:`, {
+                    //console.log(`${positionMarker} [PositionManager] 🚀 STEP 7: Binance result for ${position.symbol}:`, binanceResult);
+                    /*console.log(`${positionMarker} [PositionManager] 🚀 Binance result type check:`, {
                         hasSkipped: 'skipped' in binanceResult,
                         skipped: binanceResult?.skipped,
                         hasSuccess: 'success' in binanceResult,
@@ -6926,65 +8558,78 @@ export default class PositionManager {
                         isVirtualClose: binanceResult?.isVirtualClose,
                         reason: binanceResult?.reason,
                         error: binanceResult?.error
-                    });
+                    });*/
                     
                     if (binanceResult.skipped) {
-                        console.log(`${positionMarker} [PositionManager] ⚠️ STEP 8: Position ${position.symbol} skipped due to dust threshold`);
-                        console.log(`${positionMarker} [PositionManager] ⚠️ Skipping dust position and continuing to next position`);
+                        //console.log(`${positionMarker} [PositionManager] ⚠️ STEP 8: Position ${position.symbol} skipped due to dust threshold`);
+                        //console.log(`${positionMarker} [PositionManager] ⚠️ Skipping dust position and continuing to next position`);
                         continue;
                     }
 
                     if (!binanceResult.success) {
-                        console.log(`${positionMarker} [PositionManager] ❌ STEP 8 ERROR: Binance sell failed for ${position.symbol}: ${binanceResult.error}`);
+                        //console.log(`${positionMarker} [PositionManager] ❌ STEP 8 ERROR: Binance sell failed for ${position.symbol}: ${binanceResult.error}`);
                         errors.push(`Binance sell failed for ${position.symbol}: ${binanceResult.error}`);
                         continue;
                     }
 
                     if (binanceResult.isVirtualClose) {
-                        console.log(`${positionMarker} [PositionManager] ✅ STEP 8: Virtual closure for ${position.symbol} (position already closed on Binance)`);
-                        console.log(`${positionMarker} [PositionManager] ✅ Virtual closure reason: ${binanceResult.reason}`);
+                        //console.log(`${positionMarker} [PositionManager] ✅ STEP 8: Virtual closure for ${position.symbol} (position already closed on Binance)`);
+                        //console.log(`${positionMarker} [PositionManager] ✅ Virtual closure reason: ${binanceResult.reason}`);
                     } else {
-                        console.log(`${positionMarker} [PositionManager] ✅ STEP 8: Binance sell successful for ${position.symbol}`);
+                        //console.log(`${positionMarker} [PositionManager] ✅ STEP 8: Binance sell successful for ${position.symbol}`);
                     }
                     
                     // CRITICAL FIX: Refresh balance after each successful sell to prevent "insufficient balance" errors
                     // when closing multiple positions of the same symbol sequentially
-                    console.log(`${positionMarker} [PositionManager] 🚀 STEP 9: Refreshing balance after successful sell of ${position.symbol}...`);
+                    //console.log(`${positionMarker} [PositionManager] 🚀 STEP 9: Refreshing balance after successful sell of ${position.symbol}...`);
                     try {
                         await this.refreshBalanceFromBinance();
-                        console.log(`${positionMarker} [PositionManager] ✅ STEP 9 COMPLETE: Balance refreshed after sell of ${position.symbol}`);
+                        //console.log(`${positionMarker} [PositionManager] ✅ STEP 9 COMPLETE: Balance refreshed after sell of ${position.symbol}`);
                     } catch (refreshError) {
                         console.warn(`${positionMarker} [PositionManager] ⚠️ STEP 9 WARNING: Failed to refresh balance after sell (non-critical): ${refreshError.message}`);
                         // Non-critical - continue processing
                     }
 
                     // Now process the closed trade according to schema
+                    // Calculate duration in hours (decimal) if missing, using entry_timestamp and exit_timestamp
+                    let durationHours = tradeData.duration_hours;
+                    if (!durationHours && tradeData.duration_seconds !== undefined && tradeData.duration_seconds !== null) {
+                        // Convert existing seconds to hours
+                        durationHours = tradeData.duration_seconds / 3600;
+                    } else if (!durationHours && tradeData.entry_timestamp && tradeData.exit_timestamp) {
+                        durationHours = (new Date(tradeData.exit_timestamp).getTime() - new Date(tradeData.entry_timestamp).getTime()) / (1000 * 3600);
+                    } else if (!durationHours && position.entry_timestamp && tradeData.exit_timestamp) {
+                        // Fallback: use position's entry_timestamp if tradeData doesn't have it
+                        durationHours = (new Date(tradeData.exit_timestamp).getTime() - new Date(position.entry_timestamp).getTime()) / (1000 * 3600);
+                    }
+                    
                     const exitDetails = {
                         exit_price: tradeData.exit_price,
                         exit_value_usdt: tradeData.exit_value_usdt,
-                        pnl_usdt: tradeData.pnl_usdt,
-                        pnl_percentage: tradeData.pnl_percentage,
+                        pnl_usdt: tradeData.pnl_usdt, // NET P&L (after fees)
+                        pnl_percentage: tradeData.pnl_percentage, // NET P&L percentage (after fees)
+                        total_fees_usdt: tradeData.total_fees_usdt, // Include fees from tradeData
                         exit_timestamp: tradeData.exit_timestamp,
-                        duration_seconds: tradeData.duration_seconds,
-                        exit_reason: tradeData.exit_reason
+                        duration_hours: durationHours || 0, // Store duration in hours (decimal)
+                        exit_reason: tradeData.exit_reason || 'timeout', // Ensure exit_reason is always set
+                        exit_order_id: binanceResult.orderResult?.orderId || binanceResult.orderResult?.order_id || null, // Capture order ID from Binance result
+                        exit_fill_time_ms: exitFillTimeMs // Capture exit order fill time
                     };
 
-                    console.log(`${positionMarker} [PositionManager] 🚀 STEP 10: Calling processClosedTrade for ${position.symbol}...`);
+                    const _processTradeStartTime = Date.now();
+                    console.log(`${positionMarker} 🚀 Processing closed trade for ${position.symbol}...`);
                     const processResult = await this.processClosedTrade(position, exitDetails);
+                    const _processTradeTime = Date.now() - _processTradeStartTime;
                     
                     if (processResult.success) {
-                        console.log(`${positionMarker} [PositionManager] ✅ STEP 10 COMPLETE: Successfully processed closed trade for ${position.symbol}`);
                         processedTrades.push(processResult.trade);
-                        // Track the position ID for removal from memory
                         successfullyClosedPositionIds.push(position.id || position.db_record_id || position.position_id);
-                        console.log(`${positionMarker} [PositionManager] 📝 Tracked closed position ID: ${position.id || position.db_record_id || position.position_id}`);
+                        const positionTotalTime = Date.now() - _positionStartTime;
+                        console.log(`${positionMarker} ✅ Position ${i + 1} completed: ${position.symbol} (process: ${(_processTradeTime/1000).toFixed(1)}s, total: ${(positionTotalTime/1000).toFixed(1)}s)`);
                     } else {
-                        console.log(`${positionMarker} [PositionManager] ❌ STEP 10 ERROR: Failed to process closed trade for ${position.symbol}`);
+                        console.log(`${positionMarker} ❌ Failed to process closed trade for ${position.symbol}`);
                         errors.push(`Failed to process closed trade for ${position.symbol}`);
                     }
-                    
-                    console.log(`${positionMarker} 🔥🔥🔥 ✅ COMPLETED PROCESSING TRADE ${i + 1}/${tradesToCreate.length} FOR ${position.symbol} 🔥🔥🔥`);
-                    console.log(`${positionMarker} 🔥🔥🔥 ======================================== 🔥🔥🔥`);
 
                 } catch (error) {
                     console.log(`${positionMarker} [PositionManager] ❌ CRITICAL ERROR processing position ${position.symbol}:`, error);
@@ -6998,6 +8643,11 @@ export default class PositionManager {
                 }
             }
             
+            const _loopEndTime = Date.now();
+            const loopDuration = _loopEndTime - _loopStartTime;
+            console.log(`[PositionManager] ✅ Position processing loop completed: ${processedTrades.length} positions closed in ${(loopDuration/1000).toFixed(1)}s`);
+            console.log(`[PositionManager] 📊 Average time per position: ${(loopDuration / positionIdsToClose.length / 1000).toFixed(1)}s`);
+            
             // Update wallet state
             if (this._getCurrentWalletState()) {
                 const remainingIds = this.positions.map(p => p.id).filter(id => id);
@@ -7006,28 +8656,28 @@ export default class PositionManager {
 
                // BETTER APPROACH: Always fetch fresh balance from Binance after position close
                // This ensures we have the accurate, up-to-date balance from the source of truth
-               console.log('[PositionManager] 🔄 Fetching fresh balance from Binance after position close...');
+               //console.log('[PositionManager] 🔄 Fetching fresh balance from Binance after position close...');
                
                // DEBUG: Log current wallet state before refresh
                const currentWalletState = this._getCurrentWalletState();
                if (currentWalletState) {
-                   console.log('[debug-increase] 🔍 BEFORE Binance refresh - Current wallet state:', {
+                   /*console.log('[debug-increase] 🔍 BEFORE Binance refresh - Current wallet state:', {
                        available_balance: currentWalletState.available_balance,
                        balance_in_trades: currentWalletState.balance_in_trades,
                        total_equity: currentWalletState.total_equity,
                        last_binance_sync: currentWalletState.last_binance_sync,
                        positions_count: this.positions.length,
                        closed_positions_value: processedTrades.reduce((sum, trade) => sum + (trade.exit_value_usdt || 0), 0)
-                   });
+                   });*/
                }
                
             try {
                    // Step 1: Fetch fresh balance from Binance (source of truth)
-                   console.log('[debug-increase] 🔄 Step 1: Calling refreshBalanceFromBinance()...');
+                   //console.log('[debug-increase] 🔄 Step 1: Calling refreshBalanceFromBinance()...');
                    await this.refreshBalanceFromBinance();
                 
                    // Step 2: Recalculate wallet summary with fresh Binance data
-                   console.log('[debug-increase] 🔄 Step 2: Calling updateWalletSummary()...');
+                   //console.log('[debug-increase] 🔄 Step 2: Calling updateWalletSummary()...');
                    if (this.scannerService.walletManagerService) {
                 await this.scannerService.walletManagerService.updateWalletSummary(
                     this._getCurrentWalletState(),
@@ -7038,20 +8688,20 @@ export default class PositionManager {
                    // DEBUG: Log wallet state AFTER refresh
                    const updatedWalletState = this._getCurrentWalletState();
                    if (updatedWalletState) {
-                       console.log('[debug-increase] 🔍 AFTER Binance refresh - Updated wallet state:', {
+                       /*console.log('[debug-increase] 🔍 AFTER Binance refresh - Updated wallet state:', {
                            available_balance: updatedWalletState.available_balance,
                            balance_in_trades: updatedWalletState.balance_in_trades,
                            total_equity: updatedWalletState.total_equity,
                            last_binance_sync: updatedWalletState.last_binance_sync,
                            positions_count: this.positions.length
-                       });
+                       });*/
                        
                        // Calculate the difference
                        const beforeBalance = parseFloat(currentWalletState?.available_balance || 0);
                        const afterBalance = parseFloat(updatedWalletState.available_balance || 0);
                        const balanceChange = afterBalance - beforeBalance;
                        
-                       console.log('[debug-increase] 📊 BALANCE CHANGE ANALYSIS:', {
+                       /*console.log('[debug-increase] 📊 BALANCE CHANGE ANALYSIS:', {
                            before_balance: beforeBalance,
                            after_balance: afterBalance,
                            balance_change: balanceChange,
@@ -7059,7 +8709,7 @@ export default class PositionManager {
                            closed_positions_value: processedTrades.reduce((sum, trade) => sum + (trade.exit_value_usdt || 0), 0),
                            expected_change: processedTrades.reduce((sum, trade) => sum + (trade.exit_value_usdt || 0), 0),
                            unexpected_increase: balanceChange > processedTrades.reduce((sum, trade) => sum + (trade.exit_value_usdt || 0), 0)
-                       });
+                       });*/
                    }
                 
                    // Step 3: Persist wallet changes
@@ -7095,16 +8745,64 @@ export default class PositionManager {
                 return shouldKeep;
             });
             
-            console.log(`🔥🔥🔥 BATCH CLOSE COMPLETED: ${processedTrades.length} positions closed 🔥🔥🔥`);
-            console.log(`🔥🔥🔥 POSITIONS IN MEMORY: ${initialPositionCount} → ${this.positions.length} (removed ${initialPositionCount - this.positions.length}) 🔥🔥🔥`);
-            console.log(`🔥🔥🔥 FINAL RESULT: success=true, closed=${processedTrades.length} 🔥🔥🔥`);
+            // console.log(`🔥🔥🔥 BATCH CLOSE COMPLETED: ${processedTrades.length} positions closed 🔥🔥🔥`);
+            // console.log(`🔥🔥🔥 POSITIONS IN MEMORY: ${initialPositionCount} → ${this.positions.length} (removed ${initialPositionCount - this.positions.length}) 🔥🔥🔥`);
+            // console.log(`🔥🔥🔥 FINAL RESULT: success=true, closed=${processedTrades.length} 🔥🔥🔥`);
             
+            // CRITICAL FIX: Update CentralWalletStateManager directly with current positions from memory
+            // Same logic as manual close - ensures UI reflects closed positions immediately
+            try {
+                const tradingMode = this.getTradingMode();
+                const walletManager = this.scannerService?.walletManagerService;
+                
+                //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 🔄 Updating CentralWalletStateManager after batch close`);
+                //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 📊 Current positions in memory: ${this.positions.length}`);
+                
+                if (walletManager?.centralWalletStateManager) {
+                    // Get filtered positions from PositionManager (already updated in memory)
+                    const filteredPositions = this.positions.filter(pos => 
+                        pos.trading_mode === tradingMode && 
+                        (pos.status === 'open' || pos.status === 'trailing')
+                    );
+                    
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 🔄 Filtered positions: ${filteredPositions.length} (from ${this.positions.length} total)`);
+                    
+                    // Update positions in CentralWalletStateManager directly
+                    const balanceInTrades = filteredPositions.reduce((total, pos) => {
+                        return total + (parseFloat(pos.entry_value_usdt) || 0);
+                    }, 0);
+                    
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 💰 Balance in trades: ${balanceInTrades}`);
+                    
+                    // Update the state directly
+                    await walletManager.centralWalletStateManager.updateBalanceInTrades(balanceInTrades);
+                    
+                    // Update positions in state DIRECTLY
+                    const oldPositionsCount = walletManager.centralWalletStateManager.currentState?.positions?.length || 0;
+                    walletManager.centralWalletStateManager.currentState.positions = filteredPositions;
+                    walletManager.centralWalletStateManager.currentState.open_positions_count = filteredPositions.length;
+                    
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ✅ Updated CentralWalletStateManager: ${oldPositionsCount} → ${filteredPositions.length} positions`);
+                } else {
+                    // Only log warning if services should be available (not during initialization)
+                    if (this.scannerService?.walletManagerService) {
+                        // console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ⚠️ CentralWalletStateManager not available (walletManager exists)`);
+                    }
+                    // Don't log if services aren't initialized yet (normal during startup)
+                }
+            } catch (updateError) {
+                console.error('[PositionManager] ❌ Failed to update CentralWalletStateManager after batch close:', updateError);
+                // Don't fail the batch close if UI update fails
+            }
+            
+            const totalTime = Date.now() - _batchCloseStartTime;
+            console.log(`[PositionManager] ✅ executeBatchClose completed: ${processedTrades.length} positions closed in ${(totalTime/1000).toFixed(1)}s`);
             return { success: true, closed: processedTrades.length, trades: processedTrades };
             
         } catch (error) {
-            console.log('🔥🔥🔥 BATCH CLOSE ERROR 🔥🔥🔥');
-            console.log('[PositionManager] ❌ Error in batch close:', error);
-            console.log(`🔥🔥🔥 ERROR RESULT: success=false, closed=0, error=${error.message} 🔥🔥🔥`);
+            const totalTime = Date.now() - _batchCloseStartTime;
+            console.error(`[PositionManager] ❌ executeBatchClose error after ${(totalTime/1000).toFixed(1)}s:`, error);
+            console.error('[PositionManager] ❌ Error stack:', error.stack);
             return { success: false, error: error.message, closed: 0 };
         }
     }
@@ -7191,13 +8889,55 @@ export default class PositionManager {
         console.log('[PositionManager] 🔄 Exit reason:', exitReason);
         console.log('[PositionManager] 🔄 Available positions:', this.positions.map(p => ({ id: p.db_record_id, position_id: p.position_id, symbol: p.symbol })));
         
-        const activePosition = this.positions.find(p => p.db_record_id === position.id);
+        // CRITICAL FIX: Try multiple ID fields to find the position
+        // Positions can have: id, db_record_id (from PositionManager) or just position_id (from CentralWalletStateManager)
+        const searchId = position.id || position.db_record_id;
+        const searchPositionId = position.position_id;
+        
+        console.log('[PositionManager] 🔄 Searching with ID fields:', { 
+            id: position.id, 
+            db_record_id: position.db_record_id, 
+            position_id: position.position_id,
+            searchId,
+            searchPositionId
+        });
+        
+        // Try to find by database ID first (most reliable)
+        let activePosition = searchId ? this.positions.find(p => p.db_record_id === searchId || p.id === searchId) : null;
+        
+        // If not found by ID, try by position_id
+        if (!activePosition && searchPositionId) {
+            activePosition = this.positions.find(p => p.position_id === searchPositionId);
+        }
+        
         console.log('[PositionManager] 🔄 Found active position:', activePosition);
-        console.log('[PositionManager] 🔄 Position ID being searched:', position.id);
+        console.log('[PositionManager] 🔄 Position ID being searched:', searchId || searchPositionId);
+        
+        // DEBUG: Verify analytics fields are present in activePosition
+        if (activePosition) {
+            console.log('[PositionManager] 🔍 Analytics fields in activePosition:', {
+                has_entry_fill_time_ms: activePosition.entry_fill_time_ms !== undefined,
+                entry_fill_time_ms: activePosition.entry_fill_time_ms,
+                has_entry_distance_to_support_percent: activePosition.entry_distance_to_support_percent !== undefined,
+                entry_distance_to_support_percent: activePosition.entry_distance_to_support_percent,
+                has_entry_near_support: activePosition.entry_near_support !== undefined,
+                entry_near_support: activePosition.entry_near_support,
+                has_entry_momentum_score: activePosition.entry_momentum_score !== undefined,
+                entry_momentum_score: activePosition.entry_momentum_score
+            });
+        }
 
         if (!activePosition) {
-            const availableIds = this.positions.map(p => `${p.symbol} (${p.position_id} / DB_ID: ${p.db_record_id})`).join(', ');
-            const errorMsg = `Position ${position.symbol} (ID: ${position.id}) not found in PositionManager. Available positions: ${availableIds || 'none'}`;
+            const availableIds = this.positions.map(p => `${p.symbol} (${p.position_id} / DB_ID: ${p.db_record_id || p.id})`).join(', ');
+            const errorMsg = `Position ${position.symbol} (ID: ${position.id || position.db_record_id || position.position_id || 'undefined'}) not found in PositionManager. Available positions: ${availableIds || 'none'}`;
+            
+            console.log('[PositionManager] 🔄 Position object keys:', Object.keys(position));
+            console.log('[PositionManager] 🔄 Position object values:', {
+                id: position.id,
+                db_record_id: position.db_record_id,
+                position_id: position.position_id,
+                symbol: position.symbol
+            });
             
             this.scannerService.addLog(`[MANUAL_CLOSE] ❌ ${errorMsg}`, 'error');
             
@@ -7239,14 +8979,24 @@ export default class PositionManager {
             const tradingMode = this.getTradingMode();
             const proxyUrl = this.scannerService.state.settings?.local_proxy_url;
             
+            // Capture exit order timing
+            const exitOrderStartTime = Date.now();
             const binanceResult = await this._executeBinanceMarketSellOrder(activePosition, { 
                 currentPrice,
                 tradingMode, 
                 proxyUrl,
                 exitReason: exitReason || 'timeout'
             });
+            const exitOrderEndTime = Date.now();
+            const exitFillTimeMs = exitOrderEndTime - exitOrderStartTime;
             
             console.log(`[PositionManager] 🚀 Binance result for ${activePosition.symbol}:`, binanceResult);
+            console.log(`[PositionManager] ⏱️ Exit order fill time:`, {
+                exitOrderStartTime: new Date(exitOrderStartTime).toISOString(),
+                exitOrderEndTime: new Date(exitOrderEndTime).toISOString(),
+                exitFillTimeMs: exitFillTimeMs,
+                exitFillTimeSeconds: (exitFillTimeMs / 1000).toFixed(2)
+            });
             
             if (binanceResult.skipped) {
                 console.log(`[PositionManager] ⚠️ Position ${activePosition.symbol} skipped due to dust threshold`);
@@ -7270,42 +9020,102 @@ export default class PositionManager {
 
             // Now process the closed trade according to schema
             const trade = this._createTradeFromPosition(activePosition, currentPrice, exitReason);
+            
+            // Calculate duration in hours (decimal) if missing, using entry_timestamp and exit_timestamp
+            let durationHours = trade.duration_hours;
+            if (!durationHours && trade.duration_seconds !== undefined && trade.duration_seconds !== null) {
+                // Convert existing seconds to hours
+                durationHours = trade.duration_seconds / 3600;
+            } else if (!durationHours && trade.entry_timestamp && trade.exit_timestamp) {
+                durationHours = (new Date(trade.exit_timestamp).getTime() - new Date(trade.entry_timestamp).getTime()) / (1000 * 3600);
+            } else if (!durationHours && activePosition.entry_timestamp && trade.exit_timestamp) {
+                // Fallback: use position's entry_timestamp if trade doesn't have it
+                durationHours = (new Date(trade.exit_timestamp).getTime() - new Date(activePosition.entry_timestamp).getTime()) / (1000 * 3600);
+            }
+            
             const exitDetails = {
                 exit_price: trade.exit_price,
                 exit_value_usdt: trade.exit_value_usdt,
-                pnl_usdt: trade.pnl_usdt,
-                pnl_percentage: trade.pnl_percentage,
+                pnl_usdt: trade.pnl_usdt, // NET P&L (after fees)
+                pnl_percentage: trade.pnl_percentage, // NET P&L percentage (after fees)
+                total_fees_usdt: trade.total_fees_usdt, // Include fees from trade
                 exit_timestamp: trade.exit_timestamp,
-                duration_seconds: trade.duration_seconds,
-                exit_reason: trade.exit_reason
+                duration_hours: durationHours || 0, // Store duration in hours (decimal)
+                exit_reason: trade.exit_reason || 'timeout', // Ensure exit_reason is always set
+                exit_order_id: binanceResult.orderResult?.orderId || binanceResult.orderResult?.order_id || null, // Capture order ID from Binance result
+                exit_fill_time_ms: exitFillTimeMs // Capture exit order fill time
             };
 
-            console.log(`[PositionManager] 🚀 Calling processClosedTrade for ${activePosition.symbol}...`);
+            //console.log(`[PositionManager] 🚀 Calling processClosedTrade for ${activePosition.symbol}...`);
             const processResult = await this.processClosedTrade(activePosition, exitDetails);
             
             if (processResult.success) {
-                console.log(`[PositionManager] ✅ Successfully processed closed trade for ${activePosition.symbol}`);
+                //console.log(`[PositionManager] ✅ Successfully processed closed trade for ${activePosition.symbol}`);
                 
                 // CRITICAL: Trigger immediate wallet refresh after manual close
+                // Use current in-memory positions (already updated) - don't reload from DB
                 try {
                     console.log('[PositionManager] 🔄 Refreshing wallet state after manual close...');
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 📊 Current positions in memory after close: ${this.positions.length}`);
                     
-                    // Add a small delay to ensure database operations are complete
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    // Step 1: Update CentralWalletStateManager directly with current positions from memory
+                    // This ensures UI reflects the closed position immediately
+                    const tradingMode = this.getTradingMode();
+                    const scannerService = this.scannerService;
+                    const walletManager = scannerService?.walletManagerService;
                     
-                    // Step 1: Sync with Binance to get latest balances
-                    await this.scannerService.walletManagerService.initializeLiveWallet();
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 🔄 Updating CentralWalletStateManager after manual close`);
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 📊 Current positions in memory: ${this.positions.length}`);
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 📊 Trading mode: ${tradingMode}`);
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 📊 WalletManager exists: ${!!walletManager}`);
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 📊 CentralWalletStateManager exists: ${!!walletManager?.centralWalletStateManager}`);
                     
-                    // Step 2: Update wallet summary via CentralWalletStateManager
+                    if (walletManager?.centralWalletStateManager) {
+                        // Get filtered positions from PositionManager (already updated in memory)
+                        const filteredPositions = this.positions.filter(pos => 
+                            pos.trading_mode === tradingMode && 
+                            (pos.status === 'open' || pos.status === 'trailing')
+                        );
+                        
+                        //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 🔄 Filtered positions: ${filteredPositions.length} (from ${this.positions.length} total)`);
+                        
+                        // Update positions in CentralWalletStateManager directly
+                        // This bypasses syncWithBinance which might reload from DB
+                        const balanceInTrades = filteredPositions.reduce((total, pos) => {
+                            return total + (parseFloat(pos.entry_value_usdt) || 0);
+                        }, 0);
+                        
+                        //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] 💰 Balance in trades: ${balanceInTrades}`);
+                        
+                        // Update the state directly
+                        await walletManager.centralWalletStateManager.updateBalanceInTrades(balanceInTrades);
+                        
+                        // Update positions in state DIRECTLY
+                        const oldPositionsCount = walletManager.centralWalletStateManager.currentState?.positions?.length || 0;
+                        walletManager.centralWalletStateManager.currentState.positions = filteredPositions;
+                        walletManager.centralWalletStateManager.currentState.open_positions_count = filteredPositions.length;
+                        
+                        //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ✅ Updated CentralWalletStateManager: ${oldPositionsCount} → ${filteredPositions.length} positions`);
+                        //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ✅ CentralWalletStateManager.currentState.positions.length: ${walletManager.centralWalletStateManager.currentState.positions.length}`);
+                    } else {
+                        // Only log warning if services should be available (not during initialization)
+                        if (this.scannerService?.walletManagerService) {
+                            // console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ⚠️ CentralWalletStateManager not available (walletManager exists)`);
+                        }
+                        // Don't log if services aren't initialized yet (normal during startup)
+                    }
+                    
+                    // Step 2: Update wallet summary (uses PositionManager's memory)
                     await this.scannerService.walletManagerService.updateWalletSummary();
                     
                     // Step 3: Persist to localStorage for immediate UI access
                     await this.scannerService._persistLatestWalletSummary();
                     
-                    // Step 4: Notify UI components
+                    // Step 4: Notify UI components IMMEDIATELY
                     this.scannerService.notifyWalletSubscribers();
                     
-                    console.log('[PositionManager] ✅ Wallet state refreshed successfully after manual close');
+                    //console.log('[PositionManager] ✅ Wallet state refreshed successfully after manual close');
+                    //console.log(`[POSITION_DEBUG] [POSITION_MANAGER] ✅ Final positions in memory: ${this.positions.length}`);
                 } catch (refreshError) {
                     console.error('[PositionManager] ❌ Failed to refresh wallet after manual close:', refreshError);
                 }
@@ -7790,5 +9600,1099 @@ export default class PositionManager {
         }
 
         console.log('-'.repeat(60));
+    }
+
+    /**
+     * Calculate volatility score at position opening
+     * @param {number} atrValue - ATR value
+     * @param {number} entryPrice - Entry price
+     * @param {Object} signal - Signal object
+     * @returns {number|null} Volatility score (0-100) or null if unavailable
+     */
+    _calculateVolatilityAtOpen(atrValue, entryPrice, signal) {
+        try {
+            // Try to get volatility from marketVolatility state (ADX/BBW based)
+            const marketVolatility = this.scannerService?.state?.marketVolatility;
+            if (marketVolatility?.adx !== undefined && marketVolatility?.bbw !== undefined) {
+                // Calculate volatility score from ADX and BBW (similar to PerformanceMetricsService)
+                const adx = marketVolatility.adx || 25;
+                const bbw = marketVolatility.bbw || 0.1;
+                
+                // ADX score (0-100): Higher ADX = higher volatility
+                const adxScore = Math.min(100, Math.max(0, (adx / 50) * 100));
+                
+                // BBW score (0-100): Higher BBW = higher volatility (BBW is typically 0-0.5, scale to 0-100)
+                const bbwScore = Math.min(100, Math.max(0, (bbw / 0.5) * 100));
+                
+                // Combined volatility score (weighted: ADX 40%, BBW 60%)
+                const volatilityScore = (adxScore * 0.4) + (bbwScore * 0.6);
+                return Math.round(volatilityScore);
+            }
+            
+            // Fallback: Calculate from ATR percentile if available
+            if (atrValue && entryPrice) {
+                const atrPercent = (atrValue / entryPrice) * 100;
+                // Convert ATR percentage to volatility score (0-100)
+                // ATR < 1% = low volatility (0-33), 1-3% = medium (33-66), >3% = high (66-100)
+                if (atrPercent < 1) {
+                    return Math.round((atrPercent / 1) * 33);
+                } else if (atrPercent < 3) {
+                    return Math.round(33 + ((atrPercent - 1) / 2) * 33);
+                } else {
+                    return Math.round(66 + Math.min(34, ((atrPercent - 3) / 5) * 34));
+                }
+            }
+            
+            return null;
+        } catch (error) {
+            console.warn('[PositionManager] Error calculating volatility at open:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Get volatility label at position opening
+     * @param {number} atrValue - ATR value
+     * @param {number} entryPrice - Entry price
+     * @param {Object} signal - Signal object
+     * @returns {string|null} Volatility label (LOW/MEDIUM/HIGH) or null
+     */
+    _getVolatilityLabel(atrValue, entryPrice, signal) {
+        try {
+            const volatilityScore = this._calculateVolatilityAtOpen(atrValue, entryPrice, signal);
+            if (volatilityScore === null) return null;
+            
+            if (volatilityScore < 33) return 'LOW';
+            if (volatilityScore < 66) return 'MEDIUM';
+            return 'HIGH';
+        } catch (error) {
+            console.warn('[PositionManager] Error getting volatility label:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Get Bitcoin price at position opening
+     * @returns {Promise<number|null>} Bitcoin price in USDT or null if unavailable
+     */
+    async _getBitcoinPriceAtOpen() {
+        try {
+            // Try to get from price cache first
+            const priceCache = this.scannerService?.priceCacheService;
+            if (priceCache) {
+                const btcPrice = await priceCache.getPrice('BTCUSDT');
+                if (btcPrice && typeof btcPrice === 'number' && btcPrice > 0) {
+                    return btcPrice;
+                }
+            }
+            
+            // Fallback: Try to get from live prices
+            const livePrices = this.scannerService?.state?.livePrices;
+            if (livePrices?.BTCUSDT?.price) {
+                const price = parseFloat(livePrices.BTCUSDT.price);
+                if (!isNaN(price) && price > 0) {
+                    return price;
+                }
+            }
+            
+            // Last resort: Fetch from API
+            try {
+                const response = await fetch('http://localhost:3003/api/binance/ticker/price?symbol=BTCUSDT&tradingMode=' + (this.getTradingMode() || 'testnet'));
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data?.success && data?.data?.price) {
+                        const price = parseFloat(data.data.price);
+                        if (!isNaN(price) && price > 0) {
+                            return price;
+                        }
+                    }
+                }
+            } catch (fetchError) {
+                console.warn('[PositionManager] Error fetching Bitcoin price from API:', fetchError);
+            }
+            
+            return null;
+        } catch (error) {
+            console.warn('[PositionManager] Error getting Bitcoin price at open:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Calculate entry quality metrics (support/resistance proximity, momentum, volume, price structure)
+     * @param {string} symbol - Trading symbol (e.g., 'DOGE/USDT')
+     * @param {number} entryPrice - Entry price
+     * @param {Object} signal - Signal object that may contain support/resistance data
+     * @returns {Promise<Object>} Entry quality metrics
+     */
+    async _calculateEntryQuality(symbol, entryPrice, signal) {
+        // COMMENTED OUT: Too verbose, flooding console
+        // console.log(`[Entry Quality] 🔍 STARTING calculation for ${symbol} at price ${entryPrice}`);
+        try {
+            const symbolNoSlash = symbol.replace('/', '');
+            
+            // Get support/resistance from signal if available
+            // Support/resistance might be in signal.supportResistance or calculated from kline data
+            let entryNearSupport = false;
+            let entryNearResistance = false;
+            let entryDistanceToSupportPercent = null;
+            let entryDistanceToResistancePercent = null;
+            
+            // Try multiple sources for support/resistance data
+            let srData = signal?.supportResistance || signal?.sr_data || null;
+            
+            // COMMENTED OUT: Too verbose, flooding console
+            /*
+            console.log(`[Entry Quality] 🔍 Support/Resistance Data Check #1:`, {
+                hasSignal: !!signal,
+                hasSignalSupportResistance: !!signal?.supportResistance,
+                hasSignalSrData: !!signal?.sr_data,
+                srDataFound: !!srData,
+                srDataType: srData ? typeof srData : 'null',
+                srDataKeys: srData && typeof srData === 'object' ? Object.keys(srData) : 'N/A'
+            });
+            
+            // If not in signal, try to get from scanner service's indicators
+            // Check both currentIndicators and indicators (different naming conventions)
+            if (!srData) {
+                const indicators = this.scannerService?.state?.currentIndicators?.[symbolNoSlash] 
+                    || this.scannerService?.state?.indicators?.[symbolNoSlash];
+                
+                console.log(`[Entry Quality] 🔍 Support/Resistance Data Check #2 (from indicators):`, {
+                    hasScannerService: !!this.scannerService,
+                    hasState: !!this.scannerService?.state,
+                    hasCurrentIndicators: !!this.scannerService?.state?.currentIndicators,
+                    hasIndicators: !!this.scannerService?.state?.indicators,
+                    hasSymbolIndicators: !!indicators,
+                    indicatorsKeys: indicators ? Object.keys(indicators) : 'N/A',
+                    indicatorsFullStructure: indicators ? JSON.stringify(Object.keys(indicators).slice(0, 10)) : 'N/A',
+                    hasSupportResistance: !!indicators?.supportresistance,
+                    supportResistanceType: indicators?.supportresistance ? typeof indicators.supportresistance : 'N/A',
+                    supportResistanceIsArray: Array.isArray(indicators?.supportresistance),
+                    supportResistanceValue: indicators?.supportresistance ? (Array.isArray(indicators.supportresistance) ? `Array(${indicators.supportresistance.length})` : String(indicators.supportresistance).substring(0, 100)) : 'N/A',
+                    // Check alternative naming conventions
+                    hasSupportResistanceAlt1: !!indicators?.supportResistance,
+                    hasSupportResistanceAlt2: !!indicators?.support_resistance,
+                    hasSupportResistanceAlt3: !!indicators?.sr,
+                    hasSupportResistanceAlt4: !!indicators?.sr_data,
+                    allIndicatorKeysWithSR: indicators ? Object.keys(indicators).filter(k => k.toLowerCase().includes('support') || k.toLowerCase().includes('resistance') || k.toLowerCase().includes('sr')) : []
+                });
+                
+                // CRITICAL: Log ALL indicator keys separately so we can see them all (not truncated)
+                const allIndicatorKeys = indicators ? Object.keys(indicators) : [];
+                const srRelatedKeys = allIndicatorKeys.filter(k => {
+                    const lower = k.toLowerCase();
+                    return lower.includes('support') || lower.includes('resistance') || lower.includes('sr') || lower.includes('pivot');
+                });
+                console.log(`[Entry Quality] 🔍 ALL Indicator Keys for ${symbolNoSlash}:`, allIndicatorKeys);
+                console.log(`[Entry Quality] 🔍 Support/Resistance Related Keys (including pivots):`, srRelatedKeys);
+                
+                // CRITICAL: Check if supportresistance exists (it's calculated by indicatorManager when signalLookup.supportresistance is true)
+                const hasSupportResistance = indicators?.supportresistance !== undefined;
+                console.log(`[Entry Quality] 🔍 supportresistance specific check:`, {
+                    exists: hasSupportResistance,
+                    value: hasSupportResistance ? (Array.isArray(indicators.supportresistance) ? `Array(${indicators.supportresistance.length})` : String(indicators.supportresistance).substring(0, 50)) : 'undefined',
+                    type: hasSupportResistance ? typeof indicators.supportresistance : 'undefined',
+                    isArray: Array.isArray(indicators?.supportresistance),
+                    isObject: hasSupportResistance && typeof indicators.supportresistance === 'object' && !Array.isArray(indicators.supportresistance),
+                    keys: indicators?.supportresistance && typeof indicators.supportresistance === 'object' && !Array.isArray(indicators.supportresistance) ? Object.keys(indicators.supportresistance) : 'N/A',
+                    // Check if it's an array and has valid entries
+                    arrayLength: Array.isArray(indicators?.supportresistance) ? indicators.supportresistance.length : 'N/A',
+                    validEntriesCount: Array.isArray(indicators?.supportresistance) ? indicators.supportresistance.filter(e => e !== null && e !== undefined).length : 'N/A',
+                    lastEntryType: Array.isArray(indicators?.supportresistance) && indicators.supportresistance.length > 0 ? typeof indicators.supportresistance[indicators.supportresistance.length - 1] : 'N/A'
+                });
+                
+                // Check if pivots exist and extract support/resistance from them
+                console.log(`[Entry Quality] 🔍 Checking pivots for support/resistance data:`, {
+                    hasPivots: !!indicators?.pivots,
+                    pivotsType: indicators?.pivots ? typeof indicators.pivots : 'undefined',
+                    pivotsIsArray: Array.isArray(indicators?.pivots),
+                    pivotsLength: Array.isArray(indicators?.pivots) ? indicators.pivots.length : 'N/A',
+                    lastPivot: Array.isArray(indicators?.pivots) && indicators.pivots.length > 0 ? indicators.pivots[indicators.pivots.length - 1] : 'N/A'
+                });
+                
+                // Extract support/resistance from pivots if available
+                if (indicators?.pivots && Array.isArray(indicators.pivots) && indicators.pivots.length > 0) {
+                    const lastPivot = indicators.pivots[indicators.pivots.length - 1];
+                    if (lastPivot && typeof lastPivot === 'object') {
+                        const supportLevels = [];
+                        const resistanceLevels = [];
+                        
+                        // Extract from traditional pivots
+                        if (lastPivot.traditional) {
+                            if (lastPivot.traditional.s1 && typeof lastPivot.traditional.s1 === 'number') supportLevels.push(lastPivot.traditional.s1);
+                            if (lastPivot.traditional.s2 && typeof lastPivot.traditional.s2 === 'number') supportLevels.push(lastPivot.traditional.s2);
+                            if (lastPivot.traditional.s3 && typeof lastPivot.traditional.s3 === 'number') supportLevels.push(lastPivot.traditional.s3);
+                            if (lastPivot.traditional.r1 && typeof lastPivot.traditional.r1 === 'number') resistanceLevels.push(lastPivot.traditional.r1);
+                            if (lastPivot.traditional.r2 && typeof lastPivot.traditional.r2 === 'number') resistanceLevels.push(lastPivot.traditional.r2);
+                            if (lastPivot.traditional.r3 && typeof lastPivot.traditional.r3 === 'number') resistanceLevels.push(lastPivot.traditional.r3);
+                        }
+                        
+                        // Extract from fibonacci pivots
+                        if (lastPivot.fibonacci) {
+                            if (lastPivot.fibonacci.s1 && typeof lastPivot.fibonacci.s1 === 'number') supportLevels.push(lastPivot.fibonacci.s1);
+                            if (lastPivot.fibonacci.s2 && typeof lastPivot.fibonacci.s2 === 'number') supportLevels.push(lastPivot.fibonacci.s2);
+                            if (lastPivot.fibonacci.s3 && typeof lastPivot.fibonacci.s3 === 'number') supportLevels.push(lastPivot.fibonacci.s3);
+                            if (lastPivot.fibonacci.r1 && typeof lastPivot.fibonacci.r1 === 'number') resistanceLevels.push(lastPivot.fibonacci.r1);
+                            if (lastPivot.fibonacci.r2 && typeof lastPivot.fibonacci.r2 === 'number') resistanceLevels.push(lastPivot.fibonacci.r2);
+                            if (lastPivot.fibonacci.r3 && typeof lastPivot.fibonacci.r3 === 'number') resistanceLevels.push(lastPivot.fibonacci.r3);
+                        }
+                        
+                        if (supportLevels.length > 0 || resistanceLevels.length > 0) {
+                            srData = {
+                                support: supportLevels,
+                                resistance: resistanceLevels
+                            };
+                            console.log(`[Entry Quality] ✅ Extracted SR data from pivots:`, {
+                                supportCount: srData.support.length,
+                                resistanceCount: srData.resistance.length,
+                                supportLevels: srData.support.slice(0, 5),
+                                resistanceLevels: srData.resistance.slice(0, 5)
+                            });
+                        } else {
+                            console.log(`[Entry Quality] ⚠️ Pivots found but no valid S/R levels extracted`);
+                        }
+                    }
+                }
+                
+                // Try multiple naming conventions for support/resistance
+                // User confirmed: it's "supportresistance" (one word, no underscore)
+                // From indicatorManager.jsx line 1216: indicators.supportresistance = safeCalculate(...)
+                // The structure is an array where each element is { support: [], resistance: [] } or null
+                let srArray = indicators?.supportresistance;
+                
+                // Check if supportresistance exists and is an array
+                if (srArray && Array.isArray(srArray) && srArray.length > 0) {
+                    console.log(`[Entry Quality] ✅ Found supportresistance array with ${srArray.length} entries`);
+                    
+                    // Find the last valid (non-null) entry
+                    let lastSr = null;
+                    let lastIndex = -1;
+                    for (let i = srArray.length - 1; i >= 0; i--) {
+                        if (srArray[i] !== null && srArray[i] !== undefined && typeof srArray[i] === 'object') {
+                            lastSr = srArray[i];
+                            lastIndex = i;
+                            break;
+                        }
+                    }
+                    
+                    console.log(`[Entry Quality] 🔍 Support/Resistance Data Check #3 (last SR):`, {
+                        lastIndex,
+                        hasLastSr: !!lastSr,
+                        lastSrType: lastSr ? typeof lastSr : 'null',
+                        lastSrKeys: lastSr && typeof lastSr === 'object' ? Object.keys(lastSr) : 'N/A'
+                    });
+                    
+                    if (lastSr && typeof lastSr === 'object') {
+                        // Extract support and resistance arrays directly
+                        const support = Array.isArray(lastSr.support) ? lastSr.support : [];
+                        const resistance = Array.isArray(lastSr.resistance) ? lastSr.resistance : [];
+                        
+                        if (support.length > 0 || resistance.length > 0) {
+                            srData = { support, resistance };
+                            console.log(`[Entry Quality] ✅ Found SR data from supportresistance array:`, {
+                                supportCount: srData.support.length,
+                                resistanceCount: srData.resistance.length,
+                                supportSample: srData.support.slice(0, 5),
+                                resistanceSample: srData.resistance.slice(0, 5)
+                            });
+                        } else {
+                            console.log(`[Entry Quality] ⚠️ Last SR object found but support/resistance arrays are empty`);
+                        }
+                    } else {
+                        console.log(`[Entry Quality] ⚠️ supportresistance array exists but no valid (non-null) entries found`);
+                    }
+                } else if (indicators?.supportresistance && !Array.isArray(indicators.supportresistance)) {
+                    // If it's not an array, check if it's an object with support/resistance directly
+                    console.log(`[Entry Quality] ⚠️ supportresistance exists but is not an array:`, {
+                        type: typeof indicators.supportresistance,
+                        isObject: typeof indicators.supportresistance === 'object',
+                        keys: typeof indicators.supportresistance === 'object' ? Object.keys(indicators.supportresistance) : 'N/A'
+                    });
+                    
+                    if (typeof indicators.supportresistance === 'object' && !Array.isArray(indicators.supportresistance)) {
+                        const directSupport = indicators.supportresistance.support || indicators.supportresistance.supportLevels;
+                        const directResistance = indicators.supportresistance.resistance || indicators.supportresistance.resistanceLevels;
+                        if ((Array.isArray(directSupport) && directSupport.length > 0) || 
+                            (Array.isArray(directResistance) && directResistance.length > 0)) {
+                            srData = {
+                                support: Array.isArray(directSupport) ? directSupport : [],
+                                resistance: Array.isArray(directResistance) ? directResistance : []
+                            };
+                            console.log(`[Entry Quality] ✅ Found SR data directly in supportresistance object:`, {
+                                supportCount: srData.support.length,
+                                resistanceCount: srData.resistance.length
+                            });
+                        }
+                    }
+                } else {
+                    console.log(`[Entry Quality] ⚠️ supportresistance does not exist or is empty`);
+                    
+                    // Fallback: Check if support/resistance is directly in indicators (not in an array)
+                    if (indicators && typeof indicators === 'object') {
+                        const directSupport = indicators.support || indicators.supportLevels;
+                        const directResistance = indicators.resistance || indicators.resistanceLevels;
+                        if ((Array.isArray(directSupport) && directSupport.length > 0) || 
+                            (Array.isArray(directResistance) && directResistance.length > 0)) {
+                            srData = {
+                                support: Array.isArray(directSupport) ? directSupport : [],
+                                resistance: Array.isArray(directResistance) ? directResistance : []
+                            };
+                            console.log(`[Entry Quality] ✅ Found SR data directly in indicators:`, {
+                                supportCount: srData.support.length,
+                                resistanceCount: srData.resistance.length
+                            });
+                        }
+                    }
+                }
+            }
+            
+            if (srData && Array.isArray(srData.support) && Array.isArray(srData.resistance)) {
+                const supportLevels = srData.support.filter(s => s && s < entryPrice && s > 0);
+                const resistanceLevels = srData.resistance.filter(r => r && r > entryPrice && r > 0);
+                
+                console.log(`[Entry Quality] 🔍 Filtered S/R levels for entry price ${entryPrice}:`, {
+                    totalSupportLevels: srData.support.length,
+                    totalResistanceLevels: srData.resistance.length,
+                    filteredSupportLevels: supportLevels.length,
+                    filteredResistanceLevels: resistanceLevels.length,
+                    supportLevelsSample: supportLevels.slice(0, 3),
+                    resistanceLevelsSample: resistanceLevels.slice(0, 3)
+                });
+                
+                // Find nearest support (below entry price)
+                if (supportLevels.length > 0) {
+                    const nearestSupport = Math.max(...supportLevels);
+                    const distanceToSupport = ((entryPrice - nearestSupport) / entryPrice) * 100;
+                    entryDistanceToSupportPercent = parseFloat(distanceToSupport.toFixed(4));
+                    entryNearSupport = distanceToSupport <= 2.0; // Within 2%
+                    console.log(`[Entry Quality] ✅ Calculated support metrics:`, {
+                        nearestSupport,
+                        distanceToSupportPercent: entryDistanceToSupportPercent,
+                        entryNearSupport
+                    });
+                } else {
+                    console.log(`[Entry Quality] ⚠️ No valid support levels found below entry price`);
+                }
+                
+                // Find nearest resistance (above entry price)
+                if (resistanceLevels.length > 0) {
+                    const nearestResistance = Math.min(...resistanceLevels);
+                    const distanceToResistance = ((nearestResistance - entryPrice) / entryPrice) * 100;
+                    entryDistanceToResistancePercent = parseFloat(distanceToResistance.toFixed(4));
+                    entryNearResistance = distanceToResistance <= 2.0; // Within 2%
+                    console.log(`[Entry Quality] ✅ Calculated resistance metrics:`, {
+                        nearestResistance,
+                        distanceToResistancePercent: entryDistanceToResistancePercent,
+                        entryNearResistance
+                    });
+                } else {
+                    console.log(`[Entry Quality] ⚠️ No valid resistance levels found above entry price`);
+                }
+            } else {
+                console.log(`[Entry Quality] ⚠️ No valid SR data structure found:`, {
+                    hasSrData: !!srData,
+                    srDataType: srData ? typeof srData : 'null',
+                    hasSupportArray: srData && Array.isArray(srData.support),
+                    hasResistanceArray: srData && Array.isArray(srData.resistance)
+                });
+            }
+            
+            // Calculate momentum score from recent price changes
+            // Use price cache if available to get recent prices
+            let entryMomentumScore = null;
+            try {
+                console.log(`[Entry Quality] 🔍 Momentum Score Calculation:`, {
+                    hasScannerService: !!this.scannerService,
+                    hasPriceCacheService: !!this.scannerService?.priceCacheService,
+                    scannerServiceKeys: this.scannerService ? Object.keys(this.scannerService).filter(k => k.toLowerCase().includes('price') || k.toLowerCase().includes('cache')).slice(0, 10) : 'N/A',
+                    // Try alternative access methods
+                    hasPriceManagerService: !!this.scannerService?.priceManagerService,
+                    hasPriceService: !!this.scannerService?.priceService
+                });
+                
+                // Use priceCacheService directly (it's a singleton imported at top of file)
+                const priceCache = priceCacheService;
+                if (priceCache && typeof priceCache.getTicker24hr === 'function') {
+                    console.log(`[Entry Quality] ✅ Found price cache service, fetching ticker24hr...`);
+                    // Get price from 24hr ticker for price change percent
+                    const ticker24hr = await priceCache.getTicker24hr(symbolNoSlash);
+                    console.log(`[Entry Quality] 🔍 Ticker24hr fetch result:`, {
+                        hasTicker24hr: !!ticker24hr,
+                        priceChangePercent: ticker24hr?.priceChangePercent,
+                        priceChangePercentType: ticker24hr?.priceChangePercent !== undefined ? typeof ticker24hr.priceChangePercent : 'undefined'
+                    });
+                    
+                    if (ticker24hr && ticker24hr.priceChangePercent !== undefined && ticker24hr.priceChangePercent !== null) {
+                        const priceChangePercent = parseFloat(ticker24hr.priceChangePercent);
+                        console.log(`[Entry Quality] 🔍 Parsed priceChangePercent:`, {
+                            priceChangePercent,
+                            isNaN: isNaN(priceChangePercent)
+                        });
+                        
+                        if (!isNaN(priceChangePercent)) {
+                            // Convert 24hr price change to momentum score (0-100)
+                            // Positive change = bullish momentum, negative = bearish
+                            // Scale: -10% to +10% maps to 0-100
+                            entryMomentumScore = Math.max(0, Math.min(100, 50 + (priceChangePercent * 5)));
+                            console.log(`[Entry Quality] ✅ Calculated momentum score:`, {
+                                priceChangePercent,
+                                entryMomentumScore
+                            });
+                        } else {
+                            console.log(`[Entry Quality] ⚠️ priceChangePercent is NaN:`, priceChangePercent);
+                        }
+                    } else {
+                        console.log(`[Entry Quality] ⚠️ No valid priceChangePercent in ticker24hr`);
+                    }
+                } else {
+                    console.log(`[Entry Quality] ⚠️ No priceCacheService available`);
+                }
+            } catch (momentumError) {
+                console.warn('[Entry Quality] ❌ Error calculating momentum score:', momentumError.message);
+                console.warn('[Entry Quality] ❌ Error stack:', momentumError.stack);
+            }
+            
+            // Calculate entry relative to day high/low
+            // Use daily kline data (1d interval) for accurate calendar day high/low
+            // This is more reliable than 24hr ticker which is a rolling 24hr window
+            let entryRelativeToDayHighPercent = null;
+            let entryRelativeToDayLowPercent = null;
+            try {
+                if (entryPrice) {
+                    // Use getKlineData for daily candles (more accurate than 24hr ticker)
+                    const { getKlineData } = await import('@/api/functions');
+                    const klineResponse = await getKlineData({
+                        symbols: [symbolNoSlash],
+                        interval: '1d',
+                        limit: 2,  // Get today and yesterday (yesterday for average volume calculation)
+                        priority: 1 // High priority for position monitoring
+                    });
+                    
+                    if (klineResponse?.success && klineResponse?.data?.[symbolNoSlash]?.success && 
+                        klineResponse?.data?.[symbolNoSlash]?.data && 
+                        Array.isArray(klineResponse.data[symbolNoSlash].data) &&
+                        klineResponse.data[symbolNoSlash].data.length > 0) {
+                        
+                        // Get the most recent daily candle (today)
+                        const todayCandle = klineResponse.data[symbolNoSlash].data[
+                            klineResponse.data[symbolNoSlash].data.length - 1
+                        ];
+                        
+                        // Handle both array and object formats
+                        let dayHigh, dayLow;
+                        if (Array.isArray(todayCandle)) {
+                            dayHigh = parseFloat(todayCandle[2]); // high is index 2
+                            dayLow = parseFloat(todayCandle[3]);   // low is index 3
+                        } else if (todayCandle && typeof todayCandle === 'object') {
+                            dayHigh = parseFloat(todayCandle.high || todayCandle.h || todayCandle.highPrice);
+                            dayLow = parseFloat(todayCandle.low || todayCandle.l || todayCandle.lowPrice);
+                        }
+                        
+                        if (dayHigh !== null && !isNaN(dayHigh) && dayLow !== null && !isNaN(dayLow) && dayHigh > dayLow) {
+                            const dayRange = dayHigh - dayLow;
+                            
+                            if (dayRange > 0) {
+                                // Entry as % of day range (0-100)
+                                entryRelativeToDayHighPercent = ((entryPrice - dayLow) / dayRange) * 100;
+                                entryRelativeToDayLowPercent = ((dayHigh - entryPrice) / dayRange) * 100;
+                            }
+                        }
+                    }
+                }
+            } catch (dayRangeError) {
+                console.warn('[PositionManager] Could not calculate day range metrics from klines, falling back to 24hr ticker:', dayRangeError.message);
+                
+                // Fallback to 24hr ticker if kline fetch fails
+                try {
+                    const priceCache = this.scannerService?.priceCacheService;
+                    if (priceCache && entryPrice) {
+                        const ticker24hr = await priceCache.getTicker24hr(symbolNoSlash);
+                        if (ticker24hr) {
+                            const dayHigh = ticker24hr.highPrice ? parseFloat(ticker24hr.highPrice) : null;
+                            const dayLow = ticker24hr.lowPrice ? parseFloat(ticker24hr.lowPrice) : null;
+                            
+                            if (dayHigh !== null && !isNaN(dayHigh) && dayLow !== null && !isNaN(dayLow) && dayHigh > dayLow) {
+                                const dayRange = dayHigh - dayLow;
+                                
+                                if (dayRange > 0) {
+                                    entryRelativeToDayHighPercent = ((entryPrice - dayLow) / dayRange) * 100;
+                                    entryRelativeToDayLowPercent = ((dayHigh - entryPrice) / dayRange) * 100;
+                                }
+                            }
+                        }
+                    }
+                } catch (fallbackError) {
+                    console.warn('[PositionManager] Fallback to 24hr ticker also failed:', fallbackError.message);
+                }
+            }
+            
+            // Calculate entry volume vs average
+            // Use daily kline data to calculate average volume over recent days
+            let entryVolumeVsAverage = null;
+            try {
+                // Fetch daily klines to get today's volume and calculate average
+                const { getKlineData } = await import('@/api/functions');
+                const klineResponse = await getKlineData({
+                    symbols: [symbolNoSlash],
+                    interval: '1d',
+                    limit: 30,  // Get last 30 days for average calculation
+                    priority: 1 // High priority for position monitoring
+                });
+                
+                if (klineResponse?.success && klineResponse?.data?.[symbolNoSlash]?.success && 
+                    klineResponse?.data?.[symbolNoSlash]?.data && 
+                    Array.isArray(klineResponse.data[symbolNoSlash].data) &&
+                    klineResponse.data[symbolNoSlash].data.length > 1) {
+                    
+                    const candles = klineResponse.data[symbolNoSlash].data;
+                    
+                    // Get today's volume (most recent candle)
+                    const todayCandle = candles[candles.length - 1];
+                    let todayVolume = null;
+                    if (Array.isArray(todayCandle)) {
+                        todayVolume = parseFloat(todayCandle[5]); // volume is index 5
+                    } else if (todayCandle && typeof todayCandle === 'object') {
+                        todayVolume = parseFloat(todayCandle.volume || todayCandle.v || todayCandle.quoteVolume);
+                    }
+                    
+                    // Calculate average volume from previous days (exclude today)
+                    const previousCandles = candles.slice(0, -1);
+                    const volumes = previousCandles
+                        .map(candle => {
+                            if (Array.isArray(candle)) {
+                                return parseFloat(candle[5]);
+                            } else if (candle && typeof candle === 'object') {
+                                return parseFloat(candle.volume || candle.v || candle.quoteVolume);
+                            }
+                            return null;
+                        })
+                        .filter(v => v !== null && !isNaN(v) && v > 0);
+                    
+                    if (todayVolume !== null && !isNaN(todayVolume) && todayVolume > 0 && volumes.length > 0) {
+                        const avgVolume = volumes.reduce((sum, v) => sum + v, 0) / volumes.length;
+                        if (avgVolume > 0) {
+                            entryVolumeVsAverage = todayVolume / avgVolume; // Ratio: >1 = above average, <1 = below average
+                        }
+                    }
+                }
+            } catch (volumeError) {
+                console.warn('[PositionManager] Could not calculate volume metrics from klines:', volumeError.message);
+                // If kline fetch fails, set to null (no fallback to 24hr ticker as it's not calendar day accurate)
+            }
+            
+            const result = {
+                entry_near_support: entryNearSupport,
+                entry_near_resistance: entryNearResistance,
+                entry_distance_to_support_percent: entryDistanceToSupportPercent,
+                entry_distance_to_resistance_percent: entryDistanceToResistancePercent,
+                entry_momentum_score: entryMomentumScore !== null ? parseFloat(entryMomentumScore.toFixed(2)) : null,
+                entry_relative_to_day_high_percent: entryRelativeToDayHighPercent !== null ? parseFloat(entryRelativeToDayHighPercent.toFixed(4)) : null,
+                entry_relative_to_day_low_percent: entryRelativeToDayLowPercent !== null ? parseFloat(entryRelativeToDayLowPercent.toFixed(4)) : null,
+                entry_volume_vs_average: entryVolumeVsAverage
+            };
+            
+            // Comprehensive debug logging to understand why values might be null
+            /*
+            console.log(`[Entry Quality] 📊 FINAL RESULT for ${symbol}:`, {
+                entry_near_support: result.entry_near_support,
+                entry_near_resistance: result.entry_near_resistance,
+                entry_distance_to_support_percent: result.entry_distance_to_support_percent,
+                entry_distance_to_resistance_percent: result.entry_distance_to_resistance_percent,
+                entry_momentum_score: result.entry_momentum_score,
+                entry_relative_to_day_high_percent: result.entry_relative_to_day_high_percent,
+                entry_relative_to_day_low_percent: result.entry_relative_to_day_low_percent,
+                entry_volume_vs_average: result.entry_volume_vs_average,
+                resultKeys: Object.keys(result),
+                resultValues: Object.values(result),
+                nullCount: Object.values(result).filter(v => v === null).length,
+                undefinedCount: Object.values(result).filter(v => v === undefined).length
+            });
+            
+            console.log(`[Entry Quality] ✅ COMPLETED calculation for ${symbol}`);
+            */
+            return result;
+        } catch (error) {
+            console.warn('[PositionManager] Error calculating entry quality:', error);
+            return {
+                entry_near_support: null,
+                entry_near_resistance: null,
+                entry_distance_to_support_percent: null,
+                entry_distance_to_resistance_percent: null,
+                entry_momentum_score: null,
+                entry_relative_to_day_high_percent: null,
+                entry_relative_to_day_low_percent: null,
+                entry_volume_vs_average: null
+            };
+        }
+    }
+
+    /**
+     * Capture market conditions at position exit
+     * Mirrors the entry-side conditions to enable comparison
+     * @returns {Promise<Object>} Market conditions at exit
+     */
+    async _captureExitMarketConditions() {
+        try {
+            const scannerState = this.scannerService?.state;
+            const marketVolatility = scannerState?.marketVolatility || {};
+            
+            // Get current market regime
+            // marketRegime is an object with .regime and .confidence properties
+            const marketRegimeObj = scannerState?.marketRegime || scannerState?.marketRegimeState || null;
+            const marketRegime = marketRegimeObj?.regime || null;
+            const regimeConfidence = marketRegimeObj?.confidence || null; // Already a decimal (0-1)
+            
+            // Get Fear & Greed Index
+            const fgData = scannerState?.fearAndGreedData || {};
+            const fearGreedScore = fgData.value ? parseInt(fgData.value, 10) : null;
+            const fearGreedClassification = fgData.value_classification || null;
+            
+            // Get LPM score
+            const lpmScore = scannerState?.performanceMomentumScore || null;
+            
+            // Calculate volatility at exit (same method as entry)
+            const volatilityScore = this._calculateVolatilityAtExit(marketVolatility);
+            const volatilityLabel = volatilityScore !== null 
+                ? (volatilityScore < 33 ? 'LOW' : volatilityScore < 66 ? 'MEDIUM' : 'HIGH')
+                : null;
+            
+            // Get Bitcoin price at exit
+            const btcPrice = await this._getBitcoinPriceAtOpen(); // Reuse same method, just at exit time
+            
+            return {
+                market_regime: marketRegime,
+                regime_confidence: regimeConfidence ? (regimeConfidence * 100) : null,
+                fear_greed_score: fearGreedScore,
+                fear_greed_classification: fearGreedClassification,
+                volatility_score: volatilityScore,
+                volatility_label: volatilityLabel,
+                btc_price: btcPrice,
+                lpm_score: lpmScore
+            };
+        } catch (error) {
+            console.warn('[PositionManager] Error capturing exit market conditions:', error);
+            return {
+                market_regime: null,
+                regime_confidence: null,
+                fear_greed_score: null,
+                fear_greed_classification: null,
+                volatility_score: null,
+                volatility_label: null,
+                btc_price: null,
+                lpm_score: null
+            };
+        }
+    }
+
+    /**
+     * Calculate volatility at exit (same logic as entry)
+     * @param {Object} marketVolatility - Market volatility object with adx and bbw
+     * @returns {number|null} Volatility score (0-100) or null
+     */
+    _calculateVolatilityAtExit(marketVolatility) {
+        try {
+            if (marketVolatility?.adx !== undefined && marketVolatility?.bbw !== undefined) {
+                const adx = marketVolatility.adx || 25;
+                const bbw = marketVolatility.bbw || 0.1;
+                
+                const adxScore = Math.min(100, Math.max(0, (adx / 50) * 100));
+                const bbwScore = Math.min(100, Math.max(0, (bbw / 0.5) * 100));
+                const volatilityScore = (adxScore * 0.4) + (bbwScore * 0.6);
+                return Math.round(volatilityScore);
+            }
+            return null;
+        } catch (error) {
+            console.warn('[PositionManager] Error calculating volatility at exit:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Calculate all exit metrics for trade analytics
+     * @param {Object} livePosition - The position being closed
+     * @param {Object} exitDetails - Exit details (price, timestamp, etc.)
+     * @param {Object} exitMarketConditions - Market conditions at exit
+     * @returns {Object} Calculated exit metrics
+     */
+    _calculateExitMetrics(livePosition, exitDetails, exitMarketConditions) {
+        try {
+            const entryPrice = parseFloat(livePosition.entry_price) || 0;
+            const exitPrice = parseFloat(exitDetails.exit_price) || 0;
+            const quantity = parseFloat(livePosition.quantity_crypto) || 0;
+            const direction = livePosition.direction || 'long';
+            
+            // Get peak/trough prices from position (already tracked during lifecycle)
+            const peakPrice = parseFloat(livePosition.peak_price) || entryPrice;
+            const troughPrice = parseFloat(livePosition.trough_price) || entryPrice;
+            
+            // Calculate MFE/MAE (Max Favorable/Adverse Excursion)
+            // For long positions: MFE = highest price, MAE = lowest price
+            // For short positions: MFE = lowest price, MAE = highest price
+            const maxFavorableExcursion = direction === 'long' ? peakPrice : troughPrice;
+            const maxAdverseExcursion = direction === 'long' ? troughPrice : peakPrice;
+            
+            // Calculate peak profit/loss
+            const peakProfitGross = direction === 'long' 
+                ? (peakPrice - entryPrice) * quantity
+                : (entryPrice - troughPrice) * quantity;
+            const peakLossGross = direction === 'long'
+                ? (troughPrice - entryPrice) * quantity
+                : (entryPrice - peakPrice) * quantity;
+            
+            // Deduct fees from peak profit/loss (0.1% per trade)
+            const COMMISSION_RATE = 0.001;
+            const entryValue = entryPrice * quantity;
+            const peakValue = direction === 'long' ? peakPrice * quantity : entryValue - peakLossGross;
+            const peakFees = entryValue * COMMISSION_RATE + (peakValue * COMMISSION_RATE);
+            const peakProfitUsdt = Math.max(0, peakProfitGross - peakFees);
+            const peakLossUsdt = Math.min(0, peakLossGross - peakFees);
+            
+            const peakProfitPercent = entryValue > 0 ? (peakProfitUsdt / entryValue) * 100 : 0;
+            const peakLossPercent = entryValue > 0 ? (peakLossUsdt / entryValue) * 100 : 0;
+            
+            // Calculate price movement percentage
+            const priceMovementPercent = entryPrice > 0 
+                ? ((exitPrice - entryPrice) / entryPrice) * 100 * (direction === 'short' ? -1 : 1)
+                : 0;
+            
+            // Calculate distance to SL/TP at exit
+            const stopLossPrice = parseFloat(livePosition.stop_loss_price) || 0;
+            const takeProfitPrice = parseFloat(livePosition.take_profit_price) || 0;
+            
+            let distanceToSlAtExit = null;
+            let distanceToTpAtExit = null;
+            if (entryPrice > 0) {
+                if (stopLossPrice > 0) {
+                    distanceToSlAtExit = direction === 'long'
+                        ? ((exitPrice - stopLossPrice) / entryPrice) * 100
+                        : ((stopLossPrice - exitPrice) / entryPrice) * 100;
+                }
+                if (takeProfitPrice > 0) {
+                    distanceToTpAtExit = direction === 'long'
+                        ? ((takeProfitPrice - exitPrice) / entryPrice) * 100
+                        : ((exitPrice - takeProfitPrice) / entryPrice) * 100;
+                }
+            }
+            
+            // Determine if SL/TP was hit
+            const slHit = exitDetails.exit_reason === 'stop_loss';
+            const tpHit = exitDetails.exit_reason === 'take_profit';
+            
+            // Calculate exit timing vs planned exit time
+            let exitVsPlannedExitTimeMinutes = null;
+            if (livePosition.exit_time && exitDetails.exit_timestamp) {
+                const plannedExitTime = new Date(livePosition.exit_time).getTime();
+                const actualExitTime = new Date(exitDetails.exit_timestamp).getTime();
+                exitVsPlannedExitTimeMinutes = Math.round((actualExitTime - plannedExitTime) / (1000 * 60));
+            }
+            
+            // Calculate slippage (entry and exit)
+            // For market orders, slippage = difference between expected price (at order time) and actual fill price
+            // We use binance_executed_price if available, otherwise use entry_price as actual
+            // For expected price, we can use the current price from scanner service or estimate from entry_price
+            let slippageEntry = null;
+            let slippageExit = null;
+            
+            try {
+                // Entry slippage: Compare expected entry price vs actual fill price
+                // For market orders: expected = current price when order placed, actual = binance_executed_price or entry_price
+                // If binance_executed_price exists and differs from entry_price, that's slippage
+                const actualEntryPrice = parseFloat(livePosition.binance_executed_price) || entryPrice;
+                const expectedEntryPrice = entryPrice; // entry_price is the price we used when placing the order
+                
+                // Calculate slippage if we have valid prices
+                if (expectedEntryPrice > 0 && actualEntryPrice > 0) {
+                    slippageEntry = ((actualEntryPrice - expectedEntryPrice) / expectedEntryPrice) * 100;
+                    // Round to 6 decimal places and set to 0 if very small (< 0.0001%)
+                    if (Math.abs(slippageEntry) < 0.0001) {
+                        slippageEntry = 0;
+                    } else {
+                        slippageEntry = parseFloat(slippageEntry.toFixed(6));
+                    }
+                    console.log(`[PositionManager] 📊 Entry slippage calculated: ${slippageEntry.toFixed(6)}% (expected: ${expectedEntryPrice}, actual: ${actualEntryPrice})`);
+                } else {
+                    slippageEntry = 0; // Default to 0 if we can't calculate
+                }
+                
+                // Exit slippage: Compare expected exit price vs actual fill price
+                // For market orders: expected = current price when exit order placed, actual = exit_price
+                // exitDetails.exit_price is the actual fill price from Binance
+                const actualExitPrice = exitPrice;
+                // For now, we don't track the expected exit price (current price when order was placed)
+                // So we'll set slippage to 0 (market orders execute at current market price, so slippage is typically minimal)
+                // In future, could capture current price when exit order is placed
+                slippageExit = 0; // Market orders execute at current market price, minimal slippage
+                console.log(`[PositionManager] 📊 Exit slippage: ${slippageExit}% (market order - minimal slippage expected)`);
+            } catch (slippageError) {
+                console.warn('[PositionManager] ⚠️ Error calculating slippage:', slippageError);
+                slippageEntry = 0; // Default to 0 instead of null
+                slippageExit = 0;
+            }
+            
+            // Calculate time in profit/loss (simplified - would need position history)
+            // For now, estimate based on duration and P&L
+            const durationHours = parseFloat(exitDetails.duration_hours) || 0;
+            const pnlUsdt = parseFloat(exitDetails.pnl_usdt) || 0;
+            const timeInProfitHours = pnlUsdt > 0 ? durationHours : 0;
+            const timeInLossHours = pnlUsdt < 0 ? durationHours : 0;
+            
+            // Time at peak profit/loss - use calculated peakProfitPercent and peakLossPercent
+            // For now, estimate based on entry time (simplified - would need position history for exact timing)
+            let timeAtPeakProfit = null;
+            let timeAtMaxLoss = null;
+            
+            console.log('[PositionManager] 🔍 [TIME_CALCULATION] Starting calculation for time_at_peak_profit and time_at_max_loss');
+            console.log(`[PositionManager] 🔍 [TIME_CALCULATION] peakProfitPercent: ${peakProfitPercent}% (threshold: >0.1%)`);
+            console.log(`[PositionManager] 🔍 [TIME_CALCULATION] peakLossPercent: ${peakLossPercent}% (threshold: |>0.1%|)`);
+            console.log(`[PositionManager] 🔍 [TIME_CALCULATION] entry_timestamp: ${livePosition.entry_timestamp}`);
+            console.log(`[PositionManager] 🔍 [TIME_CALCULATION] exit_timestamp: ${exitDetails.exit_timestamp}`);
+            
+            // Use the already-calculated peakProfitPercent (which accounts for fees)
+            if (livePosition.entry_timestamp && peakProfitPercent > 0.1) { // More than 0.1% profit
+                console.log(`[PositionManager] ✅ [TIME_CALCULATION] peakProfitPercent (${peakProfitPercent}%) exceeds threshold (0.1%), calculating time_at_peak_profit`);
+                // Estimate peak was reached at 1/3 of duration (simplified)
+                const entryTime = new Date(livePosition.entry_timestamp);
+                const exitTime = new Date(exitDetails.exit_timestamp);
+                const durationMs = exitTime.getTime() - entryTime.getTime();
+                console.log(`[PositionManager] 🔍 [TIME_CALCULATION] Duration: ${durationMs}ms (${(durationMs / 1000 / 60).toFixed(2)} minutes)`);
+                if (durationMs > 0) {
+                    const estimatedPeakTime = new Date(entryTime.getTime() + (durationMs / 3));
+                    timeAtPeakProfit = estimatedPeakTime.toISOString();
+                    console.log(`[PositionManager] ✅ [TIME_CALCULATION] time_at_peak_profit calculated: ${timeAtPeakProfit} (${estimatedPeakTime.toLocaleString()})`);
+                } else {
+                    console.log(`[PositionManager] ⚠️ [TIME_CALCULATION] time_at_peak_profit NOT calculated: durationMs <= 0 (${durationMs})`);
+                }
+            } else {
+                console.log(`[PositionManager] ⚠️ [TIME_CALCULATION] time_at_peak_profit NOT calculated: entry_timestamp=${!!livePosition.entry_timestamp}, peakProfitPercent=${peakProfitPercent}% (threshold: >0.1%)`);
+            }
+            
+            // Use the already-calculated peakLossPercent (which accounts for fees)
+            // Note: peakLossPercent is negative, so we use Math.abs() to check magnitude
+            const absPeakLossPercent = Math.abs(peakLossPercent);
+            if (livePosition.entry_timestamp && absPeakLossPercent > 0.1) { // More than 0.1% loss
+                console.log(`[PositionManager] ✅ [TIME_CALCULATION] peakLossPercent (${peakLossPercent}%, abs=${absPeakLossPercent}%) exceeds threshold (0.1%), calculating time_at_max_loss`);
+                // Estimate max loss was reached at 1/3 of duration (simplified)
+                const entryTime = new Date(livePosition.entry_timestamp);
+                const exitTime = new Date(exitDetails.exit_timestamp);
+                const durationMs = exitTime.getTime() - entryTime.getTime();
+                console.log(`[PositionManager] 🔍 [TIME_CALCULATION] Duration: ${durationMs}ms (${(durationMs / 1000 / 60).toFixed(2)} minutes)`);
+                if (durationMs > 0) {
+                    const estimatedMaxLossTime = new Date(entryTime.getTime() + (durationMs / 3));
+                    timeAtMaxLoss = estimatedMaxLossTime.toISOString();
+                    console.log(`[PositionManager] ✅ [TIME_CALCULATION] time_at_max_loss calculated: ${timeAtMaxLoss} (${estimatedMaxLossTime.toLocaleString()})`);
+                } else {
+                    console.log(`[PositionManager] ⚠️ [TIME_CALCULATION] time_at_max_loss NOT calculated: durationMs <= 0 (${durationMs})`);
+                }
+            } else {
+                console.log(`[PositionManager] ⚠️ [TIME_CALCULATION] time_at_max_loss NOT calculated: entry_timestamp=${!!livePosition.entry_timestamp}, absPeakLossPercent=${absPeakLossPercent}% (threshold: >0.1%)`);
+            }
+            
+            console.log(`[PositionManager] 🔍 [TIME_CALCULATION] Final values: time_at_peak_profit=${timeAtPeakProfit}, time_at_max_loss=${timeAtMaxLoss}`);
+            
+            // Regime changes during trade (simplified - would need position history)
+            // For now, compare entry regime with exit regime
+            let regimeChangesDuringTrade = 0;
+            if (livePosition.market_regime && exitMarketConditions.market_regime) {
+                if (livePosition.market_regime !== exitMarketConditions.market_regime) {
+                    regimeChangesDuringTrade = 1; // At least one change detected
+                }
+            }
+            
+            // Order execution details
+            // For manual closes and automated closes, we use market orders
+            const entryOrderType = livePosition.binance_order_id ? 'market' : 'market'; // All entries use market orders
+            // For exit, use market orders if there's an exit_order_id or if it's a manual close
+            const exitOrderType = (exitDetails.exit_order_id || exitDetails.exit_reason === 'manual_close') ? 'market' : 'market';
+            
+            // Get entry_fill_time_ms from livePosition (captured when position was opened)
+            const entryFillTimeMs = livePosition.entry_fill_time_ms !== undefined && livePosition.entry_fill_time_ms !== null 
+                ? parseInt(livePosition.entry_fill_time_ms, 10) 
+                : null;
+            
+            // Calculate exit_fill_time_ms from exit order timing if available
+            // exitDetails should contain exit order timing if available
+            let exitFillTimeMs = null;
+            if (exitDetails.exit_fill_time_ms !== undefined && exitDetails.exit_fill_time_ms !== null) {
+                exitFillTimeMs = parseInt(exitDetails.exit_fill_time_ms, 10);
+            } else if (exitDetails.exit_order_start_time && exitDetails.exit_order_end_time) {
+                // Calculate from order timing if available
+                const startTime = new Date(exitDetails.exit_order_start_time).getTime();
+                const endTime = new Date(exitDetails.exit_order_end_time).getTime();
+                exitFillTimeMs = endTime - startTime;
+            }
+            
+            return {
+                // Price movement metrics
+                max_favorable_excursion: maxFavorableExcursion,
+                max_adverse_excursion: maxAdverseExcursion,
+                peak_profit_usdt: peakProfitUsdt,
+                peak_loss_usdt: peakLossUsdt,
+                peak_profit_percent: peakProfitPercent,
+                peak_loss_percent: peakLossPercent,
+                price_movement_percent: priceMovementPercent,
+                
+                // Exit quality metrics
+                distance_to_sl_at_exit: distanceToSlAtExit,
+                distance_to_tp_at_exit: distanceToTpAtExit,
+                sl_hit_boolean: slHit,
+                tp_hit_boolean: tpHit,
+                exit_vs_planned_exit_time_minutes: exitVsPlannedExitTimeMinutes,
+                
+                // Slippage
+                slippage_entry: slippageEntry,
+                slippage_exit: slippageExit,
+                
+                // Trade lifecycle (simplified - future enhancement)
+                time_in_profit_hours: timeInProfitHours,
+                time_in_loss_hours: timeInLossHours,
+                time_at_peak_profit: timeAtPeakProfit,
+                time_at_max_loss: timeAtMaxLoss,
+                regime_changes_during_trade: regimeChangesDuringTrade,
+                
+                // Order execution
+                entry_order_type: entryOrderType,
+                exit_order_type: exitOrderType,
+                entry_fill_time_ms: entryFillTimeMs,
+                exit_fill_time_ms: exitFillTimeMs
+            };
+        } catch (error) {
+            console.warn('[PositionManager] Error calculating exit metrics:', error);
+            // Return null values on error
+            return {
+                max_favorable_excursion: null,
+                max_adverse_excursion: null,
+                peak_profit_usdt: null,
+                peak_loss_usdt: null,
+                peak_profit_percent: null,
+                peak_loss_percent: null,
+                price_movement_percent: null,
+                distance_to_sl_at_exit: null,
+                distance_to_tp_at_exit: null,
+                sl_hit_boolean: null,
+                tp_hit_boolean: null,
+                exit_vs_planned_exit_time_minutes: null,
+                slippage_entry: null,
+                slippage_exit: null,
+                time_in_profit_hours: null,
+                time_in_loss_hours: null,
+                time_at_peak_profit: null,
+                time_at_max_loss: null,
+                regime_changes_during_trade: null,
+                entry_order_type: null,
+                exit_order_type: null,
+                entry_fill_time_ms: null,
+                exit_fill_time_ms: null
+            };
+        }
+    }
+
+    /**
+     * NEW: Helper method to get strategy context (win rate and occurrences) from backtest combinations
+     * @param {string} strategyName - Strategy name to look up
+     * @param {string} symbol - Symbol to match
+     * @returns {Object} { winRate, occurrences }
+     */
+    async _getStrategyContextAtEntry(strategyName, symbol) {
+        try {
+            // Import Trade entity to query backtest combinations
+            const { BacktestCombination } = await import('@/api/localClient');
+            
+            // Try to find matching backtest combination
+            // Note: Strategy names in combinations might not match exactly, so we try partial matching
+            const combinations = await BacktestCombination.filter({
+                coin: symbol.replace('/USDT', ''),
+                included_in_scanner: true
+            }, '-created_date', 100);
+            
+            // Find best match by strategy name (partial match on combination_name)
+            const matchingCombo = combinations.find(combo => 
+                combo.combination_name && strategyName && 
+                combo.combination_name.toLowerCase().includes(strategyName.toLowerCase().split(' ').pop() || '')
+            ) || combinations[0]; // Fallback to first if no match
+            
+            if (matchingCombo) {
+                return {
+                    winRate: parseFloat(matchingCombo.success_rate || matchingCombo.successRate || 0),
+                    occurrences: parseInt(matchingCombo.occurrences || 0, 10)
+                };
+            }
+            
+            return { winRate: null, occurrences: null };
+        } catch (error) {
+            console.warn('[PositionManager] ⚠️ Failed to get strategy context:', error.message);
+            return { winRate: null, occurrences: null };
+        }
+    }
+
+    /**
+     * NEW: Helper method to get similar trades count and consecutive wins/losses
+     * @param {string} strategyName - Strategy name
+     * @param {string} symbol - Symbol
+     * @param {string} entryTimestamp - Entry timestamp of current trade
+     * @returns {Object} { similarTradesCount, consecutiveWinsBefore, consecutiveLossesBefore }
+     */
+    async _getTradeHistoryContext(strategyName, symbol, entryTimestamp) {
+        try {
+            const { Trade } = await import('@/api/localClient');
+            
+            // Get all previous trades for this strategy and symbol
+            // Filter to get trades that exited before this trade's entry
+            const allTrades = await Trade.filter({
+                strategy_name: strategyName,
+                symbol: symbol,
+                trading_mode: this.tradingMode
+            }, '-exit_timestamp', 1000);
+            
+            // Filter client-side to get only trades that exited before this trade's entry
+            const previousTrades = allTrades.filter(trade => 
+                trade.exit_timestamp && 
+                new Date(trade.exit_timestamp).getTime() < new Date(entryTimestamp).getTime()
+            );
+            
+            const similarTradesCount = previousTrades.length;
+            
+            // Calculate consecutive wins/losses from most recent trades
+            let consecutiveWinsBefore = 0;
+            let consecutiveLossesBefore = 0;
+            
+            // Sort by exit timestamp descending (most recent first)
+            const sortedTrades = [...previousTrades].sort((a, b) => 
+                new Date(b.exit_timestamp) - new Date(a.exit_timestamp)
+            );
+            
+            // Count consecutive wins from most recent
+            for (const trade of sortedTrades) {
+                if (trade.pnl_percentage > 0) {
+                    consecutiveWinsBefore++;
+                } else {
+                    break; // Stop at first loss
+                }
+            }
+            
+            // Count consecutive losses from most recent (only if no wins)
+            if (consecutiveWinsBefore === 0) {
+                for (const trade of sortedTrades) {
+                    if (trade.pnl_percentage < 0) {
+                        consecutiveLossesBefore++;
+                    } else {
+                        break; // Stop at first win
+                    }
+                }
+            }
+            
+            return {
+                similarTradesCount,
+                consecutiveWinsBefore,
+                consecutiveLossesBefore
+            };
+        } catch (error) {
+            console.warn('[PositionManager] ⚠️ Failed to get trade history context:', error.message);
+            return {
+                similarTradesCount: null,
+                consecutiveWinsBefore: null,
+                consecutiveLossesBefore: null
+            };
+        }
     }
 }

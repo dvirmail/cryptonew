@@ -23,8 +23,6 @@ class WalletManagerService {
         const tradingMode = this.scannerService.getTradingMode();
         
         try {
-            console.log(`[WalletManagerService] 🚀 Initializing central wallet state for ${tradingMode}`);
-            
             // Initialize central wallet state if not already done
             if (!centralWalletStateManager.isReady()) {
                 await centralWalletStateManager.initialize(tradingMode);
@@ -32,8 +30,6 @@ class WalletManagerService {
             
             // Sync with Binance to get latest data
             await centralWalletStateManager.syncWithBinance(tradingMode);
-            
-            console.log('[WalletManagerService] ✅ Central wallet state initialized and synced');
             
         } catch (error) {
             console.error('[WalletManagerService] ❌ Failed to initialize central wallet state:', error);
@@ -49,17 +45,28 @@ class WalletManagerService {
         const tradingMode = this.scannerService.getTradingMode();
         
         try {
-            console.log('[WalletManagerService] 🔄 Updating wallet summary via central state manager');
+            // CRITICAL FIX: Get positions from PositionManager first (single source of truth)
+            // IMPORTANT: Use PositionManager even if positions array is empty (empty array is valid state!)
+            let positions = [];
+            const positionManager = this.scannerService?.positionManager;
             
-            // Get current positions
-            const positions = await queueEntityCall(
-                'LivePosition', 
-                'filter', 
-                { 
-                    trading_mode: tradingMode, 
-                    status: ['open', 'trailing'] 
-                }
-            );
+            if (positionManager && Array.isArray(positionManager.positions)) {
+                // Use positions from PositionManager (even if empty - that's valid state!)
+                positions = positionManager.positions.filter(pos => 
+                    pos.trading_mode === tradingMode && 
+                    (pos.status === 'open' || pos.status === 'trailing')
+                );
+            } else {
+                // Fallback: Query DB directly (PositionManager not available)
+                positions = await queueEntityCall(
+                    'LivePosition', 
+                    'filter', 
+                    { 
+                        trading_mode: tradingMode, 
+                        status: ['open', 'trailing'] 
+                    }
+                );
+            }
 
             // Calculate balance in trades
             const balanceInTrades = positions?.reduce((total, pos) => {
@@ -68,8 +75,6 @@ class WalletManagerService {
 
             // Update the central wallet state
             await centralWalletStateManager.updateBalanceInTrades(balanceInTrades);
-            
-            console.log(`[WalletManagerService] ✅ Updated balance in trades: ${balanceInTrades.toFixed(2)}`);
             
         } catch (error) {
             console.error('[WalletManagerService] ❌ Failed to update wallet summary:', error);

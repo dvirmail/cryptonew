@@ -214,17 +214,65 @@ class RegimeContextWeighting {
      * @param {boolean} wasSuccessful - Whether the signal was successful
      */
     updateHistoricalPerformance(regime, wasSuccessful) {
-        if (this.historicalPerformance[regime]) {
-            this.historicalPerformance[regime].totalSignals++;
+        if (!regime) return; // Skip if regime is not provided
+        
+        // Normalize regime name
+        const normalizedRegime = (regime || '').toLowerCase();
+        const validRegimes = ['uptrend', 'downtrend', 'ranging', 'neutral', 'unknown'];
+        const targetRegime = validRegimes.includes(normalizedRegime) ? normalizedRegime : 'unknown';
+        
+        if (this.historicalPerformance[targetRegime]) {
+            this.historicalPerformance[targetRegime].totalSignals++;
             if (wasSuccessful) {
-                this.historicalPerformance[regime].successfulSignals++;
+                this.historicalPerformance[targetRegime].successfulSignals++;
             }
             
             // Recalculate performance
-            this.historicalPerformance[regime].performance = 
-                this.historicalPerformance[regime].successfulSignals / 
-                this.historicalPerformance[regime].totalSignals;
+            this.historicalPerformance[targetRegime].performance = 
+                this.historicalPerformance[targetRegime].successfulSignals / 
+                this.historicalPerformance[targetRegime].totalSignals;
         }
+    }
+
+    /**
+     * Load historical performance from existing trades
+     * @param {Array} trades - Array of trade objects with market_regime and pnl_usdt
+     */
+    loadHistoricalPerformanceFromTrades(trades) {
+        if (!trades || !Array.isArray(trades) || trades.length === 0) {
+            //console.log('[RegimeContextWeighting] No trades provided for historical performance loading');
+            return;
+        }
+
+        //console.log(`[RegimeContextWeighting] Loading historical performance from ${trades.length} trades...`);
+
+        // Reset historical performance
+        this.historicalPerformance = this.initializeHistoricalPerformance();
+
+        // Process each trade
+        let processedCount = 0;
+        for (const trade of trades) {
+            if (!trade.market_regime || trade.pnl_usdt === undefined || trade.pnl_usdt === null) {
+                continue; // Skip trades without regime or P&L data
+            }
+
+            const normalizedRegime = (trade.market_regime || '').toLowerCase();
+            const validRegimes = ['uptrend', 'downtrend', 'ranging', 'neutral', 'unknown'];
+            const regime = validRegimes.includes(normalizedRegime) ? normalizedRegime : 'unknown';
+
+            const wasSuccessful = Number(trade.pnl_usdt) > 0;
+            
+            this.updateHistoricalPerformance(regime, wasSuccessful);
+            processedCount++;
+        }
+
+        // Log summary
+        //console.log(`[RegimeContextWeighting] ✅ Loaded historical performance from ${processedCount} trades:`);
+        Object.entries(this.historicalPerformance).forEach(([regime, perf]) => {
+            if (perf.totalSignals > 0) {
+                //console.log(`[RegimeContextWeighting]   ${regime}: ${perf.successfulSignals}/${perf.totalSignals} (${(perf.performance * 100).toFixed(1)}%)`);
+            }
+        });
     }
 
     /**
@@ -234,10 +282,17 @@ class RegimeContextWeighting {
      * @returns {number} Effectiveness multiplier
      */
     getRegimeEffectiveness(signalType, regime) {
+        if (!signalType || !regime) {
+            return 1.0;
+        }
+        
+        // Normalize signal type to lowercase for mapping lookup
+        const normalizedType = signalType.toLowerCase();
         
         // Map simple signal type to descriptive name
-        const mappedSignalType = this.signalTypeMapping[signalType] || signalType;
+        const mappedSignalType = this.signalTypeMapping[normalizedType] || this.signalTypeMapping[signalType] || signalType;
         
+        // Get effectiveness from regime weights
         const effectiveness = this.regimeWeights[regime]?.[mappedSignalType] || 1.0;
         
         return effectiveness;
@@ -275,6 +330,16 @@ class RegimeContextWeighting {
         const baseBonus = (averageEffectiveness - 1.0) * 0.1; // 10% bonus per effectiveness point above 1.0
         const confidenceBonus = baseBonus * confidenceMultiplier;
         
+        // Log regime performance once per session (sampled)
+        if (!this._loggedRegimePerformance) {
+            const signalTypes = signals.map(s => s.type || s.name).filter(Boolean).join(', ');
+            const performance = this.historicalPerformance[regime]?.performance || 0.5;
+            const totalSignals = this.historicalPerformance[regime]?.totalSignals || 0;
+            const successfulSignals = this.historicalPerformance[regime]?.successfulSignals || 0;
+            
+            //console.log(`[REGIME_PERFORMANCE] Regime: ${regime}, Confidence: ${(regimeConfidence * 100).toFixed(1)}%, Effectiveness: ${averageEffectiveness.toFixed(2)}, Bonus: ${(confidenceBonus * 100).toFixed(2)}%, Historical: ${(performance * 100).toFixed(1)}% (${successfulSignals}/${totalSignals}), Signals: ${signalTypes}`);
+            this._loggedRegimePerformance = true;
+        }
         
         return Math.max(0, confidenceBonus);
     }

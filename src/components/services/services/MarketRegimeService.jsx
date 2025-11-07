@@ -84,7 +84,14 @@ export class MarketRegimeService {
 
         try {
             const cachedRegime = await this._getCachedOrCalculateRegime(); // This updates this.state.marketRegime
-            await this._fetchFearAndGreedIndex(); // This updates this.state.fearAndGreedData
+            
+            // Try to fetch Fear & Greed Index, but don't let failures stop regime detection
+            try {
+                await this._fetchFearAndGreedIndex(); // This updates this.state.fearAndGreedData
+            } catch (fngError) {
+                // F&G fetch failed, but regime detection succeeded - log and continue
+                console.warn(`[AutoScannerService] [Regime Detection] ⚠️ Failed to fetch Fear & Greed Index, continuing without it: ${fngError.message}`);
+            }
 
             if (this.scannerService.state.marketRegime) {
                 return {
@@ -94,7 +101,7 @@ export class MarketRegimeService {
             }
             return null;
         } catch (error) {
-            console.error(`[AutoScannerService] [Regime Detection] ❌ Failed to determine market regime or F&G: ${error.message}`, error);
+            console.error(`[AutoScannerService] [Regime Detection] ❌ Failed to determine market regime: ${error.message}`, error);
             return null;
         }
     }
@@ -114,6 +121,17 @@ export class MarketRegimeService {
         try {
             const response = await getFearAndGreedIndex();
 
+            // Handle response that indicates failure but doesn't throw
+            if (!response.success) {
+                // Network error or other failure - silently continue
+                this.fearAndGreedFailureCount = (this.fearAndGreedFailureCount || 0) + 1;
+                if (this.fearAndGreedFailureCount === 1) {
+                    // Only log once to avoid console spam
+                    console.warn('[MarketRegimeService] ⚠️ Fear & Greed Index unavailable - continuing without it');
+                }
+                return; // Don't throw - F&G Index is optional
+            }
+
             if (response.data && response.data.data && response.data.data.length > 0) {
                 const fngData = response.data.data[0];
                 
@@ -131,15 +149,29 @@ export class MarketRegimeService {
                 throw new Error('Invalid response structure from Fear & Greed API');
             }
         } catch (error) {
+            // Suppress network errors - they're expected in some environments
+            const isNetworkError = error.message?.includes('ERR_SOCKET_NOT_CONNECTED') ||
+                                   error.message?.includes('Failed to fetch') ||
+                                   error.message?.includes('NetworkError') ||
+                                   error.name === 'TypeError';
+            
+            if (isNetworkError) {
+                // Silently continue - F&G Index is optional
+                this.fearAndGreedFailureCount = (this.fearAndGreedFailureCount || 0) + 1;
+                if (this.fearAndGreedFailureCount === 1) {
+                    console.warn('[MarketRegimeService] ⚠️ Fear & Greed Index network error - continuing without it');
+                }
+                return; // Don't throw
+            }
+            
+            // For other errors, log but don't throw
             this.fearAndGreedFailureCount = (this.fearAndGreedFailureCount || 0) + 1;
-
             if (this.fearAndGreedFailureCount === 1) {
                 this.addLog('[F&G Index] ⚠️ Unable to fetch Fear & Greed Index - continuing without it', 'warning');
             } else if (this.fearAndGreedFailureCount === 5) {
                 this.addLog('[F&G Index] ⚠️ Multiple F&G fetch failures - will retry silently', 'warning');
             }
-
-            throw new Error('Failed to fetch Fear & Greed Index');
+            // Don't throw - F&G Index is optional
         }
     }
 

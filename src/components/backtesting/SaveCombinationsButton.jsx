@@ -14,6 +14,7 @@ import { calculateATR as unifiedCalculateATR } from '@/components/utils/atrUnifi
 import { BacktestCombination } from '@/api/entities';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getAutoScannerService } from '@/components/services/AutoScannerService'; // NEW: Import AutoScannerService
+import { classifyStrategyAsEventDriven } from '@/components/backtesting/core/backtestProcessor'; // Import classification function
 
 const generateWarThemedName = (existingNames, coin, signals) => {
   const adjectives = [
@@ -151,6 +152,13 @@ const getRegimeIcon = (regime) => {
     }
   };
 
+  // Determine if strategy is event-driven (use existing property or calculate)
+  const isEventDriven = strategy.is_event_driven_strategy !== undefined
+    ? strategy.is_event_driven_strategy
+    : strategy.isEventDrivenStrategy !== undefined
+    ? strategy.isEventDrivenStrategy
+    : classifyStrategyAsEventDriven(strategy.signals || []);
+
   return (
     <div
       className={`p-4 border rounded-lg cursor-pointer transition-all duration-200 mb-3 ${
@@ -175,15 +183,28 @@ const getRegimeIcon = (regime) => {
               {strategy.combinationName}
               <span className="text-muted-foreground font-normal"> ({strategy.dominantMarketRegime?.toUpperCase() || 'UNKNOWN'})</span>
             </h4>
-            {strategy.dominantMarketRegime && (
+            <div className="flex flex-col items-end gap-1">
+              {strategy.dominantMarketRegime && (
+                <Badge
+                  variant="outline"
+                  className={`text-xs px-2 py-0.5 capitalize font-medium ${getRegimeColor(strategy.dominantMarketRegime)} flex items-center gap-1`}
+                >
+                  <span>{getRegimeIcon(strategy.dominantMarketRegime)}</span>
+                  {strategy.dominantMarketRegime}
+                </Badge>
+              )}
+              {/* Strategy Type Classification: Event Based or State Based */}
               <Badge
                 variant="outline"
-                className={`text-xs px-2 py-0.5 capitalize font-medium ${getRegimeColor(strategy.dominantMarketRegime)} flex items-center gap-1`}
+                className={`text-xs px-2 py-0.5 font-medium ${
+                  isEventDriven
+                    ? 'text-purple-600 bg-purple-100 border-purple-200 dark:bg-purple-900/50 dark:text-purple-400 dark:border-purple-800'
+                    : 'text-slate-600 bg-slate-100 border-slate-200 dark:bg-slate-700/50 dark:text-slate-400 dark:border-slate-600'
+                }`}
               >
-                <span>{getRegimeIcon(strategy.dominantMarketRegime)}</span>
-                {strategy.dominantMarketRegime}
+                {isEventDriven ? 'Event Based' : 'State Based'}
               </Badge>
-            )}
+            </div>
           </div>
           <p className="text-xs text-muted-foreground mb-2">{strategy.coin}</p>
 
@@ -227,7 +248,7 @@ const getRegimeIcon = (regime) => {
   );
 };
 
-export default function SaveCombinationsButton({ combinations, timeframe, minProfitFactor, selectedCoins = [] }) {
+export default function SaveCombinationsButton({ combinations, timeframe, minProfitFactor, selectedCoins = [], isBacktestRunning = false }) {
   const { toast } = useToast();
   const [isSaveReviewDialogOpen, setIsSaveReviewDialogOpen] = useState(false);
   const [filteredCombinations, setFilteredCombinations] = useState([]);
@@ -430,21 +451,88 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
     console.log('[SAVE_COMBINATIONS] 📊 Filtered strategies with coin info:', filteredStrategies.map(s => ({ 
       coin: s.coin, 
       combinationName: s.combinationName,
-      profitFactor: s.profitFactor 
+      profitFactor: s.profitFactor, 
+      regime: s.dominantMarketRegime || s.marketRegime || 'undefined',
+      marketRegime: s.marketRegime || 'undefined',
+      dominantMarketRegime: s.dominantMarketRegime || 'undefined'
     })));
 
     // Generate unique names for this display batch and assign unique IDs
+    // DEBUG: Check what fields are present in input combinations
+    if (filteredStrategies.length > 0) {
+      const firstCombo = filteredStrategies[0];
+      console.log('[SaveCombinationsButton] 🔍 INPUT CHECK - First combo fields:', {
+        hasMaxDrawdownPercent: firstCombo.maxDrawdownPercent !== undefined,
+        maxDrawdownPercent: firstCombo.maxDrawdownPercent,
+        hasAvgWinPercent: firstCombo.avgWinPercent !== undefined,
+        avgWinPercent: firstCombo.avgWinPercent,
+        hasMaxConsecutiveWins: firstCombo.maxConsecutiveWins !== undefined,
+        maxConsecutiveWins: firstCombo.maxConsecutiveWins,
+        hasRegimePerformance: firstCombo.regimePerformance !== undefined,
+        regimePerformance: firstCombo.regimePerformance,
+        allKeys: Object.keys(firstCombo).filter(k => k.includes('Drawdown') || k.includes('Win') || k.includes('Consecutive') || k.includes('regime') || k.includes('Performance'))
+      });
+    }
+    
     const namesForDisplay = new Set();
-    const topPerformersWithNames = filteredStrategies.map((combo, index) => ({
-      ...combo,
-      // Preserve the original coin information from the backtesting results
-      coin: combo.coin || 'BTC/USDT', // Only use fallback if coin is completely missing
-      id: combo.id || `strategy-${index}-${combo.coin || 'Strategy'}-${combo.signals.map((s) => s.type).join('-')}`, // Ensure each strategy has a unique ID
-      combinationName: generateWarThemedName(namesForDisplay, combo.coin || 'Strategy', combo.signals),
-      // FIX: Map the regime data correctly
-      dominantMarketRegime: combo.dominantMarketRegime || combo.marketRegime || null,
-      marketRegimeDistribution: combo.marketRegimeDistribution || combo.marketRegimePerformance || null
-    }));
+    const topPerformersWithNames = filteredStrategies.map((combo, index) => {
+      // CRITICAL: Preserve ALL analytics fields from processBacktestResults
+      const preservedCombo = {
+        ...combo,
+        // Preserve the original coin information from the backtesting results
+        coin: combo.coin || 'BTC/USDT', // Only use fallback if coin is completely missing
+        id: combo.id || `strategy-${index}-${combo.coin || 'Strategy'}-${combo.signals.map((s) => s.type).join('-')}`, // Ensure each strategy has a unique ID
+        combinationName: generateWarThemedName(namesForDisplay, combo.coin || 'Strategy', combo.signals),
+        // FIX: Map the regime data correctly
+        dominantMarketRegime: combo.dominantMarketRegime || combo.marketRegime || null,
+        marketRegimeDistribution: combo.marketRegimeDistribution || combo.marketRegimePerformance || null,
+        // CRITICAL: Explicitly preserve all new analytics fields
+        regimePerformance: combo.regimePerformance || null,
+        maxDrawdownPercent: combo.maxDrawdownPercent,
+        medianDrawdownPercent: combo.medianDrawdownPercent,
+        medianLowestLowDuringBacktest: combo.medianLowestLowDuringBacktest,
+        avgWinPercent: combo.avgWinPercent,
+        avgLossPercent: combo.avgLossPercent,
+        winLossRatio: combo.winLossRatio,
+        grossProfit: combo.grossProfit,
+        grossLoss: combo.grossLoss,
+        avgTimeToPeakMinutes: combo.avgTimeToPeakMinutes,
+        medianExitTimeMinutes: combo.medianExitTimeMinutes,
+        exitTimeVarianceMinutes: combo.exitTimeVarianceMinutes,
+        maxConsecutiveWins: combo.maxConsecutiveWins,
+        maxConsecutiveLosses: combo.maxConsecutiveLosses,
+        avgTradesBetweenWins: combo.avgTradesBetweenWins
+      };
+      
+      // Debug: Log analytics fields for first combo
+      if (index === 0) {
+        const fallbackStrength = preservedCombo.signals?.reduce((sum, signal) => sum + (signal.strength || 0), 0) || 0;
+        console.log('[SaveCombinationsButton] 🔍 Analytics fields in first combo:', {
+          hasRegimePerformance: !!preservedCombo.regimePerformance,
+          maxDrawdownPercent: preservedCombo.maxDrawdownPercent,
+          avgWinPercent: preservedCombo.avgWinPercent,
+          winLossRatio: preservedCombo.winLossRatio,
+          maxConsecutiveWins: preservedCombo.maxConsecutiveWins,
+          combinedStrength: preservedCombo.combinedStrength,
+          combinedStrengthType: typeof preservedCombo.combinedStrength,
+          hasCombinedStrength: preservedCombo.combinedStrength !== undefined && preservedCombo.combinedStrength !== null,
+          fallbackStrength: fallbackStrength,
+          willUseFallback: !preservedCombo.combinedStrength || preservedCombo.combinedStrength === 0
+        });
+        // CRITICAL: Explicitly log combinedStrength value to see if it's preserved
+        console.log('[SaveCombinationsButton] 🔍 COMBINED_STRENGTH_CHECK:', {
+          value: preservedCombo.combinedStrength,
+          isNumber: typeof preservedCombo.combinedStrength === 'number',
+          isUndefined: preservedCombo.combinedStrength === undefined,
+          isNull: preservedCombo.combinedStrength === null,
+          isZero: preservedCombo.combinedStrength === 0,
+          meetsThreshold: preservedCombo.combinedStrength >= 600,
+          fallbackWouldBe: fallbackStrength
+        });
+      }
+      
+      return preservedCombo;
+    });
 
     setFilteredCombinations(topPerformersWithNames);
 
@@ -472,16 +560,31 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
     // NEW: Check for existing strategies to prevent duplicate saves
     try {
       const existingStrategies = await queueEntityCall('BacktestCombination', 'list');
-      const existingSignatures = new Set(
+      
+      // IMPORTANT: Check by signature + coin + timeframe (signature alone is not unique across coins)
+      const existingSignatureKeys = new Set(
         existingStrategies
-          .map((strategy) => strategy.combination_signature)
-          .filter((signature) => signature && signature.trim() !== '')
+          .map((strategy) => {
+            const signature = strategy.combination_signature || strategy.combinationSignature;
+            const coin = strategy.coin;
+            const tf = strategy.timeframe;
+            if (signature && signature.trim() !== '' && coin && tf) {
+              return `${signature}|${coin}|${tf}`;
+            }
+            return null;
+          })
+          .filter((key) => key !== null)
       );
 
-      // Check if all strategies are duplicates
+      // Check if all strategies are duplicates (must match signature + coin + timeframe)
       const allStrategiesAreDuplicates = topPerformersWithNames.every((combo) => {
         const signature = generateCombinationSignature(combo.signals, timeframe);
-        return existingSignatures.has(signature);
+        const coin = combo.coin;
+        if (signature && coin && timeframe) {
+          const key = `${signature}|${coin}|${timeframe}`;
+          return existingSignatureKeys.has(key);
+        }
+        return false;
       });
 
       setAllStrategiesAreDuplicates(allStrategiesAreDuplicates);
@@ -578,10 +681,31 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
     try {
       // STEP 1: Fetch existing strategy signatures to prevent duplicates
       const existingStrategies = await queueEntityCall('BacktestCombination', 'list');
-      const existingSignatures = new Set(
+      
+      // IMPORTANT: Check by signature + coin + timeframe (signature alone is not unique across coins)
+      const existingSignatureKeys = new Set(
         existingStrategies.
-        map((strategy) => strategy.combination_signature).
-        filter((signature) => signature && signature.trim() !== '')
+        map((strategy) => {
+          const signature = strategy.combination_signature || strategy.combinationSignature;
+          const coin = strategy.coin;
+          const tf = strategy.timeframe;
+          if (signature && signature.trim() !== '' && coin && tf) {
+            return `${signature}|${coin}|${tf}`;
+          }
+          return null;
+        }).
+        filter((key) => key !== null)
+      );
+      
+      // Also create a set of existing strategy names (for fallback duplicate detection)
+      const existingStrategyNames = new Set(
+        existingStrategies.
+        map((strategy) => {
+          const name = strategy.strategy_name || strategy.combinationName || strategy.combination_name;
+          // Normalize name (remove regime suffix)
+          return name ? name.replace(/\s*\([A-Z]+\)\s*$/, '').trim() : null;
+        }).
+        filter((name) => name && name.trim() !== '')
       );
 
       // STEP 2: Build strategies to save with signature generation
@@ -594,6 +718,20 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
 
         // MODIFIED: Pass timeframe to signature generation
         const signature = generateCombinationSignature(combo.signals, timeframe);
+        
+        // Determine if strategy is event-driven based on signals
+        // Use the classification from the combination if available, otherwise calculate it
+        let combinationName = strategyConfig.combinationName || combo.combinationName || '';
+        
+        // Normalize combination_name to remove regime suffixes for duplicate detection
+        // Remove patterns like " (UPTREND)", " (DOWNTREND)", " (RANGING)" from the end
+        combinationName = combinationName.replace(/\s*\([A-Z]+\)\s*$/, '').trim();
+        // Check for both camelCase (from backtestProcessor) and snake_case (from saved data) property names
+        const isEventDriven = (combo.isEventDrivenStrategy !== undefined) 
+          ? combo.isEventDrivenStrategy
+          : (combo.is_event_driven_strategy !== undefined)
+          ? combo.is_event_driven_strategy
+          : classifyStrategyAsEventDriven(combo.signals || []);
 
         return {
           combo,
@@ -605,9 +743,38 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
             signals: combo.signals || [],
             combination_signature: signature,
             signalCount: combo.signals?.length || 0,
-            combinedStrength: combo.combinedStrength || (combo.signals?.reduce((sum, signal) => sum + (signal.strength || 0), 0) || 0),
+            combinedStrength: (() => {
+              const actualStrength = combo.combinedStrength;
+              const fallbackStrength = combo.signals?.reduce((sum, signal) => sum + (signal.strength || 0), 0) || 0;
+              const finalStrength = actualStrength || fallbackStrength;
+              
+              // DEBUG: Log if fallback is being used (this would indicate combinedStrength was lost)
+              if (!actualStrength && fallbackStrength > 0) {
+                console.warn(`[SaveCombinationsButton] ⚠️ combinedStrength missing! Using fallback:`, {
+                  combinationName: combinationName,
+                  actualStrength: actualStrength,
+                  fallbackStrength: fallbackStrength,
+                  finalStrength: finalStrength,
+                  signals: combo.signals?.map(s => ({ type: s.type, strength: s.strength }))
+                });
+              }
+              
+              return finalStrength;
+            })(),
             successRate: combo.successRate || 0,
-            occurrences: combo.occurrences || 0,
+            // Ensure occurrences is properly captured and validated
+            occurrences: (() => {
+              const occurrences = combo.occurrences !== undefined && combo.occurrences !== null
+                ? parseInt(combo.occurrences)
+                : (combo.matches && Array.isArray(combo.matches) ? combo.matches.length : 0);
+              console.log('[SaveCombinationsButton] 💾 Saving combination:', {
+                combinationName: combinationName,
+                occurrences: occurrences,
+                occurrencesSource: combo.occurrences !== undefined ? 'direct' : combo.matches ? 'from matches.length' : 'default (0)',
+                successRate: combo.successRate || 0
+              });
+              return occurrences;
+            })(),
             occurrenceDates: combo.matches?.map((m) => ({
               date: new Date(m.time).toISOString(),
               price: m.price,
@@ -616,34 +783,74 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
               exitTime: m.exitTime,
               marketRegime: m.marketRegime
             })) || [],
-            avgPriceMove: combo.netAveragePriceMove || 0,
+            avgPriceMove: combo.netAveragePriceMove || combo.avgPriceMove || 0,
             profitFactor: combo.profitFactor || 0,
+            grossProfit: combo.grossProfit !== undefined && combo.grossProfit !== null ? combo.grossProfit : null,
+            grossLoss: combo.grossLoss !== undefined && combo.grossLoss !== null ? combo.grossLoss : null,
             dominantMarketRegime: combo.dominantMarketRegime || combo.marketRegime || null,
             marketRegimeDistribution: combo.marketRegimeDistribution || combo.marketRegimePerformance || null,
+            regimePerformance: combo.regimePerformance || null, // NEW: Detailed regime performance
             recommendedTradingStrategy: '',
-            includedInScanner: true,
-            combinationName: strategyConfig.combinationName || combo.combinationName || '',
+            includedInScanner: true, // Enable for demo scanner (testnet)
+            includedInLiveScanner: false, // Disable for live trading (must be explicitly enabled)
+            combinationName: combinationName,
             riskPercentage: strategyConfig.riskPercentage,
             stopLossAtrMultiplier: strategyConfig.stopLossAtrMultiplier,
             takeProfitAtrMultiplier: strategyConfig.takeProfitAtrMultiplier,
             enableTrailingTakeProfit: strategyConfig.enableTrailingTakeProfit,
-            estimatedExitTimeMinutes: combo.avgWinDurationMinutes || 240,
+            estimatedExitTimeMinutes: combo.avgWinDurationMinutes || combo.estimatedExitTimeMinutes || 240,
             strategyDirection: strategyConfig.strategyDirection,
             medianLowestLowDuringBacktest: combo.medianLowestLowDuringBacktest ?? null,
+            is_event_driven_strategy: isEventDriven,
+            // NEW: Additional analytics fields
+            maxDrawdownPercent: combo.maxDrawdownPercent !== undefined ? combo.maxDrawdownPercent : null,
+            medianDrawdownPercent: combo.medianDrawdownPercent !== undefined ? combo.medianDrawdownPercent : null,
+            avgWinPercent: combo.avgWinPercent !== undefined ? combo.avgWinPercent : null,
+            avgLossPercent: combo.avgLossPercent !== undefined ? combo.avgLossPercent : null,
+            winLossRatio: combo.winLossRatio !== undefined ? combo.winLossRatio : null,
+            medianExitTimeMinutes: combo.medianExitTimeMinutes !== undefined ? combo.medianExitTimeMinutes : null,
+            exitTimeVarianceMinutes: combo.exitTimeVarianceMinutes !== undefined ? combo.exitTimeVarianceMinutes : null,
+            avgTimeToPeakMinutes: combo.avgTimeToPeakMinutes !== undefined ? combo.avgTimeToPeakMinutes : null,
+            maxConsecutiveWins: combo.maxConsecutiveWins !== undefined ? combo.maxConsecutiveWins : null,
+            maxConsecutiveLosses: combo.maxConsecutiveLosses !== undefined ? combo.maxConsecutiveLosses : null,
+            avgTradesBetweenWins: combo.avgTradesBetweenWins !== undefined ? combo.avgTradesBetweenWins : null,
+            // NEW: Exit reason breakdown
+            backtestExitReasonBreakdown: combo.backtestExitReasonBreakdown || null
           }
         };
       }).filter(Boolean);
 
-      // STEP 3: Filter out duplicates based on signature
+      // STEP 3: Filter out duplicates based on signature (same signals AND same timeframe)
+      // Also check by strategy_name as fallback for strategies without signatures
       const strategiesToSave = [];
       const duplicateStrategies = [];
 
       allStrategiesToSave.forEach((item) => {
-        if (existingSignatures.has(item.signature)) {
+        // Check duplicate by signature + coin + timeframe (signature alone is not unique across coins)
+        const signatureKey = item.signature && item.strategyData.coin && timeframe 
+          ? `${item.signature}|${item.strategyData.coin}|${timeframe}`
+          : null;
+        const isDuplicateBySignature = signatureKey && existingSignatureKeys.has(signatureKey);
+        
+        // Fallback: Check by normalized name + coin + timeframe
+        const normalizedName = item.strategyData.combinationName 
+          ? item.strategyData.combinationName.replace(/\s*\([A-Z]+\)\s*$/, '').trim()
+          : null;
+        const nameKey = normalizedName && item.strategyData.coin && timeframe
+          ? `${normalizedName}|${item.strategyData.coin}|${timeframe}`
+          : null;
+        const isDuplicateByName = nameKey && existingStrategyNames.has(normalizedName);
+        
+        if (isDuplicateBySignature || isDuplicateByName) {
           duplicateStrategies.push(item);
         } else {
           strategiesToSave.push(item.strategyData);
-          existingSignatures.add(item.signature);
+          if (signatureKey) {
+            existingSignatureKeys.add(signatureKey);
+          }
+          if (normalizedName) {
+            existingStrategyNames.add(normalizedName);
+          }
         }
       });
 
@@ -653,12 +860,27 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
         const duplicateCount = duplicateStrategies.length;
 
         if (duplicateCount > 0) {
-          toast({
-            title: 'No New Strategies to Save',
-            description: `All ${totalSelected} selected ${totalSelected === 1 ? 'strategy' : 'strategies'} already exist in the database (including timeframe variations).`,
-            type: 'info',
-            duration: 6000 // Show for 6 seconds
-          });
+          // Improved notification for duplicate strategies
+          if (totalSelected === 1) {
+            const duplicateStrategy = duplicateStrategies[0];
+            const signalNames = duplicateStrategy.combo.signals?.slice(0, 3).map(s => s.type).join(', ') || 'Unknown';
+            const signalCount = duplicateStrategy.combo.signals?.length || 0;
+            const moreSignals = signalCount > 3 ? ` +${signalCount - 3} more` : '';
+            
+            toast({
+              title: 'Strategy Already Exists',
+              description: `An identical strategy with the same ${signalCount} signal${signalCount !== 1 ? 's' : ''} (${signalNames}${moreSignals}) and timeframe (${timeframe}) already exists in the database. Skipping save.`,
+              type: 'info',
+              duration: 8000 // Show for 8 seconds
+            });
+          } else {
+            toast({
+              title: 'No New Strategies to Save',
+              description: `All ${totalSelected} selected strategies already exist in the database with identical signals and timeframe (${timeframe}).`,
+              type: 'info',
+              duration: 6000 // Show for 6 seconds
+            });
+          }
         } else {
           toast({
             title: 'No Strategies Selected',
@@ -671,38 +893,85 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
       }
 
       // Use API queue for bulk creation - this handles rate limiting automatically
-      await queueEntityCall('BacktestCombination', 'bulkCreate', strategiesToSave);
+      const response = await queueEntityCall('BacktestCombination', 'bulkCreate', strategiesToSave);
 
-      // STEP 5: Show success results
+      // STEP 5: Show success results based on backend response
       const duplicateCount = duplicateStrategies.length;
       const savedCount = strategiesToSave.length;
-
-      let title = `Successfully saved ${savedCount} ${savedCount === 1 ? 'strategy' : 'strategies'}!`;
+      
+      // Get actual results from backend (may differ from frontend count due to backend duplicate detection)
+      const dbResult = response?.databaseResult || {};
+      const actuallySaved = dbResult.saved || 0;
+      const actuallyUpdated = dbResult.updated || 0;
+      const actuallyFailed = dbResult.failed || 0;
+      
+      // Determine the appropriate message
+      let title = '';
       let description = '';
-
-      if (duplicateCount > 0) {
-        description = `${duplicateCount} duplicate ${duplicateCount === 1 ? 'strategy was' : 'strategies were'} skipped (including timeframe duplicates).`;
+      let toastType = 'success';
+      
+      // If all were duplicates (frontend + backend detection)
+      if (duplicateCount === savedCount && actuallyUpdated === savedCount && actuallySaved === 0) {
+        // All strategies were duplicates
+        title = 'No New Strategies to Save';
+        description = `All ${savedCount} selected strategies already exist in the database with identical signals and timeframe.`;
+        toastType = 'info';
+      } else if (actuallyUpdated > 0 && actuallySaved === 0) {
+        // All were updates (duplicates found by backend)
+        title = 'Strategies Already Exist';
+        description = `All ${savedCount} strategies already existed and were updated with new data.`;
+        toastType = 'info';
+      } else if (actuallyUpdated > 0 && actuallySaved > 0) {
+        // Mix of new saves and updates
+        title = `Saved ${actuallySaved} new ${actuallySaved === 1 ? 'strategy' : 'strategies'}`;
+        description = `${actuallyUpdated} ${actuallyUpdated === 1 ? 'strategy was' : 'strategies were'} already in the database and ${actuallyUpdated === 1 ? 'was' : 'were'} updated.`;
+        if (duplicateCount > 0) {
+          description += ` ${duplicateCount} ${duplicateCount === 1 ? 'duplicate was' : 'duplicates were'} skipped by frontend.`;
+        }
+        toastType = 'success';
+      } else if (actuallySaved > 0) {
+        // All were new saves
+        title = `Successfully saved ${actuallySaved} ${actuallySaved === 1 ? 'strategy' : 'strategies'}!`;
+        description = '';
+        if (duplicateCount > 0) {
+          description = `${duplicateCount} duplicate ${duplicateCount === 1 ? 'strategy was' : 'strategies were'} skipped (identical signals and timeframe).`;
+        }
+        toastType = 'success';
+      } else {
+        // Fallback
+        title = `Processed ${savedCount} ${savedCount === 1 ? 'strategy' : 'strategies'}`;
+        description = `Saved: ${actuallySaved}, Updated: ${actuallyUpdated}, Failed: ${actuallyFailed}`;
+        if (duplicateCount > 0) {
+          description += `. ${duplicateCount} ${duplicateCount === 1 ? 'duplicate was' : 'duplicates were'} skipped.`;
+        }
+        toastType = 'info';
       }
 
-      // NEW: Notify the auto scanner to refresh its strategy list
-      if (savedCount > 0) {
+      // NEW: Notify the auto scanner to refresh its strategy list (only if new strategies were saved)
+      if (actuallySaved > 0) {
         try {
           const scannerService = getAutoScannerService();
           if (scannerService && typeof scannerService.refreshStrategies === 'function') {
             await scannerService.refreshStrategies();
-            description += ` Auto scanner has been notified.`;
+            if (description) {
+              description += ' ';
+            }
+            description += 'Auto scanner has been notified.';
           }
         } catch (scannerError) {
           console.error('Error notifying auto scanner:', scannerError);
           // Don't fail the save operation if scanner notification fails
-          description += ` (Failed to notify auto scanner: ${scannerError.message.substring(0, 50)}...)`;
+          if (description) {
+            description += ' ';
+          }
+          description += `(Failed to notify auto scanner: ${scannerError.message.substring(0, 50)}...)`;
         }
       }
 
       toast({
         title,
         description,
-        type: 'success',
+        type: toastType,
         duration: 8000 // Show for 8 seconds instead of default
       });
 
@@ -1163,7 +1432,7 @@ export default function SaveCombinationsButton({ combinations, timeframe, minPro
 
   return (
     <>
-      <Button onClick={handleReviewClick} disabled={loading || combinations.length === 0} className="w-full">
+      <Button onClick={handleReviewClick} disabled={isBacktestRunning || loading || combinations.length === 0} className="w-full">
         {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
         Review & Save Top Strategies
       </Button>

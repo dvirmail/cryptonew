@@ -19,6 +19,7 @@ import { useTradingMode } from '@/components/providers/TradingModeProvider';
 import { useWallet } from "@/components/providers/WalletProvider";
 import { getAutoScannerService } from '@/components/services/AutoScannerService';
 import { queueFunctionCall } from '@/components/utils/apiQueue';
+import { getFearAndGreedIndex, getKlineData } from '@/api/functions';
 import { format, parseISO, subDays } from 'date-fns';
 
 /**
@@ -42,12 +43,14 @@ import { format, parseISO, subDays } from 'date-fns';
 export default function FearGreedBitcoinChart({
   timeframe: initialTimeframe = '30d',
   onTimeframeChange,
-  className = ""
+  className = "",
+  dailyPerformanceHistory = [], // DEPRECATED: pass trades instead
+  hourlyPerformanceHistory = [] // DEPRECATED: not used
 }) {
   const { isLiveMode } = useTradingMode();
   const {
-    loading: walletLoading, 
-    dailyPerformanceHistory 
+    loading: walletLoading,
+    recentTrades
   } = useWallet();
 
   const [selectedTimeframe, setSelectedTimeframe] = useState(initialTimeframe);
@@ -77,10 +80,11 @@ export default function FearGreedBitcoinChart({
     try {
       console.log('[FearGreedBitcoinChart] Fetching Fear & Greed data...');
       const response = await queueFunctionCall(
-        'getFearAndGreedIndex', 
-        { limit }, 
-        'low', 
-        'fearAndGreedIndex', 
+        'getFearAndGreedIndex',
+        getFearAndGreedIndex,
+        { limit },
+        'low',
+        'fearAndGreedIndex',
         300000, // 5 minute cache
         30000  // 30 second timeout
       );
@@ -111,6 +115,7 @@ export default function FearGreedBitcoinChart({
       console.log('[FearGreedBitcoinChart] Fetching Bitcoin price data...');
       const response = await queueFunctionCall(
         'getKlineData',
+        getKlineData,
         { 
           symbols: ['BTCUSDT'], 
           interval: '1d', 
@@ -123,23 +128,43 @@ export default function FearGreedBitcoinChart({
       );
       
       if (response?.data && response.data.BTCUSDT?.success && Array.isArray(response.data.BTCUSDT.data)) {
-        const processedData = response.data.BTCUSDT.data.map(item => {
-          const open = parseFloat(item.open);
-          const close = parseFloat(item.close);
-          const change = ((close - open) / open) * 100;
-          
-          return {
-            timestamp: item.openTime,
-            date: format(new Date(item.openTime), 'yyyy-MM-dd'),
-            open,
-            close,
-            high: parseFloat(item.high),
-            low: parseFloat(item.low),
-            volume: parseFloat(item.volume),
-            change,
-            changeAbs: Math.abs(change)
-          };
-        });
+        const processedData = response.data.BTCUSDT.data
+          .filter(item => item?.openTime != null) // Filter out items without openTime
+          .map(item => {
+            // Handle openTime - it could be a number (timestamp in ms) or string
+            let openTime;
+            if (typeof item.openTime === 'number') {
+              openTime = item.openTime;
+            } else if (typeof item.openTime === 'string') {
+              openTime = parseInt(item.openTime, 10);
+            } else {
+              // Skip invalid items
+              return null;
+            }
+            
+            // Validate the timestamp
+            const dateObj = new Date(openTime);
+            if (isNaN(dateObj.getTime())) {
+              return null; // Skip invalid dates
+            }
+            
+            const open = parseFloat(item.open);
+            const close = parseFloat(item.close);
+            const change = ((close - open) / open) * 100;
+            
+            return {
+              timestamp: openTime,
+              date: format(dateObj, 'yyyy-MM-dd'),
+              open,
+              close,
+              high: parseFloat(item.high),
+              low: parseFloat(item.low),
+              volume: parseFloat(item.volume),
+              change,
+              changeAbs: Math.abs(change)
+            };
+          })
+          .filter(item => item !== null); // Remove any null entries
         
         console.log('[FearGreedBitcoinChart] Fetched Bitcoin data:', processedData.length, 'records');
         return processedData;
@@ -153,38 +178,61 @@ export default function FearGreedBitcoinChart({
     }
   }, []);
 
-  // Fetch all data and merge
-  const fetchAllData = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
+  // Calculate performance data from trades (group by day)
+  const calculatePerformanceFromTrades = useCallback((trades, timeframe) => {
+    if (!trades || trades.length === 0) return [];
     
-    try {
-      const { limit } = getDateRange(selectedTimeframe);
+    const { start } = getDateRange(timeframe);
+    const filteredTrades = trades.filter(t => {
+      if (!t?.exit_timestamp) return false;
+      const exitDate = new Date(t.exit_timestamp);
+      return exitDate >= start;
+    });
+    
+    // Group trades by day
+    const dayMap = new Map();
+    filteredTrades.forEach(trade => {
+      const exitDate = new Date(trade.exit_timestamp);
+      const dayKey = format(new Date(Date.UTC(
+        exitDate.getUTCFullYear(),
+        exitDate.getUTCMonth(),
+        exitDate.getUTCDate()
+      )), 'yyyy-MM-dd');
       
-      // Fetch all data in parallel
-      const [fearGreed, bitcoin, performance] = await Promise.all([
-        fetchFearAndGreedData(limit),
-        fetchBitcoinData(limit),
-        // Use existing performance data from WalletProvider
-        Promise.resolve(dailyPerformanceHistory || [])
-      ]);
+      if (!dayMap.has(dayKey)) {
+        dayMap.set(dayKey, {
+          snapshot_timestamp: new Date(Date.UTC(
+            exitDate.getUTCFullYear(),
+            exitDate.getUTCMonth(),
+            exitDate.getUTCDate()
+          )).toISOString(),
+          period_pnl: 0,
+          period_trade_count: 0,
+          period_winning_trades: 0
+        });
+      }
       
-      setFearGreedData(fearGreed);
-      setBitcoinPrices(bitcoin);
-      
-      // Merge data by date
-      const mergedData = mergeDataByDate(fearGreed, bitcoin, performance);
-      setChartData(mergedData);
-      
-      console.log('[FearGreedBitcoinChart] Merged data:', mergedData.length, 'records');
-      
-    } catch (error) {
-      console.error('[FearGreedBitcoinChart] Error fetching data:', error);
-      setError('Failed to load chart data');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [selectedTimeframe, dailyPerformanceHistory, fetchFearAndGreedData, fetchBitcoinData, getDateRange]);
+      const dayData = dayMap.get(dayKey);
+      dayData.period_pnl += Number(trade.pnl_usdt || 0);
+      dayData.period_trade_count++;
+      if (Number(trade.pnl_usdt || 0) > 0) {
+        dayData.period_winning_trades++;
+      }
+    });
+    
+    // Convert to array and calculate cumulative
+    const sortedDays = Array.from(dayMap.entries())
+      .sort((a, b) => new Date(a[0]).getTime() - new Date(b[0]).getTime());
+    
+    let cumulative = 0;
+    return sortedDays.map(([dateKey, data]) => {
+      cumulative += data.period_pnl;
+      return {
+        ...data,
+        cumulative_realized_pnl: cumulative
+      };
+    });
+  }, [getDateRange]);
 
   // Merge data from all sources by date
   const mergeDataByDate = useCallback((fearGreed, bitcoin, performance) => {
@@ -249,6 +297,40 @@ export default function FearGreedBitcoinChart({
     
     return merged;
   }, []);
+
+  // Fetch all data and merge
+  const fetchAllData = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const { limit } = getDateRange(selectedTimeframe);
+      
+      // Calculate performance data from trades (group by day)
+      const performanceData = calculatePerformanceFromTrades(recentTrades || [], selectedTimeframe);
+      
+      // Fetch all data in parallel
+      const [fearGreed, bitcoin] = await Promise.all([
+        fetchFearAndGreedData(limit),
+        fetchBitcoinData(limit)
+      ]);
+      
+      setFearGreedData(fearGreed);
+      setBitcoinPrices(bitcoin);
+      
+      // Merge data by date
+      const mergedData = mergeDataByDate(fearGreed, bitcoin, performanceData);
+      setChartData(mergedData);
+      
+      console.log('[FearGreedBitcoinChart] Merged data:', mergedData.length, 'records');
+      
+    } catch (error) {
+      console.error('[FearGreedBitcoinChart] Error fetching data:', error);
+      setError('Failed to load chart data');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [selectedTimeframe, recentTrades, fetchFearAndGreedData, fetchBitcoinData, getDateRange, calculatePerformanceFromTrades, mergeDataByDate]);
 
   // Calculate correlation metrics
   const correlationMetrics = useMemo(() => {
@@ -355,7 +437,8 @@ export default function FearGreedBitcoinChart({
         
         setFearGreedData(prev => {
           const updated = [...prev, ...newFearGreedData];
-          const merged = mergeDataByDate(updated, bitcoinPrices, dailyPerformanceHistory || []);
+          const performanceData = calculatePerformanceFromTrades(recentTrades || [], selectedTimeframe);
+          const merged = mergeDataByDate(updated, bitcoinPrices, performanceData);
           setChartData(merged);
           return updated;
         });
@@ -363,7 +446,7 @@ export default function FearGreedBitcoinChart({
     });
 
     return () => unsubscribe();
-  }, [bitcoinPrices, dailyPerformanceHistory, mergeDataByDate]);
+  }, [bitcoinPrices, recentTrades, selectedTimeframe, calculatePerformanceFromTrades, mergeDataByDate]);
 
   // Loading state
   if (isLoading || walletLoading) {
