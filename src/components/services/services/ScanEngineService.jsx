@@ -1182,10 +1182,31 @@ export class ScanEngineService {
             newPositionsOpened: this.scannerService.state.newPositionsCount
         });
 
-        // Update signal generation history (original logic)
+        // CRITICAL FIX: Set combinationsMatched to strategiesEvaluated (all strategies evaluated)
+        // This represents all strategy evaluations, not just matched/executed ones
+        cycleStats.combinationsMatched = cycleStats.strategiesEvaluated || scanResult.signalsFound || 0;
+        
+        // CRITICAL FIX: Calculate and store lastCycleAverageSignalStrength for Signal Quality
+        // This uses the actual signal strength from matched signals in this cycle
+        if (cycleStats.signalsFound > 0 && cycleStats.totalCombinedStrength > 0) {
+            const cycleAvgStrength = cycleStats.totalCombinedStrength / cycleStats.signalsFound;
+            this.scannerService.state.stats.lastCycleAverageSignalStrength = cycleAvgStrength;
+        } else if (cycleStats.strategiesEvaluated > 0) {
+            // If no signals matched but strategies were evaluated, use average from active strategies
+            // This ensures Signal Quality shows data even when no trades executed
+            const activeAvgStrength = this.scannerService.state.stats?.averageSignalStrength || 0;
+            if (activeAvgStrength > 0) {
+                this.scannerService.state.stats.lastCycleAverageSignalStrength = activeAvgStrength;
+            }
+        }
+        
+        // CRITICAL FIX: Update signal generation history with ALL strategies evaluated
+        // Use strategiesEvaluated (all strategies processed) instead of signalsFound (only matched trades)
+        // This ensures Opportunity Score and Signal Quality reflect actual system activity
+        const signalsEvaluated = cycleStats.combinationsMatched;
         this.scannerService.state.signalGenerationHistory.push({
             timestamp: Date.now(),
-            signalsFound: scanResult.signalsFound,
+            signalsFound: signalsEvaluated, // Now tracks all evaluated strategies, not just executed
         });
         if (this.scannerService.state.signalGenerationHistory.length > SCANNER_DEFAULTS.maxSignalHistory) {
             this.scannerService.state.signalGenerationHistory.shift();

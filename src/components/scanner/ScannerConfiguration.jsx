@@ -236,7 +236,28 @@ export default function ScannerConfiguration({
                         )}
                     </div>
 
-                    {/* Max Balance Percent Risk removed per new policy - rely solely on absolute cap */}
+                    {/* Max Balance Percent Risk - Effective Balance Risk Cap */}
+                    <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg space-y-4">
+                        <h3 className="font-semibold text-yellow-900 dark:text-yellow-100">Effective Balance Risk Configuration</h3>
+                        <div className="space-y-2">
+                            <Label htmlFor="maxBalancePercentRisk">Max Balance Percent Risk (%)</Label>
+                            <Input
+                                id="maxBalancePercentRisk"
+                                type="number"
+                                min="10"
+                                max="100"
+                                step="5"
+                                value={localConfig.maxBalancePercentRisk ?? 100}
+                                onChange={(e) => handleChange('maxBalancePercentRisk', parseFloat(e.target.value))}
+                                className="font-mono"
+                            />
+                            <p className="text-xs text-gray-600 dark:text-gray-400">
+                                Maximum effective balance risk percentage (10-100%). This caps the "Effective Balance Risk" shown in the dashboard, 
+                                regardless of momentum score. Acts as a safety mechanism to prevent excessive position sizes. 
+                                Default: 100% (no restriction). Your current value: {localConfig.maxBalancePercentRisk ?? 100}%
+                            </p>
+                        </div>
+                    </div>
 
                     {/* NEW: Absolute cap control, place near percent risk section and before quality filters */}
                     <div className="rounded-lg border bg-blue-50/50 p-4 mt-4">

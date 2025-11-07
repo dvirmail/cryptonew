@@ -118,17 +118,17 @@ export default class SessionManagerService {
   }
 
   async start(force = false) {
-    console.log('[SESSION] 🔍 start() called with force:', force);
+    // console.log('[SESSION] 🔍 start() called with force:', force);
     this._validateSessionId();
 
     // Prevent rapid successive start calls
     if (this._isStarting) {
-      console.log('[SESSION] 🔍 Already starting, returning false');
+      // console.log('[SESSION] 🔍 Already starting, returning false');
       return false;
     }
     
     this._isStarting = true;
-    console.log('[SESSION] 🔍 Setting _isStarting to true');
+    // console.log('[SESSION] 🔍 Setting _isStarting to true');
 
     this.addLog(`[SESSION] Attempting to claim leadership${force ? ' (FORCE MODE)' : ''}...`, 'system');
 
@@ -152,10 +152,10 @@ export default class SessionManagerService {
           //console.log('[SESSION] claimSession response:', response.data);
 
           if (response?.data?.success) {
-            console.log('[SESSION] ✅ Session claim successful, starting running state...');
+            // console.log('[SESSION] ✅ Session claim successful, starting running state...');
             this.scannerService.state.leaderSessionId = this.sessionId;
             await this.scannerService._startRunningState();
-            console.log('[SessionManagerService] 📊 DEBUG: _startRunningState completed');
+            // console.log('[SessionManagerService] 📊 DEBUG: _startRunningState completed');
             this.addLog('[SESSION] ✅ Leadership claimed successfully', 'success');
             this._isStarting = false;
             return true;

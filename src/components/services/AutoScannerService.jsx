@@ -1132,11 +1132,11 @@ class AutoScannerService {
 
     async start() {
         console.warn('[AutoScannerService] ⚠️ DEPRECATED: Use LifecycleService.start() instead of AutoScannerService.start()');
-        console.log('[AutoScannerService] start() called');
-        console.log('[AutoScannerService] Attempting to start scanner and claim leadership...');
+        // console.log('[AutoScannerService] start() called');
+        // console.log('[AutoScannerService] Attempting to start scanner and claim leadership...');
         const result = await this.sessionManager.start();
         if (result) {
-            console.log('[AutoScannerService] Scanner started successfully');
+            // console.log('[AutoScannerService] Scanner started successfully');
         } else {
             console.warn('[AutoScannerService] Scanner start failed or leadership not claimed.');
         }

@@ -124,27 +124,27 @@ export class UtilityService {
 
         // Fetch Fear & Greed Index immediately when scanner starts
         try {
-            console.log('[UtilityService] [F&G_START] 🔄 Fetching Fear & Greed Index on scanner start...');
+            // console.log('[UtilityService] [F&G_START] 🔄 Fetching Fear & Greed Index on scanner start...');
             await this.scannerService._fetchFearAndGreedIndex();
-            console.log('[UtilityService] [F&G_START] 🔍 Fear & Greed fetch completed, checking result...');
+            // console.log('[UtilityService] [F&G_START] 🔍 Fear & Greed fetch completed, checking result...');
             const fngData = this.scannerService.state.fearAndGreedData;
-            console.log('[UtilityService] [F&G_START] 🔍 Scanner state F&G data:', fngData);
+            // console.log('[UtilityService] [F&G_START] 🔍 Scanner state F&G data:', fngData);
             if (fngData) {
-                console.log(`[AutoScannerService] [F&G_START] ✅ F&G Index fetched: ${fngData.value} (${fngData.value_classification})`);
+                // console.log(`[AutoScannerService] [F&G_START] ✅ F&G Index fetched: ${fngData.value} (${fngData.value_classification})`);
             } else {
-                console.warn('[UtilityService] [F&G_START] ⚠️ No F&G data after fetch');
+                // console.warn('[UtilityService] [F&G_START] ⚠️ No F&G data after fetch');
             }
         } catch (error) {
             console.warn('[AutoScannerService] [F&G_START] ⚠️ Fear & Greed fetch failed on start:', error.message);
-            console.error('[UtilityService] [F&G_START] ❌ Fear & Greed fetch error:', error);
+            // console.error('[UtilityService] [F&G_START] ❌ Fear & Greed fetch error:', error);
         }
 
         await this.scannerService.lifecycleService._startScanLoop();
-        console.log('[UtilityService] 🔍 _startScanLoop() call completed');
+        // console.log('[UtilityService] 🔍 _startScanLoop() call completed');
         
         // Countdown scheduling is owned by ScanEngineService after each scan completes.
         // Intentionally not starting countdown here to avoid duplicate timers.
-        console.log('[UtilityService] 🔄 Countdown scheduling delegated to ScanEngineService');
+        // console.log('[UtilityService] 🔄 Countdown scheduling delegated to ScanEngineService');
         
         this.scannerService.notifySubscribers();
     }

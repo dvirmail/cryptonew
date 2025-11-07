@@ -168,6 +168,8 @@ export default function AutoScan() {
                     blockTradingInDowntrend: savedConfig.blockTradingInDowntrend !== undefined ? savedConfig.blockTradingInDowntrend : false,
                     // NEW: load resetStatsOnModeSwitch
                     resetStatsOnModeSwitch: savedConfig.resetStatsOnModeSwitch !== undefined ? savedConfig.resetStatsOnModeSwitch : false,
+                    // NEW: load maxBalancePercentRisk
+                    maxBalancePercentRisk: savedConfig.maxBalancePercentRisk !== undefined ? savedConfig.maxBalancePercentRisk : 100,
                 });
             } else {
                 const defaultConfig = {
@@ -186,6 +188,8 @@ export default function AutoScan() {
                     blockTradingInDowntrend: false,
                     // NEW default for resetStatsOnModeSwitch
                     resetStatsOnModeSwitch: false,
+                    // NEW default for maxBalancePercentRisk
+                    maxBalancePercentRisk: 100,
                 };
                 setConfig(defaultConfig);
                 await queueEntityCall('ScanSettings', 'create', defaultConfig);

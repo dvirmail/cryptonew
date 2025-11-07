@@ -4770,7 +4770,7 @@ export default class PositionManager {
                                     }
                                 }
                                     currentPrice = fetchedPrice;
-                                console.log(`[PositionManager] ✅ Fetched FRESH price (bypassing cache) for ${position.symbol}: ${currentPrice}`);
+                                // console.log(`[PositionManager] ✅ Fetched FRESH price (bypassing cache) for ${position.symbol}: ${currentPrice}`);
                                 
                                 // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
                                 if (position.symbol === 'ETH/USDT') {
@@ -6493,16 +6493,68 @@ export default class PositionManager {
                        console.log(`[PositionManager] ✅ Final executed price for ${symbol}: $${executedPrice} (source: Binance order result)`);
                        
                        // CRITICAL: Check if the executed quantity is too small (dust)
-                       const executedQty = binanceBuyResult.orderResult?.executedQty || 0;
-                       const executedValue = executedQty * executedPrice;
+                       // Try multiple possible field names for executedQty (Binance API response structure varies)
+                       const orderResult = binanceBuyResult.orderResult || {};
+                       let executedQty = parseFloat(orderResult.executedQty || orderResult.filledQty || 0);
                        
-                       if (executedQty <= 0 || executedValue < 5) { // Less than $5 is considered dust
-                           console.log('[PositionManager] ⚠️ Position too small (dust), skipping database creation:', {
-                               executedQty,
-                               executedValue,
-                               symbol
+                       // If executedQty is 0, try to calculate from fills array
+                       if (executedQty <= 0 && orderResult.fills && orderResult.fills.length > 0) {
+                           executedQty = orderResult.fills.reduce((sum, fill) => sum + parseFloat(fill.qty || fill.quantity || 0), 0);
+                       }
+                       
+                       // If still 0, try to calculate from cumulativeQuoteQty
+                       if (executedQty <= 0 && orderResult.cumulativeQuoteQty && executedPrice > 0) {
+                           executedQty = parseFloat(orderResult.cumulativeQuoteQty) / executedPrice;
+                       }
+                       
+                       // CRITICAL FIX: If executedQty is still 0 but order was successful, use requested quantity
+                       // This handles cases where Binance API doesn't return executedQty immediately (common with low-priced coins like BONK)
+                       const requestedQty = positionSizeResult?.quantityCrypto || positionSizeResult?.quantity || 0;
+                       if (executedQty <= 0 && binanceBuyResult.success && !binanceBuyResult.error && requestedQty > 0) {
+                           console.log('[PositionManager] ⚠️ executedQty is 0 but order succeeded, using requested quantity as fallback:', {
+                               symbol,
+                               requestedQty,
+                               orderId: orderResult.orderId,
+                               orderStatus: orderResult.status,
+                               executedQtyFromAPI: orderResult.executedQty,
+                               note: 'Binance API may not return executedQty immediately for low-priced coins - using requested quantity'
                            });
-                           this.addLog(`[PositionManager] ⚠️ Skipping dust position: ${symbol} (${executedQty} @ $${executedValue.toFixed(2)})`, 'warning');
+                           executedQty = requestedQty;
+                       }
+                       
+                       // For pending orders, use the requested quantity instead
+                       const isPending = binanceBuyResult.pending || orderResult.status === 'NEW' || orderResult.status === 'PARTIALLY_FILLED';
+                       const quantityToCheck = isPending ? requestedQty : executedQty;
+                       
+                       const executedValue = quantityToCheck * executedPrice;
+                       
+                       // CRITICAL FIX: For very low-priced coins (like BONK at $0.00001211), use a lower threshold
+                       // Instead of fixed $5, use a percentage of position size or minimum $1
+                       // Also check if we have a valid quantity before flagging as dust
+                       const MIN_DUST_VALUE = 1; // Lower threshold: $1 instead of $5
+                       const MIN_DUST_QUANTITY = 0.00000001; // Minimum quantity threshold
+                       
+                       // If order is pending, don't check for dust yet - wait for it to fill
+                       if (isPending) {
+                           console.log('[PositionManager] 📝 Order is pending, will check dust after fill:', {
+                               symbol,
+                               requestedQty: quantityToCheck,
+                               orderStatus: orderResult.status
+                           });
+                           // Continue processing - don't skip pending orders
+                       } else if (quantityToCheck <= 0 || (executedValue < MIN_DUST_VALUE && quantityToCheck < MIN_DUST_QUANTITY)) {
+                           console.log('[PositionManager] ⚠️ Position too small (dust), skipping database creation:', {
+                               executedQty: quantityToCheck,
+                               executedValue,
+                               symbol,
+                               orderStatus: orderResult.status,
+                               isPending,
+                               requestedQty,
+                               minDustValue: MIN_DUST_VALUE,
+                               minDustQuantity: MIN_DUST_QUANTITY,
+                               orderResult: JSON.stringify(orderResult, null, 2)
+                           });
+                           this.addLog(`[PositionManager] ⚠️ Skipping dust position: ${symbol} (${quantityToCheck.toFixed(8)} @ $${executedValue.toFixed(2)})`, 'warning');
                            continue; // Skip creating this position
                        }
                        
@@ -6648,8 +6700,7 @@ export default class PositionManager {
                        };
                     
                     // ✅ ENTRY QUALITY VERIFICATION: Log all entry quality fields immediately after calculation
-                    console.log('='.repeat(80));
-                    // Commented out to reduce console flooding
+                    // console.log('='.repeat(80)); // Commented out to reduce console flooding
                     /*
                     console.log('[PositionManager] 📊 ENTRY QUALITY METRICS - VERIFICATION');
                     console.log('='.repeat(80));
@@ -8162,7 +8213,7 @@ export default class PositionManager {
                 if (this.scannerService.priceManagerService) {
                             try {
                         price = await this.scannerService.priceManagerService.getFreshCurrentPrice(p.symbol);
-                        console.log(`[PositionManager] ✅ Fetched FRESH price for ${p.symbol}: ${price}`);
+                        // console.log(`[PositionManager] ✅ Fetched FRESH price for ${p.symbol}: ${price}`);
                             } catch (error) {
                         console.error(`[PositionManager] ❌ Failed to fetch fresh price for ${p.symbol}:`, error.message);
                     }
@@ -8228,7 +8279,7 @@ export default class PositionManager {
             //console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - STARTING POSITION PROCESSING LOOP');
             
             // Process each position according to the schema
-            console.log(`[PositionManager] 🔄 Starting position processing loop: ${positionIdsToClose.length} positions`);
+            // console.log(`[PositionManager] 🔄 Starting position processing loop: ${positionIdsToClose.length} positions`);
             const _loopStartTime = Date.now();
             
             for (let i = 0; i < positionIdsToClose.length; i++) {
@@ -8236,7 +8287,7 @@ export default class PositionManager {
                 const _positionStartTime = Date.now();
                 const elapsedSinceBatchStart = Date.now() - _batchCloseStartTime;
                 
-                console.log(`${positionMarker} 🚀 Starting position ${i + 1} (${(elapsedSinceBatchStart/1000).toFixed(1)}s since batch start)`);
+                // console.log(`${positionMarker} 🚀 Starting position ${i + 1} (${(elapsedSinceBatchStart/1000).toFixed(1)}s since batch start)`);
                 
                 try {
                 const positionId = positionIdsToClose[i];
@@ -8329,7 +8380,7 @@ export default class PositionManager {
                         currentPrice = await this.scannerService.priceManagerService.getFreshCurrentPrice(position.symbol);
                         const _priceFetchTime = Date.now() - _priceFetchStartTime;
                         if (currentPrice && !isNaN(currentPrice) && currentPrice > 0) {
-                            console.log(`${positionMarker} ✅ Fetched FRESH price for ${position.symbol}: ${currentPrice} (${_priceFetchTime}ms)`);
+                            // console.log(`${positionMarker} ✅ Fetched FRESH price for ${position.symbol}: ${currentPrice} (${_priceFetchTime}ms)`);
                             
                             // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
                             if (position.symbol === 'ETH/USDT') {
@@ -8495,7 +8546,7 @@ export default class PositionManager {
                     
                     // Capture exit order timing
                     const exitOrderStartTime = Date.now();
-                    console.log(`${positionMarker} 🚀 Executing Binance sell order for ${position.symbol}...`);
+                    // console.log(`${positionMarker} 🚀 Executing Binance sell order for ${position.symbol}...`);
                     const binanceSellPromise = this._executeBinanceMarketSellOrder(position, { 
                         currentPrice,
                         tradingMode, 
@@ -8516,7 +8567,7 @@ export default class PositionManager {
                     exitFillTimeMs = exitOrderEndTime - exitOrderStartTime;
                     const raceDuration = exitOrderEndTime - raceStartTime;
                     const positionElapsed = Date.now() - _positionStartTime;
-                    console.log(`${positionMarker} ✅ Binance sell completed for ${position.symbol} in ${(raceDuration/1000).toFixed(1)}s (position total: ${(positionElapsed/1000).toFixed(1)}s)`);
+                    // console.log(`${positionMarker} ✅ Binance sell completed for ${position.symbol} in ${(raceDuration/1000).toFixed(1)}s (position total: ${(positionElapsed/1000).toFixed(1)}s)`);
                     
                     console.log(`${positionMarker} [PositionManager] ⏱️ Exit order fill time for ${position.symbol}:`, {
                         exitOrderStartTime: new Date(exitOrderStartTime).toISOString(),
@@ -8617,7 +8668,7 @@ export default class PositionManager {
                     };
 
                     const _processTradeStartTime = Date.now();
-                    console.log(`${positionMarker} 🚀 Processing closed trade for ${position.symbol}...`);
+                    // console.log(`${positionMarker} 🚀 Processing closed trade for ${position.symbol}...`);
                     const processResult = await this.processClosedTrade(position, exitDetails);
                     const _processTradeTime = Date.now() - _processTradeStartTime;
                     
@@ -8625,7 +8676,7 @@ export default class PositionManager {
                         processedTrades.push(processResult.trade);
                         successfullyClosedPositionIds.push(position.id || position.db_record_id || position.position_id);
                         const positionTotalTime = Date.now() - _positionStartTime;
-                        console.log(`${positionMarker} ✅ Position ${i + 1} completed: ${position.symbol} (process: ${(_processTradeTime/1000).toFixed(1)}s, total: ${(positionTotalTime/1000).toFixed(1)}s)`);
+                        // console.log(`${positionMarker} ✅ Position ${i + 1} completed: ${position.symbol} (process: ${(_processTradeTime/1000).toFixed(1)}s, total: ${(positionTotalTime/1000).toFixed(1)}s)`);
                     } else {
                         console.log(`${positionMarker} ❌ Failed to process closed trade for ${position.symbol}`);
                         errors.push(`Failed to process closed trade for ${position.symbol}`);
@@ -8645,8 +8696,8 @@ export default class PositionManager {
             
             const _loopEndTime = Date.now();
             const loopDuration = _loopEndTime - _loopStartTime;
-            console.log(`[PositionManager] ✅ Position processing loop completed: ${processedTrades.length} positions closed in ${(loopDuration/1000).toFixed(1)}s`);
-            console.log(`[PositionManager] 📊 Average time per position: ${(loopDuration / positionIdsToClose.length / 1000).toFixed(1)}s`);
+            // console.log(`[PositionManager] ✅ Position processing loop completed: ${processedTrades.length} positions closed in ${(loopDuration/1000).toFixed(1)}s`);
+            // console.log(`[PositionManager] 📊 Average time per position: ${(loopDuration / positionIdsToClose.length / 1000).toFixed(1)}s`);
             
             // Update wallet state
             if (this._getCurrentWalletState()) {
@@ -9193,9 +9244,9 @@ export default class PositionManager {
      * This function provides detailed logging of how exit parameters were calculated
      */
     async analyzeExitParametersForAllPositions() {
-        console.log('\n' + '='.repeat(80));
-        console.log('🔍 EXIT PARAMETER ANALYSIS - ALL POSITIONS');
-        console.log('='.repeat(80));
+        // console.log('\n' + '='.repeat(80)); // Commented out to reduce console flooding
+        // console.log('🔍 EXIT PARAMETER ANALYSIS - ALL POSITIONS');
+        // console.log('='.repeat(80)); // Commented out to reduce console flooding
 
         if (!this.positions || this.positions.length === 0) {
             console.log('📊 No positions found to analyze');
@@ -9210,9 +9261,9 @@ export default class PositionManager {
             await this.analyzeSinglePositionExitParameters(position);
         }
 
-        console.log('\n' + '='.repeat(80));
-        console.log('✅ EXIT PARAMETER ANALYSIS COMPLETE');
-        console.log('='.repeat(80));
+        // console.log('\n' + '='.repeat(80)); // Commented out to reduce console flooding
+        // console.log('✅ EXIT PARAMETER ANALYSIS COMPLETE');
+        // console.log('='.repeat(80)); // Commented out to reduce console flooding
     }
 
     /**

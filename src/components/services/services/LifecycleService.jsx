@@ -242,15 +242,15 @@ export class LifecycleService {
      * @returns {boolean} True if started successfully, false otherwise.
      */
     async start() {
-        console.log('[LifecycleService] 🚀 Starting scanner via SessionManager...');
-        console.log('[LifecycleService] 🔍 sessionManager exists:', !!this.scannerService.sessionManager);
-        console.log('[LifecycleService] 🔍 sessionManager.start exists:', !!this.scannerService.sessionManager?.start);
+        // console.log('[LifecycleService] 🚀 Starting scanner via SessionManager...');
+        // console.log('[LifecycleService] 🔍 sessionManager exists:', !!this.scannerService.sessionManager);
+        // console.log('[LifecycleService] 🔍 sessionManager.start exists:', !!this.scannerService.sessionManager?.start);
         
         try {
             // Call SessionManager directly - no need for AutoScannerService.start() wrapper
             const result = await this.scannerService.sessionManager.start();
             if (result) {
-                console.log('[LifecycleService] ✅ Scanner started successfully');
+                // console.log('[LifecycleService] ✅ Scanner started successfully');
             } else {
                 console.warn('[LifecycleService] ⚠️ Scanner start failed or leadership not claimed.');
             }

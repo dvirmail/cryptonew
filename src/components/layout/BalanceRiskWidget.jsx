@@ -1,13 +1,51 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { TrendingUp, TrendingDown, Minus, Shield } from 'lucide-react';
+import { getAutoScannerService } from '@/components/services/AutoScannerService';
 
-export default function BalanceRiskWidget({ scannerState }) {
+export default function BalanceRiskWidget({ scannerState: propScannerState }) {
   const [showTooltip, setShowTooltip] = useState(false);
+  const [scannerState, setScannerState] = useState(propScannerState || null);
+
+  // Subscribe directly to scanner service for real-time updates
+  // Updates occur when notifySubscribers() is called after each scan cycle completes
+  useEffect(() => {
+    const scannerService = getAutoScannerService();
+    
+    // Get initial state
+    const initialState = scannerService.getState();
+    setScannerState(initialState);
+
+    // Subscribe to updates - force re-render by creating new object reference
+    // This is called after each scan cycle completes (via notifySubscribers())
+    const unsubscribe = scannerService.subscribe((state) => {
+      // Force React to detect the change by creating a new object reference
+      setScannerState({ ...state });
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []); // Empty deps - subscribe once on mount
 
   const adjustedRiskFactor = scannerState?.adjustedBalanceRiskFactor ?? 100;
-  const maxRiskConfig = scannerState?.settings?.maxBalancePercentRisk ?? 100;
+  // maxBalancePercentRisk is a user-configurable setting (default: 100%)
+  // It caps the maximum effective balance risk regardless of momentum score
+  // This acts as a safety mechanism to prevent excessive position sizes
+  // CRITICAL: Read directly from scanner service to ensure we get the latest value
+  const scannerService = getAutoScannerService();
+  const currentSettings = scannerService?.getState()?.settings;
+  const maxRiskConfig = currentSettings?.maxBalancePercentRisk ?? scannerState?.settings?.maxBalancePercentRisk ?? 100;
   const momentumScore = scannerState?.performanceMomentumScore ?? null;
+  
+  // Debug: Log if there's a mismatch (only in development)
+  if (process.env.NODE_ENV === 'development' && scannerState?.settings?.maxBalancePercentRisk !== currentSettings?.maxBalancePercentRisk) {
+    console.log('[BalanceRiskWidget] ⚠️ Settings mismatch detected:', {
+      fromState: scannerState?.settings?.maxBalancePercentRisk,
+      fromService: currentSettings?.maxBalancePercentRisk,
+      using: maxRiskConfig
+    });
+  }
 
   const riskData = useMemo(() => {
     let status = 'neutral';

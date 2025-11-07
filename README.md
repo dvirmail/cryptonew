@@ -4,7 +4,9 @@ A sophisticated cryptocurrency trading bot with comprehensive backtesting, real-
 
 ## 🚀 Quick Start
 
-### Option 1: Automated Setup (Recommended)
+**For fastest setup, see [QUICK_START.md](QUICK_START.md) - Get running in 5 minutes!**
+
+### Option 1: Automated Dependency Installation (Recommended)
 
 **macOS/Linux:**
 ```bash
@@ -12,7 +14,43 @@ A sophisticated cryptocurrency trading bot with comprehensive backtesting, real-
 git clone https://github.com/dvirmail/cryptonew.git
 cd cryptonew
 
-# Run automated setup
+# Install all dependencies
+./install-dependencies.sh
+
+# Configure environment
+cp env.template .env
+# Edit .env with your settings
+
+# Start the application
+npm run dev
+```
+
+**Windows:**
+```cmd
+# Clone the repository
+git clone https://github.com/dvirmail/cryptonew.git
+cd cryptonew
+
+# Install dependencies
+npm install
+
+# Configure environment
+copy env.template .env
+# Edit .env with your settings
+
+# Start the application
+npm run dev
+```
+
+### Option 2: Full Automated Setup
+
+**macOS/Linux:**
+```bash
+# Clone the repository
+git clone https://github.com/dvirmail/cryptonew.git
+cd cryptonew
+
+# Run full automated setup (includes database setup)
 ./setup.sh
 ```
 
@@ -26,41 +64,71 @@ cd cryptonew
 setup.bat
 ```
 
-### Option 2: Manual Setup
+### Option 3: Manual Setup
 
 1. **Install Prerequisites:**
-   - Node.js 16+ and npm
-   - PostgreSQL 12+
-   - DBeaver (database management)
+   - Node.js 18+ and npm
+   - PostgreSQL 12+ (optional but recommended)
+   - DBeaver (database management, optional)
 
 2. **Install Dependencies:**
 ```bash
    npm install
    ```
 
-3. **Setup Database:**
+3. **Setup Database (Optional):**
    - Create database: `cryptosentinel`
    - Create user: `cryptouser`
    - Import schema from `supabase/migrations/`
 
 4. **Configure Environment:**
-   - Copy `.env.example` to `.env`
+   - Copy `env.template` to `.env`
    - Update with your Binance API credentials
 
 5. **Start Application:**
 ```bash
-   npm run start:all
+   npm run dev
    ```
 
 ## 📋 Prerequisites
 
-- **Node.js** 16+ and npm
-- **PostgreSQL** 12+ database
-- **DBeaver** for database management
+- **Node.js** 18+ and npm (16+ minimum, 18+ recommended)
+- **PostgreSQL** 12+ database (optional but recommended for full features)
+- **DBeaver** for database management (optional)
 - **Binance Account** with API access
 - **4GB+ RAM** recommended
 
 ## 🛠️ Installation
+
+### Quick Start Guide
+
+**New to CryptoSentinel?** Start here: [QUICK_START.md](QUICK_START.md)
+
+This guide will get you up and running in 5 minutes with:
+- Dependency installation
+- Environment configuration
+- Database setup (optional)
+- Binance API configuration
+- Troubleshooting tips
+
+### Dependency Installation
+
+**Automated Installation Script:**
+```bash
+./install-dependencies.sh
+```
+
+This script will:
+- ✅ Check Node.js and npm versions
+- ✅ Install all npm packages
+- ✅ Verify critical dependencies
+- ✅ Check optional tools (PostgreSQL, Git)
+- ✅ Provide installation summary
+
+**Manual Installation:**
+```bash
+npm install
+```
 
 ### Detailed Installation Guide
 
@@ -230,13 +298,16 @@ npm run check:all
 
 ### Getting Help
 
-1. Check [INSTALLATION_GUIDE.md](INSTALLATION_GUIDE.md)
-2. Review application logs
-3. Verify database connectivity
-4. Check Binance API configuration
+1. Check [QUICK_START.md](QUICK_START.md) for quick troubleshooting
+2. Review [INSTALLATION_GUIDE.md](INSTALLATION_GUIDE.md) for detailed instructions
+3. Review application logs
+4. Verify database connectivity
+5. Check Binance API configuration
+6. Run `./install-dependencies.sh` to verify dependencies
 
 ## 📚 Documentation
 
+- **[QUICK_START.md](QUICK_START.md)** - ⚡ Get started in 5 minutes (Recommended for new users)
 - [INSTALLATION_GUIDE.md](INSTALLATION_GUIDE.md) - Complete installation instructions
 - [GCLOUD_DEPLOYMENT.md](GCLOUD_DEPLOYMENT.md) - Google Cloud deployment guide
 - [API Documentation](docs/api.md) - Backend API reference
