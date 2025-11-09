@@ -7259,10 +7259,10 @@ export default class PositionManager {
                            //console.log(`🧪 [TEST_BONK]    CONCLUSION: ${conclusion}`);
                            
                            // Also log as object for easy inspection
-                           //console.log(`🧪 [TEST_BONK] 🔍 LIQUIDITY ISSUE CHECKLIST (object):`, {
+                           /*console.log(`🧪 [TEST_BONK] 🔍 LIQUIDITY ISSUE CHECKLIST (object):`, {
                                ...checklist,
                                CONCLUSION: conclusion
-                           });
+                           });*/
                        }
                        
                        if (orderStatus === 'EXPIRED' && initialExecutedQty <= 0) {
