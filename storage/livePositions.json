@@ -11321,5 +11321,520 @@
     "entry_fill_time_ms": 3768,
     "exit_time": "2025-11-09T10:13:32.684Z",
     "updated_date": "2025-11-09T09:52:32.688Z"
+  },
+  {
+    "id": "186d5433-2545-4867-897a-8e789a0a2141",
+    "position_id": "pos_1762681959857_2m6911h6y",
+    "strategy_name": "Toxic Shark of FILUSDT-MACDEM",
+    "symbol": "FIL/USDT",
+    "direction": "long",
+    "entry_price": 2.555,
+    "current_price": 2.555,
+    "quantity_crypto": "11.52000000",
+    "entry_value_usdt": 29.375999999999998,
+    "conviction_score": 87,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 20,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
+      },
+      "signalStrength": {
+        "score": 44.6,
+        "details": "Avg Strength: 69.20, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9228563442258413,
+    "combined_strength": 722.3187465748799,
+    "atr_value": 0.0560809656484586,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-11-09T09:52:42.121Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 2.4147975858788535,
+    "take_profit_price": 2.723242896945376,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 2.555,
+    "trough_price": 2.555,
+    "time_exit_hours": 1.1833333333333333,
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Zero",
+        "strength": 57
+      },
+      {
+        "type": "EMA",
+        "value": "Price Below EMA",
+        "strength": 50
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 90
+      },
+      {
+        "type": "TEMA",
+        "value": "price_cross_down",
+        "strength": 74
+      }
+    ],
+    "fear_greed_score": "22",
+    "fear_greed_classification": "Extreme Fear",
+    "lpm_score": 44,
+    "volatility_at_open": 24,
+    "volatility_label_at_open": "LOW",
+    "regime_impact_on_strength": 16.906715279999958,
+    "correlation_impact_on_strength": -46.74127499999997,
+    "effective_balance_risk_at_open": 28,
+    "btc_price_at_open": 101732.56,
+    "entry_near_support": false,
+    "entry_near_resistance": true,
+    "entry_distance_to_support_percent": 1.683,
+    "entry_distance_to_resistance_percent": 0.1174,
+    "entry_momentum_score": 0,
+    "entry_relative_to_day_high_percent": 12.1032,
+    "entry_relative_to_day_low_percent": 87.8968,
+    "entry_volume_vs_average": 1.2385323292198473,
+    "created_date": "2025-11-09T09:52:42.121Z",
+    "last_updated_timestamp": "2025-11-09T09:52:42.121Z",
+    "last_price_update": "2025-11-09T09:52:42.121Z",
+    "binance_order_id": 208315,
+    "binance_executed_price": 2.555,
+    "binance_executed_quantity": "11.52000000",
+    "entry_fill_time_ms": 3792,
+    "exit_time": "2025-11-09T11:03:42.121Z",
+    "updated_date": "2025-11-09T09:52:42.125Z"
+  },
+  {
+    "id": "d2835e67-c212-4aad-940d-50736e65ea2d",
+    "position_id": "pos_1762681975421_zxa10nh1f",
+    "strategy_name": "Iron Hawk of COMPUSDT-MAIADX",
+    "symbol": "COMP/USDT",
+    "direction": "long",
+    "entry_price": 33.23,
+    "current_price": 33.23,
+    "quantity_crypto": "0.87700000",
+    "entry_value_usdt": 29.34442,
+    "conviction_score": 86.3,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 20,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
+      },
+      "signalStrength": {
+        "score": 44,
+        "details": "Avg Strength: 68.00, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9228563442258413,
+    "combined_strength": 606.4143703176959,
+    "atr_value": 0.19585330116084537,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-11-09T09:52:56.714Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 32.74036674709788,
+    "take_profit_price": 33.81755990348253,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 33.23,
+    "trough_price": 33.23,
+    "time_exit_hours": 0.6333333333333333,
+    "trigger_signals": [
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 54
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bullish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 76
+      },
+      {
+        "type": "PSAR",
+        "value": "PSAR Flip Bearish",
+        "strength": 85
+      },
+      {
+        "type": "DEMA",
+        "value": "price_cross_down",
+        "strength": 70
+      }
+    ],
+    "fear_greed_score": "22",
+    "fear_greed_classification": "Extreme Fear",
+    "lpm_score": 44,
+    "volatility_at_open": 24,
+    "volatility_label_at_open": "LOW",
+    "regime_impact_on_strength": 11.677234752000004,
+    "correlation_impact_on_strength": -40.691280000000006,
+    "effective_balance_risk_at_open": 28,
+    "btc_price_at_open": 101698.68,
+    "entry_near_support": true,
+    "entry_near_resistance": false,
+    "entry_distance_to_support_percent": 0.3009,
+    "entry_distance_to_resistance_percent": 0.9329,
+    "entry_momentum_score": 37.96,
+    "entry_relative_to_day_high_percent": 28.2353,
+    "entry_relative_to_day_low_percent": 71.7647,
+    "entry_volume_vs_average": 0.22038389310178827,
+    "created_date": "2025-11-09T09:52:56.714Z",
+    "last_updated_timestamp": "2025-11-09T09:52:56.714Z",
+    "last_price_update": "2025-11-09T09:52:56.714Z",
+    "binance_order_id": 124788,
+    "binance_executed_price": 33.23,
+    "binance_executed_quantity": "0.87700000",
+    "entry_fill_time_ms": 5105,
+    "exit_time": "2025-11-09T10:30:56.714Z",
+    "updated_date": "2025-11-09T09:52:56.717Z"
+  },
+  {
+    "id": "c7410541-6036-4a90-9499-7f642a8eeb02",
+    "position_id": "pos_1762681983807_djp3zposh",
+    "strategy_name": "Nuclear Wolf of FILUSDT-MACDEM",
+    "symbol": "FIL/USDT",
+    "direction": "long",
+    "entry_price": 2.557,
+    "current_price": 2.557,
+    "quantity_crypto": "11.52000000",
+    "entry_value_usdt": 29.375999999999998,
+    "conviction_score": 86.1,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 20,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
+      },
+      "signalStrength": {
+        "score": 43.9,
+        "details": "Avg Strength: 67.80, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9228563442258413,
+    "combined_strength": 699.0735005439119,
+    "atr_value": 0.0560809656484586,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-11-09T09:53:05.753Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 2.4167975858788533,
+    "take_profit_price": 2.725242896945376,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 2.557,
+    "trough_price": 2.557,
+    "time_exit_hours": 1.8166666666666667,
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "MACD Below Zero",
+        "strength": 57
+      },
+      {
+        "type": "EMA",
+        "value": "Bearish EMA Alignment",
+        "strength": 48
+      },
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 75
+      },
+      {
+        "type": "PSAR",
+        "value": "PSAR Flip Bearish",
+        "strength": 85
+      },
+      {
+        "type": "TEMA",
+        "value": "price_cross_down",
+        "strength": 74
+      }
+    ],
+    "fear_greed_score": "22",
+    "fear_greed_classification": "Extreme Fear",
+    "lpm_score": 44,
+    "volatility_at_open": 24,
+    "volatility_label_at_open": "LOW",
+    "regime_impact_on_strength": 12.425997456000005,
+    "correlation_impact_on_strength": -45.30233999999996,
+    "effective_balance_risk_at_open": 28,
+    "btc_price_at_open": 101698.67,
+    "entry_near_support": false,
+    "entry_near_resistance": true,
+    "entry_distance_to_support_percent": 1.7599,
+    "entry_distance_to_resistance_percent": 0.0391,
+    "entry_momentum_score": 0,
+    "entry_relative_to_day_high_percent": 12.5,
+    "entry_relative_to_day_low_percent": 87.5,
+    "entry_volume_vs_average": 1.2388968169058687,
+    "created_date": "2025-11-09T09:53:05.753Z",
+    "last_updated_timestamp": "2025-11-09T09:53:05.753Z",
+    "last_price_update": "2025-11-09T09:53:05.753Z",
+    "binance_order_id": 208325,
+    "binance_executed_price": 2.557,
+    "binance_executed_quantity": "11.52000000",
+    "entry_fill_time_ms": 3751,
+    "exit_time": "2025-11-09T11:42:05.753Z",
+    "updated_date": "2025-11-09T09:53:05.760Z"
+  },
+  {
+    "id": "c37f04c1-1acc-4e96-b2dc-250041d1b2f7",
+    "position_id": "pos_1762681995207_qjtd65odp",
+    "strategy_name": "Steel Falcon of SANDUSDT-MACDIP",
+    "symbol": "SAND/USDT",
+    "direction": "long",
+    "entry_price": 0.1992,
+    "current_price": 0.1992,
+    "quantity_crypto": "147.00000000",
+    "entry_value_usdt": 29.326500000000003,
+    "conviction_score": 86,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 20,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
+      },
+      "signalStrength": {
+        "score": 43.8,
+        "details": "Avg Strength: 67.60, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9228563442258413,
+    "combined_strength": 672.4141228707841,
+    "atr_value": 0.001200761880026799,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-11-09T09:53:17.072Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 0.19619809529993298,
+    "take_profit_price": 0.20280228564008038,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 0.1992,
+    "trough_price": 0.1992,
+    "time_exit_hours": 1.9666666666666666,
+    "trigger_signals": [
+      {
+        "type": "MACD",
+        "value": "Bearish Cross",
+        "strength": 80
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Bearish Ichimoku",
+        "strength": 55
+      },
+      {
+        "type": "PSAR",
+        "value": "PSAR Flip Bearish",
+        "strength": 85
+      },
+      {
+        "type": "TEMA",
+        "value": "Price Below TEMA",
+        "strength": 48
+      },
+      {
+        "type": "DEMA",
+        "value": "price_cross_down",
+        "strength": 70
+      }
+    ],
+    "fear_greed_score": "22",
+    "fear_greed_classification": "Extreme Fear",
+    "lpm_score": 44,
+    "volatility_at_open": 24,
+    "volatility_label_at_open": "LOW",
+    "regime_impact_on_strength": 12.948139007999998,
+    "correlation_impact_on_strength": -46.50911999999994,
+    "effective_balance_risk_at_open": 28,
+    "btc_price_at_open": 101664,
+    "entry_near_support": true,
+    "entry_near_resistance": false,
+    "entry_distance_to_support_percent": 0.0502,
+    "entry_distance_to_resistance_percent": 0.8534,
+    "entry_momentum_score": 45.27,
+    "entry_relative_to_day_high_percent": 30,
+    "entry_relative_to_day_low_percent": 70,
+    "entry_volume_vs_average": 0.21758331227985472,
+    "created_date": "2025-11-09T09:53:17.072Z",
+    "last_updated_timestamp": "2025-11-09T09:53:17.072Z",
+    "last_price_update": "2025-11-09T09:53:17.072Z",
+    "binance_order_id": 73927,
+    "binance_executed_price": 0.1992,
+    "binance_executed_quantity": "147.00000000",
+    "entry_fill_time_ms": 5259,
+    "exit_time": "2025-11-09T11:51:17.072Z",
+    "updated_date": "2025-11-09T09:53:17.077Z"
+  },
+  {
+    "id": "09bdd99a-c057-4f6b-ae1e-000cc6515bff",
+    "position_id": "pos_1762682005209_evbxg7yek",
+    "strategy_name": "Phantom Tempest of JUPUSDT-MAIADX",
+    "symbol": "JUP/USDT",
+    "direction": "long",
+    "entry_price": 0.3373,
+    "current_price": 0.3373,
+    "quantity_crypto": "86.80000000",
+    "entry_value_usdt": 29.364440000000002,
+    "conviction_score": 85.9,
+    "conviction_details": {},
+    "conviction_breakdown": {
+      "marketRegime": {
+        "score": 20,
+        "details": "Regime: downtrend, Strategy Dominant: downtrend, Multiplier: 1.23"
+      },
+      "signalStrength": {
+        "score": 43.7,
+        "details": "Avg Strength: 67.40, Confluence Bonus: 10"
+      },
+      "volatility": {
+        "score": 5,
+        "details": "Squeeze just fired"
+      },
+      "demoPerformance": {
+        "score": 0,
+        "details": "Not enough demo trades (0)"
+      }
+    },
+    "conviction_multiplier": 1.25,
+    "market_regime": "downtrend",
+    "regime_confidence": 0.9228563442258413,
+    "combined_strength": 595.236352513536,
+    "atr_value": 0.0022070505430286927,
+    "is_event_driven_strategy": false,
+    "entry_timestamp": "2025-11-09T09:53:27.012Z",
+    "status": "open",
+    "trading_mode": "testnet",
+    "wallet_id": "hvazdukoq",
+    "stop_loss_price": 0.33178237364242824,
+    "take_profit_price": 0.34392115162908604,
+    "enableTrailingTakeProfit": true,
+    "is_trailing": false,
+    "trailing_stop_price": null,
+    "trailing_peak_price": null,
+    "peak_price": 0.3373,
+    "trough_price": 0.3373,
+    "time_exit_hours": 1,
+    "trigger_signals": [
+      {
+        "type": "MA200",
+        "value": "Price Below MA200",
+        "strength": 64
+      },
+      {
+        "type": "Ichimoku",
+        "value": "Price Above Kumo",
+        "strength": 45
+      },
+      {
+        "type": "ADX",
+        "value": "Strong Trend",
+        "strength": 84
+      },
+      {
+        "type": "TEMA",
+        "value": "price_cross_down",
+        "strength": 74
+      },
+      {
+        "type": "DEMA",
+        "value": "price_cross_down",
+        "strength": 70
+      }
+    ],
+    "fear_greed_score": "22",
+    "fear_greed_classification": "Extreme Fear",
+    "lpm_score": 44,
+    "volatility_at_open": 24,
+    "volatility_label_at_open": "LOW",
+    "regime_impact_on_strength": 13.867802783999991,
+    "correlation_impact_on_strength": -40.55244000000005,
+    "effective_balance_risk_at_open": 28,
+    "btc_price_at_open": 101664,
+    "entry_near_support": false,
+    "entry_near_resistance": true,
+    "entry_distance_to_support_percent": 0.7412,
+    "entry_distance_to_resistance_percent": 0.1186,
+    "entry_momentum_score": 32.69,
+    "entry_relative_to_day_high_percent": 17.3611,
+    "entry_relative_to_day_low_percent": 82.6389,
+    "entry_volume_vs_average": 0.29175247556301054,
+    "created_date": "2025-11-09T09:53:27.012Z",
+    "last_updated_timestamp": "2025-11-09T09:53:27.012Z",
+    "last_price_update": "2025-11-09T09:53:27.012Z",
+    "binance_order_id": 106955,
+    "binance_executed_price": 0.3373,
+    "binance_executed_quantity": "86.80000000",
+    "entry_fill_time_ms": 4642,
+    "exit_time": "2025-11-09T10:53:27.012Z",
+    "updated_date": "2025-11-09T09:53:27.015Z"
   }
 ]

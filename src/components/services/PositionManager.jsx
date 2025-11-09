@@ -6946,7 +6946,7 @@ export default class PositionManager {
                        // TEST MODE: If signal has _forcePositionValue, override position size calculation
                        let positionSizeResult;
                        if (signal._forcePositionValue && signal._forcePositionValue > 0) {
-                           console.log(`🧪 [TEST_BONK] 🔧 FORCING position value to $${signal._forcePositionValue}`);
+                           //console.log(`🧪 [TEST_BONK] 🔧 FORCING position value to $${signal._forcePositionValue}`);
                            const forcedQuantity = signal._forcePositionValue / currentPrice;
                                const exchangeInfo = this.getExchangeInfo ? this.getExchangeInfo(symbolNoSlash) : null;
                            
@@ -7018,11 +7018,11 @@ export default class PositionManager {
                                appliedFilters: filtered.appliedFilters || []
                            };
                            
-                           console.log(`🧪 [TEST_BONK] 🔧 Forced position size result:`, {
+                           /*console.log(`🧪 [TEST_BONK] 🔧 Forced position size result:`, {
                                quantityCrypto: positionSizeResult.quantityCrypto,
                                positionValueUSDT: positionSizeResult.positionValueUSDT,
                                appliedFilters: positionSizeResult.appliedFilters
-                           });
+                           });*/
                        } else {
                            positionSizeResult = dynamicSizing.calculatePositionSize({
                            strategySettings: strategySettings,
@@ -7204,7 +7204,7 @@ export default class PositionManager {
                        const isBONK = symbol && (symbol.includes('BONK') || symbol.replace('/', '').includes('BONK'));
                        if (isBONK || orderStatus === 'EXPIRED') {
                            const orderResult = binanceBuyResult.orderResult || {};
-                           console.log(`🧪 [TEST_BONK] 📋 FULL BINANCE ORDER RESPONSE:`, {
+                           /*console.log(`🧪 [TEST_BONK] 📋 FULL BINANCE ORDER RESPONSE:`, {
                                symbol: symbol,
                                success: binanceBuyResult.success,
                                error: binanceBuyResult.error,
@@ -7235,7 +7235,7 @@ export default class PositionManager {
                                selfTradePreventionMode: orderResult.selfTradePreventionMode,
                                // Full JSON for complete inspection
                                fullResponseJSON: JSON.stringify(orderResult, null, 2)
-                           });
+                           });*/
                            
                            // Liquidity issue confirmation checklist
                            const checklist = {
@@ -7252,14 +7252,14 @@ export default class PositionManager {
                                ? '✅ CONFIRMED: Real liquidity issue - order expired without any fills' 
                                : '❓ INCONCLUSIVE: Check individual indicators above';
                            
-                           console.log(`🧪 [TEST_BONK] 🔍 LIQUIDITY ISSUE CHECKLIST:`);
+                           //console.log(`🧪 [TEST_BONK] 🔍 LIQUIDITY ISSUE CHECKLIST:`);
                            Object.entries(checklist).forEach(([key, value]) => {
-                               console.log(`🧪 [TEST_BONK]    ${key}: ${value}`);
+                               //console.log(`🧪 [TEST_BONK]    ${key}: ${value}`);
                            });
-                           console.log(`🧪 [TEST_BONK]    CONCLUSION: ${conclusion}`);
+                           //console.log(`🧪 [TEST_BONK]    CONCLUSION: ${conclusion}`);
                            
                            // Also log as object for easy inspection
-                           console.log(`🧪 [TEST_BONK] 🔍 LIQUIDITY ISSUE CHECKLIST (object):`, {
+                           //console.log(`🧪 [TEST_BONK] 🔍 LIQUIDITY ISSUE CHECKLIST (object):`, {
                                ...checklist,
                                CONCLUSION: conclusion
                            });
@@ -7290,14 +7290,14 @@ export default class PositionManager {
                            console.warn(`[PositionManager] ⚠️ Order expired without fill for ${symbol} (testnet liquidity issue):`, liquidityIssueDetails);
                            
                            if (isBONK) {
-                               console.log(`🧪 [TEST_BONK] ❌ LIQUIDITY ISSUE CONFIRMED:`, {
+                               /*console.log(`🧪 [TEST_BONK] ❌ LIQUIDITY ISSUE CONFIRMED:`, {
                                    orderStatus: 'EXPIRED',
                                    executedQty: initialExecutedQty,
                                    hasFills: !!(binanceBuyResult.orderResult?.fills && binanceBuyResult.orderResult.fills.length > 0),
                                    fillCount: binanceBuyResult.orderResult?.fills?.length || 0,
                                    confirmation: 'This is a real liquidity issue - order expired without any fills on testnet',
                                    recommendation: 'On testnet, BONK orders often expire due to lack of matching orders. This is expected behavior.'
-                               });
+                               });*/
                            }
                            
                            this.addLog(`[PositionManager] ⚠️ Order expired for ${symbol} - no position created (testnet liquidity issue)`, 'warning');
@@ -11977,7 +11977,7 @@ export default class PositionManager {
      * @returns {Promise<Object>} Result of position opening
      */
     async testOpenBONKPosition(targetValue = 15) {
-        console.log(`🧪 [TEST_BONK] ========== TEST OPEN BONK POSITION ($${targetValue}) ==========`);
+        //console.log(`🧪 [TEST_BONK] ========== TEST OPEN BONK POSITION ($${targetValue}) ==========`);
         
         try {
             const symbol = 'BONK/USDT';
@@ -11986,7 +11986,7 @@ export default class PositionManager {
             const proxyUrl = this.scannerService?.state?.settings?.local_proxy_url || 'http://localhost:3003';
             
             // 1. Get current BONK price
-            console.log(`🧪 [TEST_BONK] Step 1: Fetching current BONK price...`);
+            //console.log(`🧪 [TEST_BONK] Step 1: Fetching current BONK price...`);
             const { getBinancePrices } = await import('@/api/functions');
             const priceResponse = await getBinancePrices({ symbols: [symbolNoSlash], tradingMode, proxyUrl });
             
@@ -11999,41 +11999,41 @@ export default class PositionManager {
                 throw new Error(`Invalid BONK price: ${currentPrice}`);
             }
             
-            console.log(`🧪 [TEST_BONK] ✅ Current BONK price: $${currentPrice}`);
+            //console.log(`🧪 [TEST_BONK] ✅ Current BONK price: $${currentPrice}`);
             
             // 2. Calculate quantity for target value
             const targetQuantity = targetValue / currentPrice;
-            console.log(`🧪 [TEST_BONK] Step 2: Calculated target quantity: ${targetQuantity} BONK for $${targetValue}`);
+            //console.log(`🧪 [TEST_BONK] Step 2: Calculated target quantity: ${targetQuantity} BONK for $${targetValue}`);
             
             // 3. Get exchange info for BONK
-            console.log(`🧪 [TEST_BONK] Step 3: Getting exchange info for BONK...`);
+            //console.log(`🧪 [TEST_BONK] Step 3: Getting exchange info for BONK...`);
             await this.loadExchangeInfo();
             const exchangeInfo = this.getExchangeInfo(symbolNoSlash);
-            console.log(`🧪 [TEST_BONK] Exchange info:`, {
+            /*console.log(`🧪 [TEST_BONK] Exchange info:`, {
                 hasExchangeInfo: !!exchangeInfo,
                 lotSizeFilter: exchangeInfo?.filters?.LOT_SIZE,
                 minNotionalFilter: exchangeInfo?.filters?.MIN_NOTIONAL
-            });
+            });*/
             
             // 4. Calculate ATR for BONK
-            console.log(`🧪 [TEST_BONK] Step 4: Calculating ATR for BONK...`);
+            //console.log(`🧪 [TEST_BONK] Step 4: Calculating ATR for BONK...`);
             let atrValue = null;
             let atrDetails = null;
             try {
                 const { getKlineData } = await import('@/api/functions');
-                console.log(`🧪 [TEST_BONK] Fetching kline data for ${symbolNoSlash}...`);
+                //console.log(`🧪 [TEST_BONK] Fetching kline data for ${symbolNoSlash}...`);
                 const klineResponse = await getKlineData({
                     symbols: [symbolNoSlash], // Note: symbols (plural, array) not symbol
                     interval: '15m',
                     limit: 100
                 });
                 
-                console.log(`🧪 [TEST_BONK] Kline response:`, {
+                /*console.log(`🧪 [TEST_BONK] Kline response:`, {
                     success: klineResponse?.success,
                     hasData: !!klineResponse?.data,
                     dataType: typeof klineResponse?.data,
                     dataKeys: klineResponse?.data ? Object.keys(klineResponse.data) : 'no data'
-                });
+                });*/
                 
                 // getKlineData returns { success: true, data: { [symbol]: { data: [...] } } }
                 let klineData = null;
@@ -12048,22 +12048,22 @@ export default class PositionManager {
                     }
                 }
                 
-                console.log(`🧪 [TEST_BONK] Extracted kline data:`, {
+                /*console.log(`🧪 [TEST_BONK] Extracted kline data:`, {
                     isArray: Array.isArray(klineData),
                     length: klineData?.length || 0,
                     sample: klineData && klineData.length > 0 ? klineData[0] : 'no data'
-                });
+                });*/
                 
                 if (klineData && Array.isArray(klineData) && klineData.length >= 14) {
                     const atrPeriod = 14;
-                    console.log(`🧪 [TEST_BONK] Calculating ATR from ${klineData.length} candles with period ${atrPeriod}...`);
+                    //console.log(`🧪 [TEST_BONK] Calculating ATR from ${klineData.length} candles with period ${atrPeriod}...`);
                     const atrValues = unifiedCalculateATR(klineData, atrPeriod, { debug: true, validateData: true });
                     
-                    console.log(`🧪 [TEST_BONK] ATR calculation result:`, {
+                    /*console.log(`🧪 [TEST_BONK] ATR calculation result:`, {
                         isArray: Array.isArray(atrValues),
                         length: atrValues?.length || 0,
                         validCount: atrValues ? atrValues.filter(v => v !== null && v !== undefined && Number.isFinite(v)).length : 0
-                    });
+                    });*/
                     
                     if (atrValues && Array.isArray(atrValues) && atrValues.length > 0) {
                         // Get the last valid ATR value
@@ -12085,7 +12085,7 @@ export default class PositionManager {
                                 sampleATRs: validATRs.slice(-5) // Last 5 valid ATR values
                             };
                             
-                            console.log(`🧪 [TEST_BONK] ✅ ATR calculated successfully:`, atrDetails);
+                            //console.log(`🧪 [TEST_BONK] ✅ ATR calculated successfully:`, atrDetails);
                         } else {
                             console.warn(`🧪 [TEST_BONK] ⚠️ ATR calculation returned no valid values`);
                             atrDetails = {
@@ -12130,15 +12130,15 @@ export default class PositionManager {
             }
             
             // Log ATR summary
-            console.log(`🧪 [TEST_BONK] 📊 ATR Summary:`, {
+            /*console.log(`🧪 [TEST_BONK] 📊 ATR Summary:`, {
                 atrValue: atrValue,
                 atrPercent: atrValue ? `${((atrValue / currentPrice) * 100).toFixed(4)}%` : 'N/A',
                 currentPrice: currentPrice,
                 atrDetails: atrDetails
-            });
+            });*/
             
             // 5. Create a mock signal object
-            console.log(`🧪 [TEST_BONK] Step 5: Creating mock signal...`);
+            //console.log(`🧪 [TEST_BONK] Step 5: Creating mock signal...`);
             const mockSignal = {
                 symbol: symbol,
                 combination: {
@@ -12162,15 +12162,15 @@ export default class PositionManager {
                 trigger_signals: []
             };
             
-            console.log(`🧪 [TEST_BONK] Mock signal created with ATR:`, {
+            /*console.log(`🧪 [TEST_BONK] Mock signal created with ATR:`, {
                 symbol: mockSignal.symbol,
                 currentPrice: mockSignal.currentPrice,
                 atr_value: mockSignal.atr_value,
                 atrPercent: mockSignal.atr_value ? `${((mockSignal.atr_value / mockSignal.currentPrice) * 100).toFixed(4)}%` : 'N/A'
-            });
+            });*/
             
             // 6. Override position size calculation to force $15 value
-            console.log(`🧪 [TEST_BONK] Step 6: Overriding position size to $${targetValue}...`);
+            //console.log(`🧪 [TEST_BONK] Step 6: Overriding position size to $${targetValue}...`);
             
             // Temporarily override calculatePositionSize to return our target value
             const originalCalculatePositionSize = (await import('@/components/utils/dynamicPositionSizing')).default?.calculatePositionSize;
@@ -12182,22 +12182,22 @@ export default class PositionManager {
             };
             
             // 7. Call openPositionsBatch with the modified signal
-            console.log(`🧪 [TEST_BONK] Step 7: Opening position via openPositionsBatch...`);
+            //console.log(`🧪 [TEST_BONK] Step 7: Opening position via openPositionsBatch...`);
             const result = await this.openPositionsBatch([modifiedSignal]);
             
-            console.log(`🧪 [TEST_BONK] ========== RESULT ==========`);
-            console.log(`🧪 [TEST_BONK] Opened: ${result.opened}`);
-            console.log(`🧪 [TEST_BONK] Errors: ${result.errors.length}`);
+            //console.log(`🧪 [TEST_BONK] ========== RESULT ==========`);
+            //console.log(`🧪 [TEST_BONK] Opened: ${result.opened}`);
+            //console.log(`🧪 [TEST_BONK] Errors: ${result.errors.length}`);
             if (result.openedPositions.length > 0) {
                 const position = result.openedPositions[0];
-                console.log(`🧪 [TEST_BONK] Position ID: ${position.position_id || position.id}`);
-                console.log(`🧪 [TEST_BONK] Quantity: ${position.quantity_crypto}`);
-                console.log(`🧪 [TEST_BONK] Entry Price: ${position.entry_price}`);
-                console.log(`🧪 [TEST_BONK] Entry Value: $${(parseFloat(position.quantity_crypto) * parseFloat(position.entry_price)).toFixed(2)}`);
-                console.log(`🧪 [TEST_BONK] ATR Value: ${position.atr_value || 'N/A'}`);
+                //console.log(`🧪 [TEST_BONK] Position ID: ${position.position_id || position.id}`);
+                //console.log(`🧪 [TEST_BONK] Quantity: ${position.quantity_crypto}`);
+                //console.log(`🧪 [TEST_BONK] Entry Price: ${position.entry_price}`);
+                //console.log(`🧪 [TEST_BONK] Entry Value: $${(parseFloat(position.quantity_crypto) * parseFloat(position.entry_price)).toFixed(2)}`);
+                //console.log(`🧪 [TEST_BONK] ATR Value: ${position.atr_value || 'N/A'}`);
                 if (position.atr_value && position.entry_price) {
                     const positionAtrPercent = (position.atr_value / position.entry_price) * 100;
-                    console.log(`🧪 [TEST_BONK] ATR as % of Entry Price: ${positionAtrPercent.toFixed(4)}%`);
+                    //console.log(`🧪 [TEST_BONK] ATR as % of Entry Price: ${positionAtrPercent.toFixed(4)}%`);
                 }
             }
             if (result.errors.length > 0) {
@@ -12205,17 +12205,17 @@ export default class PositionManager {
             }
             
             // Final ATR summary
-            console.log(`🧪 [TEST_BONK] ========== ATR SUMMARY ==========`);
-            console.log(`🧪 [TEST_BONK] ATR Value: ${atrValue || 'N/A'}`);
+            //console.log(`🧪 [TEST_BONK] ========== ATR SUMMARY ==========`);
+            //console.log(`🧪 [TEST_BONK] ATR Value: ${atrValue || 'N/A'}`);
             if (atrValue && currentPrice) {
-                console.log(`🧪 [TEST_BONK] ATR as % of Price: ${((atrValue / currentPrice) * 100).toFixed(4)}%`);
-                console.log(`🧪 [TEST_BONK] Price: $${currentPrice}`);
-                console.log(`🧪 [TEST_BONK] ATR: ${atrValue}`);
+                //console.log(`🧪 [TEST_BONK] ATR as % of Price: ${((atrValue / currentPrice) * 100).toFixed(4)}%`);
+                //console.log(`🧪 [TEST_BONK] Price: $${currentPrice}`);
+                //console.log(`🧪 [TEST_BONK] ATR: ${atrValue}`);
             }
             if (atrDetails) {
-                console.log(`🧪 [TEST_BONK] ATR Details:`, atrDetails);
+                //console.log(`🧪 [TEST_BONK] ATR Details:`, atrDetails);
             }
-            console.log(`🧪 [TEST_BONK] ==========================================`);
+            //console.log(`🧪 [TEST_BONK] ==========================================`);
             
             return result;
             
