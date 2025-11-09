@@ -15,13 +15,13 @@
  */
 
 export const MOMENTUM_WEIGHTS = {
-    unrealizedPnl: 0.23,    // Reduced slightly to make room for signal quality
-    realizedPnl: 0.23,      // Reduced slightly to make room for signal quality
-    regime: 0.15,           // Keep same
-    volatility: 0.10,       // Keep same
-    opportunityRate: 0.15,  // Keep same
-    fearGreed: 0.10,        // Keep same
-    signalQuality: 0.04,    // Enable with 4% weight - valuable strategy health indicator
+    unrealizedPnl: 0.30,    // 30% - Increased to focus on current position performance
+    realizedPnl: 0.40,      // 40% - DOMINANT FACTOR - actual trading results matter most
+    regime: 0.00,            // 0% - REMOVED: Market regime is context, not performance momentum
+    volatility: 0.10,        // 10% - Keep same
+    opportunityRate: 0.00,  // 0% - REMOVED: Strategy count is not a performance metric
+    fearGreed: 0.10,        // 10% - Keep same
+    signalQuality: 0.10,   // 10% - Increased from 4% - signal strength is important
 };
 
 /**

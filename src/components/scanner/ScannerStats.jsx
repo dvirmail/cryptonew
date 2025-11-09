@@ -1,11 +1,41 @@
 
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, Wallet, Package, TrendingUp, HelpCircle, Activity, Clock } from 'lucide-react';
 import { useTradingMode } from '@/components/providers/TradingModeProvider';
 import { useWallet } from '@/components/providers/WalletProvider';
+import { getAutoScannerService } from '@/components/services/AutoScannerService';
 
-export default function ScannerStats({ stats = {} }) {
+export default function ScannerStats({ stats: propStats = {} }) {
+    const [stats, setStats] = useState(propStats);
+
+    // Subscribe to scanner service for real-time stats updates
+    useEffect(() => {
+        const scannerService = getAutoScannerService();
+        
+        // Get initial stats
+        const initialState = scannerService.getState();
+        setStats(initialState?.stats || propStats);
+
+        // Subscribe to updates - updates occur when notifySubscribers() is called after each scan cycle
+        const unsubscribe = scannerService.subscribe((state) => {
+            // Update stats when scanner state changes
+            if (state?.stats) {
+                setStats({ ...state.stats });
+            }
+        });
+
+        return () => {
+            unsubscribe();
+        };
+    }, []); // Empty deps - subscribe once on mount
+
+    // Also update when propStats changes (from parent component)
+    useEffect(() => {
+        if (propStats && Object.keys(propStats).length > 0) {
+            setStats(propStats);
+        }
+    }, [propStats]);
     const { isLiveMode } = useTradingMode();
     const {
         walletSummary,
@@ -22,8 +52,13 @@ export default function ScannerStats({ stats = {} }) {
         []
     );
 
-    const formatTime = useCallback((ms) => {
-        if (!ms || ms === 0) return 'N/A';
+    const formatTime = useCallback((ms, hasScans = false) => {
+        // Check for null/undefined first, then check if it's a valid number
+        if (ms === null || ms === undefined) return 'N/A';
+        if (typeof ms !== 'number' || isNaN(ms)) return 'N/A';
+        // Only return 'N/A' if it's exactly 0 AND no scans have been completed
+        // If averageScanTimeMs is 0 but we have scan cycles, show 0ms instead
+        if (ms === 0 && !hasScans) return 'N/A';
         if (ms < 1000) return `${Math.round(ms)}ms`;
         return `${(ms / 1000).toFixed(2)}s`;
     }, []);
@@ -36,6 +71,7 @@ export default function ScannerStats({ stats = {} }) {
     ]), [totalEquity, availableBalance, balanceInTrades, openPositionsCount, formatCurrency]);
 
     const cycleMetrics = useMemo(() => {
+        const hasScans = (stats?.totalScanCycles ?? 0) > 0;
         return [
             { 
                 title: "Total Scan Cycles", 
@@ -45,9 +81,9 @@ export default function ScannerStats({ stats = {} }) {
             },
             { 
                 title: "Avg Scan Time", 
-                value: formatTime(stats?.averageScanTimeMs), 
+                value: formatTime(stats?.averageScanTimeMs, hasScans), 
                 icon: Clock,
-                subtitle: stats?.lastScanTimeMs ? `Last: ${formatTime(stats.lastScanTimeMs)}` : 'Waiting for first scan...'
+                subtitle: stats?.lastScanTimeMs ? `Last: ${formatTime(stats.lastScanTimeMs, true)}` : 'Waiting for first scan...'
             },
         ];
     }, [stats, formatTime]);

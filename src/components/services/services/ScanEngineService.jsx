@@ -96,6 +96,26 @@ export class ScanEngineService {
         
         this.scannerService.state.newPositionsCount = 0; // Reset new positions count for this cycle
 
+        // Clean expired kline cache entries at the start of each scan cycle
+        try {
+          // Clean client-side cache
+          const { cleanupExpiredKlineResponseCache } = await import('@/api/localClient');
+          const cleanedCount = cleanupExpiredKlineResponseCache();
+          
+          // Clean server-side cache via API call (non-blocking)
+          const proxyUrl = this.scannerService.state.settings?.local_proxy_url || 'http://localhost:3003';
+          fetch(`${proxyUrl}/api/cache/cleanup-kline`).catch(() => {
+            // Silently fail - server cleanup is not critical
+          });
+          
+          if (cleanedCount > 0) {
+            this.addLog(`🧹 Cleaned ${cleanedCount} expired kline cache entries at scan cycle start`, 'info');
+          }
+        } catch (error) {
+          // Silently fail - cache cleanup is not critical
+          console.warn('[ScanEngineService] Failed to clean kline cache:', error);
+        }
+
         // console.log(`[AutoScannerService] [SCAN_CYCLE] 🔄 Starting scan cycle #${this.scannerService.state.stats.totalScanCycles + 1}`);
         // console.log(`[AutoScannerService] [SCAN_CYCLE] 🔍 Scanner state:`, {
         //     isRunning: this.scannerService.state.isRunning,
@@ -122,11 +142,16 @@ export class ScanEngineService {
         };
 
         try {
+            // Track pre-scan operations
+            const preScanStartTime = Date.now();
+            
             // console.log('[ScanEngineService] 🔍 [PHASE] Starting pre-scan checks...');
             // NEW: Pre-scan leadership check
             if (this.scannerService.state.isRunning) {
                 // console.log('[ScanEngineService] 🔍 [PHASE] Checking leadership...');
+                const leadershipStartTime = Date.now();
                 const hasLeadership = await this.scannerService.sessionManager.verifyLeadership();
+                phaseTimings.leadershipCheck = Date.now() - leadershipStartTime;
                 // console.log('[ScanEngineService] 🔍 [PHASE] Leadership check complete, hasLeadership:', hasLeadership);
                 if (!hasLeadership) {
                     console.warn('[AutoScannerService] ⚠️ Lost leadership during scan - another tab is now active. Stopping scanner.');
@@ -136,16 +161,20 @@ export class ScanEngineService {
             }
 
             // console.log('[ScanEngineService] 🔍 [PHASE] Waiting for wallet save...');
+            const walletSaveStartTime = Date.now();
             await this.scannerService.positionManager.waitForWalletSave(60000);
+            phaseTimings.walletSaveWait = Date.now() - walletSaveStartTime;
             // console.log('[ScanEngineService] 🔍 [PHASE] Wallet save wait complete');
+            
+            phaseTimings.preScan = Date.now() - preScanStartTime;
 
             // PHASE 1: Market Regime Detection & F&G Index
-            // console.log('[ScanEngineService] 🔍 [PHASE 1] Starting market regime detection...');
             const regimeStartTime = Date.now();
-            // console.log('[AutoScannerService] 🌡️ Detecting market regime and fetching F&G Index...');
+            console.log(`[ScanEngineService] ⏱️ [PHASE 1] Market Regime Detection START`);
             const regimeData = await this.scannerService.marketRegimeService._detectMarketRegime();
             phaseTimings.regimeDetection = Date.now() - regimeStartTime;
-            // console.log('[ScanEngineService] 🔍 [PHASE 1] Market regime detection complete, took', phaseTimings.regimeDetection, 'ms');
+            phaseTimings.marketRegime = phaseTimings.regimeDetection; // Alias for consistency
+            console.log(`[ScanEngineService] ⏱️ [PHASE 1] Market Regime Detection END: ${phaseTimings.regimeDetection}ms (${(phaseTimings.regimeDetection/1000).toFixed(2)}s)`);
 
             if (!regimeData) {
                 console.error('[AutoScannerService] ❌ Failed to detect market regime, skipping cycle.');
@@ -169,15 +198,32 @@ export class ScanEngineService {
             }
 
             // PHASE 2: Price Fetching
-            // console.log('[ScanEngineService] 🔍 [PHASE 2] Starting price consolidation...');
             const priceStartTime = Date.now();
-            await this.scannerService.priceManagerService._consolidatePrices();
+            console.log(`[ScanEngineService] ⏱️ [PHASE 2] Price Fetching START`);
+            try {
+                if (this.scannerService.priceManagerService) {
+                    await this.scannerService.priceManagerService._consolidatePrices();
+                }
+            } catch (priceError) {
+                console.error('[ScanEngineService] ❌ Error in _consolidatePrices:', priceError);
+            }
             phaseTimings.priceFetching = Date.now() - priceStartTime;
-            // console.log('[ScanEngineService] 🔍 [PHASE 2] Price consolidation complete, took', phaseTimings.priceFetching, 'ms');
+            console.log(`[ScanEngineService] ⏱️ [PHASE 2] Price Fetching END: ${phaseTimings.priceFetching}ms (${(phaseTimings.priceFetching/1000).toFixed(2)}s)`);
+
+            // PHASE 2.5: Dust Detection and Aggregation (before position monitoring)
+            const dustDetectionStartTime = Date.now();
+            console.log(`[ScanEngineService] ⏱️ [PHASE 2.5] Dust Detection & Aggregation START`);
+            try {
+                await this.scannerService.positionManager.detectAndAggregateDustPositions();
+            } catch (dustError) {
+                console.error('[ScanEngineService] ❌ Error in dust detection:', dustError);
+            }
+            phaseTimings.dustDetection = Date.now() - dustDetectionStartTime;
+            console.log(`[ScanEngineService] ⏱️ [PHASE 2.5] Dust Detection & Aggregation END: ${phaseTimings.dustDetection}ms (${(phaseTimings.dustDetection/1000).toFixed(2)}s)`);
 
             // PHASE 3: Position Monitoring and Reconciliation
-            // console.log('[ScanEngineService] 🔍 [PHASE 3] Starting position monitoring...');
             const monitoringStartTime = Date.now();
+            console.log(`[ScanEngineService] ⏱️ [PHASE 3] Position Monitoring START`);
             
             try {
                 // console.log('[ScanEngineService] 🔍 [PHASE 3] About to call _monitorPositions...');
@@ -296,8 +342,7 @@ export class ScanEngineService {
             }
             
             phaseTimings.positionMonitoring = Date.now() - monitoringStartTime;
-            // Commented out to reduce console flooding
-            // console.log('[ScanEngineService] 🔍 [PHASE 3] Position monitoring took', phaseTimings.positionMonitoring, 'ms');
+            console.log(`[ScanEngineService] ⏱️ [PHASE 3] Position Monitoring END: ${phaseTimings.positionMonitoring}ms (${(phaseTimings.positionMonitoring/1000).toFixed(2)}s)`);
             
             if (this.scannerService.isHardResetting) {
                 this.scannerService.state.isScanning = false;
@@ -349,18 +394,19 @@ export class ScanEngineService {
                         'warning'
                     );
                     maxCapReached = true;
+                    // Store in cycleStats for logging in wallet summary
+                    cycleStats.maxCapReached = true;
+                    cycleStats.maxCapAllocated = allocatedNow;
+                    cycleStats.maxCapLimit = capUsdt;
                 }
             }
 
             // PHASE 4: Strategy Loading
-            // Commented out to reduce console flooding
-            // console.log('[ScanEngineService] 🔍 [PHASE 4] Starting strategy loading...');
             const strategyLoadStartTime = Date.now();
-            // console.log('[AutoScannerService] 📋 Loading active strategies...');
+            console.log(`[ScanEngineService] ⏱️ [PHASE 4] Strategy Loading START`);
             let strategies = await this._loadStrategies() || [];
             phaseTimings.strategyLoading = Date.now() - strategyLoadStartTime;
-            // console.log(`[ScanEngineService] 🔍 [PHASE 4] Strategy loading complete: ${strategies.length} strategies loaded in ${phaseTimings.strategyLoading}ms`);
-            // console.log(`[AutoScannerService] ✅ Loaded ${strategies.length} strategies`);
+            console.log(`[ScanEngineService] ⏱️ [PHASE 4] Strategy Loading END: ${phaseTimings.strategyLoading}ms (${(phaseTimings.strategyLoading/1000).toFixed(2)}s) - Loaded ${strategies.length} strategies`);
 
             if (!strategies || strategies.length === 0) {
                 console.warn('[AutoScannerService] ⚠️ No active strategies found - continuing cycle for position monitoring only');
@@ -372,33 +418,14 @@ export class ScanEngineService {
             }
 
             // PHASE 5: Strategy Evaluation & Signal Detection - OPTIMIZED
-            // Commented out to reduce console flooding
-            // console.log('[ScanEngineService] 🔍 [PHASE 5] Starting strategy evaluation...');
+            // CRITICAL FIX: Removed requestIdleCallback wrapper - it causes delays when tab is inactive
+            // Strategy evaluation is a background operation that should execute immediately
+            // This ensures strategies always process in parallel batches, regardless of tab visibility
             const evaluationStartTime = Date.now();
-            // console.log('[AutoScannerService] 🔍 Evaluating strategies and detecting signals...');
-            // console.log('[AutoScannerService] 🔍 Evaluation inputs:', {
-            //     strategiesCount: strategies.length,
-            //     maxCapReached: maxCapReached,
-            //     availableBalance: this._getCurrentWalletState().availableBalance,
-            //     currentPricesCount: Object.keys(this.scannerService.priceManagerService.currentPrices).length
-            // });
-            // console.log('[ScanEngineService] 🔍 [PHASE 5] About to enter requestIdleCallback wrapper...');
+            console.log(`[ScanEngineService] ⏱️ [PHASE 5] Strategy Evaluation START (${strategies.length} strategies)`);
             
-            // OPTIMIZATION: Use requestIdleCallback for heavy computations to prevent UI blocking
-            // FIX: Add timeout fallback to prevent hanging
-            const scanResult = await new Promise((resolve) => {
-                let resolved = false;
-                const performEvaluation = async () => {
-                    if (resolved) {
-                        // Commented out to reduce console flooding
-                        // console.log('[ScanEngineService] 🔍 [PHASE 5] performEvaluation called but already resolved, skipping...');
-                        return;
-                    }
-                    try {
-                        // Commented out to reduce console flooding
-                        // console.log('[ScanEngineService] 🔍 [PHASE 5] performEvaluation executing...');
-                        // console.log('[AutoScannerService] 🔍 Starting strategy evaluation...');
-                        const result = await this._evaluateStrategies(
+            // Execute strategy evaluation immediately (no requestIdleCallback delay)
+            const scanResult = await this._evaluateStrategies(
                             strategies,
                             this._getCurrentWalletState(),
                             this.scannerService.state.settings,
@@ -407,50 +434,9 @@ export class ScanEngineService {
                             cycleStats,
                             maxCapReached
                         );
-                        console.log('[AutoScannerService] 🔍 Strategy evaluation result:', result);
-                        if (!resolved) {
-                            resolved = true;
-                        resolve(result);
-                        }
-                    } catch (error) {
-                        console.error('[AutoScannerService] ❌ Strategy evaluation failed:', error);
-                        if (!resolved) {
-                            resolved = true;
-                        resolve({ signalsFound: 0, tradesExecuted: 0, combinationsEvaluated: 0 });
-                        }
-                    }
-                };
-
-                // FIX: Add timeout fallback - if requestIdleCallback doesn't fire within 2 seconds, execute anyway
-                // Commented out to reduce console flooding
-                // console.log('[ScanEngineService] 🔍 [PHASE 5] Setting up requestIdleCallback with 2s timeout fallback...');
-                const timeoutId = setTimeout(() => {
-                    if (!resolved) {
-                        console.log('[AutoScannerService] ⚠️ requestIdleCallback timeout - executing evaluation immediately');
-                        performEvaluation();
-                    }
-                }, 2000);
-
-                // Use requestIdleCallback if available, otherwise execute immediately
-                if (typeof requestIdleCallback !== 'undefined') {
-                    // Commented out to reduce console flooding
-                    // console.log('[ScanEngineService] 🔍 [PHASE 5] Using requestIdleCallback...');
-                    requestIdleCallback(() => {
-                        // Commented out to reduce console flooding
-                        // console.log('[ScanEngineService] 🔍 [PHASE 5] requestIdleCallback fired, clearing timeout and executing...');
-                        clearTimeout(timeoutId);
-                        performEvaluation();
-                    }, { timeout: 1000 });
-                } else {
-                    // Commented out to reduce console flooding
-                    // console.log('[ScanEngineService] 🔍 [PHASE 5] requestIdleCallback not available, using setTimeout fallback...');
-                    // Fallback for browsers without requestIdleCallback
-                    clearTimeout(timeoutId);
-                    setTimeout(performEvaluation, 0);
-                }
-            });
             
             phaseTimings.strategyEvaluation = Date.now() - evaluationStartTime;
+            console.log(`[ScanEngineService] ⏱️ [PHASE 5] Strategy Evaluation END: ${phaseTimings.strategyEvaluation}ms (${(phaseTimings.strategyEvaluation/1000).toFixed(2)}s) - ${scanResult.signalsFound} signals, ${scanResult.tradesExecuted} trades`);
 
             if (this.scannerService.isHardResetting) {
                 console.warn('[AutoScannerService] Cycle aborted after signal detection.');
@@ -462,21 +448,25 @@ export class ScanEngineService {
 
             // PHASE 6: Trade Archiving
             const archivingStartTime = Date.now();
-            console.log('[AutoScannerService] 📦 Archiving old trades...');
+            console.log(`[ScanEngineService] ⏱️ [PHASE 6] Trade Archiving START`);
             await this.scannerService._archiveOldTradesIfNeeded();
             phaseTimings.tradeArchiving = Date.now() - archivingStartTime;
+            console.log(`[ScanEngineService] ⏱️ [PHASE 6] Trade Archiving END: ${phaseTimings.tradeArchiving}ms (${(phaseTimings.tradeArchiving/1000).toFixed(2)}s)`);
 
             // PHASE 7: Performance Snapshot & Wallet Update
             const snapshotStartTime = Date.now();
-            console.log('[AutoScannerService] 📈 Updating performance metrics and wallet state...');
+            console.log(`[ScanEngineService] ⏱️ [PHASE 7] Performance Snapshot START`);
             await this.scannerService._updatePerformanceSnapshotIfNeeded(cycleStats);
             phaseTimings.performanceSnapshot = Date.now() - snapshotStartTime;
+            console.log(`[ScanEngineService] ⏱️ [PHASE 7] Performance Snapshot END: ${phaseTimings.performanceSnapshot}ms (${(phaseTimings.performanceSnapshot/1000).toFixed(2)}s)`);
 
             const summaryMessage = `✅ Scan cycle complete: ${scanResult.signalsFound} signals found, ${scanResult.tradesExecuted} trades executed.`;
             console.log(`[AutoScannerService] ${summaryMessage}`);
 
             // Emit end-of-cycle summary logs (wallet snapshot, metrics, blocked reasons, etc.)
+            const logSummaryStartTime = Date.now();
             await this._logCycleSummary(cycleStats);
+            phaseTimings.logSummary = Date.now() - logSummaryStartTime;
 
         } catch (error) {
             const isCriticalError = error.message && (
@@ -507,8 +497,67 @@ export class ScanEngineService {
             this.scannerService.state.error = error.message;
             this.scannerService.state.errorSource = 'scanCycle';
         } finally {
+            // Track operations in finally block
+            const finallyStartTime = Date.now();
+            const phasesEndTime = finallyStartTime;
+            
+            // Check tab visibility (browser throttling detection)
+            const isTabVisible = typeof document !== 'undefined' && !document.hidden;
+            const visibilityWarning = !isTabVisible ? ' ⚠️ TAB INACTIVE (browser throttling may affect timing)' : '';
+            
             // Update stats
             const scanDuration = Date.now() - cycleStartTime;
+            const trackedPhaseTime = (phaseTimings.preScan || 0) +
+                                    (phaseTimings.marketRegime || 0) + 
+                                    (phaseTimings.priceFetching || 0) + 
+                                    (phaseTimings.dustDetection || 0) +
+                                    (phaseTimings.positionMonitoring || 0) + 
+                                    (phaseTimings.strategyLoading || 0) + 
+                                    (phaseTimings.strategyEvaluation || 0) + 
+                                    (phaseTimings.tradeArchiving || 0) + 
+                                    (phaseTimings.performanceSnapshot || 0) +
+                                    (phaseTimings.logSummary || 0);
+            
+            console.log(`[ScanEngineService] ⏱️ ========== SCAN CYCLE END ========== Total: ${scanDuration}ms (${(scanDuration/1000).toFixed(2)}s)${visibilityWarning}`);
+            console.log(`[ScanEngineService] ⏱️ Phase Breakdown:`);
+            if (phaseTimings.preScan > 0) {
+                console.log(`[ScanEngineService] ⏱️   - Pre-Scan (leadership + wallet save): ${phaseTimings.preScan}ms (${(phaseTimings.preScan/1000).toFixed(2)}s)`);
+                if (phaseTimings.leadershipCheck > 0) {
+                    console.log(`[ScanEngineService] ⏱️     └─ Leadership Check: ${phaseTimings.leadershipCheck}ms`);
+                }
+                if (phaseTimings.walletSaveWait > 0) {
+                    console.log(`[ScanEngineService] ⏱️     └─ Wallet Save Wait: ${phaseTimings.walletSaveWait}ms`);
+                }
+            }
+            console.log(`[ScanEngineService] ⏱️   - Market Regime: ${phaseTimings.marketRegime || 0}ms (${((phaseTimings.marketRegime || 0)/1000).toFixed(2)}s)`);
+            console.log(`[ScanEngineService] ⏱️   - Price Fetching: ${phaseTimings.priceFetching || 0}ms (${((phaseTimings.priceFetching || 0)/1000).toFixed(2)}s)`);
+            if (phaseTimings.dustDetection > 0) {
+                console.log(`[ScanEngineService] ⏱️   - Dust Detection & Aggregation: ${phaseTimings.dustDetection}ms (${(phaseTimings.dustDetection/1000).toFixed(2)}s)`);
+            }
+            console.log(`[ScanEngineService] ⏱️   - Position Monitoring: ${phaseTimings.positionMonitoring || 0}ms (${((phaseTimings.positionMonitoring || 0)/1000).toFixed(2)}s)`);
+            console.log(`[ScanEngineService] ⏱️   - Strategy Loading: ${phaseTimings.strategyLoading || 0}ms (${((phaseTimings.strategyLoading || 0)/1000).toFixed(2)}s)`);
+            console.log(`[ScanEngineService] ⏱️   - Strategy Evaluation: ${phaseTimings.strategyEvaluation || 0}ms (${((phaseTimings.strategyEvaluation || 0)/1000).toFixed(2)}s)`);
+            console.log(`[ScanEngineService] ⏱️   - Trade Archiving: ${phaseTimings.tradeArchiving || 0}ms (${((phaseTimings.tradeArchiving || 0)/1000).toFixed(2)}s)`);
+            console.log(`[ScanEngineService] ⏱️   - Performance Snapshot: ${phaseTimings.performanceSnapshot || 0}ms (${((phaseTimings.performanceSnapshot || 0)/1000).toFixed(2)}s)`);
+            if (phaseTimings.logSummary > 0) {
+                console.log(`[ScanEngineService] ⏱️   - Log Summary: ${phaseTimings.logSummary}ms (${(phaseTimings.logSummary/1000).toFixed(2)}s)`);
+            }
+            
+            const otherTime = scanDuration - trackedPhaseTime;
+            const otherTimePercent = scanDuration > 0 ? ((otherTime / scanDuration) * 100).toFixed(1) : 0;
+            
+            if (otherTime > 10000) { // Warn if overhead > 10 seconds
+                console.warn(`[ScanEngineService] ⚠️ Large Other/Overhead detected: ${otherTime}ms (${(otherTime/1000).toFixed(2)}s, ${otherTimePercent}%)`);
+                if (!isTabVisible) {
+                    console.warn(`[ScanEngineService] ⚠️ Tab is INACTIVE - browser throttling likely causing delays`);
+                }
+                console.warn(`[ScanEngineService] ⚠️ This may indicate: browser throttling, async operations, or missing phase tracking`);
+            }
+            
+            console.log(`[ScanEngineService] ⏱️   - Other/Overhead: ${otherTime}ms (${(otherTime/1000).toFixed(2)}s, ${otherTimePercent}%)${visibilityWarning}`);
+            
+            // Track finally block operations
+            const statsUpdateStart = Date.now();
             this.scannerService.state.stats.totalScanCycles++;
             this.scannerService.state.stats.lastScanTimeMs = scanDuration;
 
@@ -518,34 +567,52 @@ export class ScanEngineService {
             } else {
                 this.scannerService.state.stats.averageScanTimeMs = (this.scannerService.state.stats.averageScanTimeMs * 0.8) + (scanDuration * 0.2);
             }
+            const statsUpdateTime = Date.now() - statsUpdateStart;
 
             console.log(`[AutoScannerService] ⏱️ Scan cycle completed in ${(scanDuration / 1000).toFixed(2)}s (avg: ${(this.scannerService.state.stats.averageScanTimeMs / 1000).toFixed(2)}s)`, { duration: scanDuration });
 
-            // NEW: Persist updated stats to localStorage immediately after cycle completion
+            // Track storage save
+            const storageStart = Date.now();
             this.scannerService._saveStateToStorage();
+            const storageTime = Date.now() - storageStart;
 
             this.scannerService.state.isScanning = false;
 
-            // NEW: Notify subscribers immediately after stats update to ensure UI reflects changes
+            // Track notifications
+            const notifyStart = Date.now();
             this.scannerService.notifySubscribers();
+            const notifyTime = Date.now() - notifyStart;
 
+            // Track heartbeat
+            let heartbeatTime = 0;
             if (this.scannerService.state.isRunning) {
                 try {
+                    const heartbeatStart = Date.now();
                     await this.scannerService.sessionManager.claimLeadership();
+                    heartbeatTime = Date.now() - heartbeatStart;
                 } catch (heartbeatError) {
                     console.warn(`[AutoScannerService] ⚠️ Post-scan heartbeat failed: ${heartbeatError.message}`);
                 }
             }
 
+            // Track countdown start
+            const countdownStart = Date.now();
             if (this.scannerService.state.isRunning && !this.scannerService.isHardResetting) {
                 this.scannerService.lifecycleService._startCountdown();
             } else {
                 console.log('[ScanEngineService] ⏸️ Not starting new countdown as scanner is stopped or resetting.');
                 console.log('[ScanEngineService] ⏸️ Reason:', !this.scannerService.state.isRunning ? 'Scanner not running' : 'Scanner is hard resetting');
             }
+            const countdownTime = Date.now() - countdownStart;
 
-            // Final notification at end of cycle
+            // Final notification
             this.scannerService.notifySubscribers();
+            
+            const finallyBlockTime = Date.now() - finallyStartTime;
+            if (finallyBlockTime > 1000) {
+                console.log(`[ScanEngineService] ⏱️ Finally block operations: ${finallyBlockTime}ms (stats: ${statsUpdateTime}ms, storage: ${storageTime}ms, notify: ${notifyTime}ms, heartbeat: ${heartbeatTime}ms, countdown: ${countdownTime}ms)`);
+            }
+            
             console.log('[AutoScannerService] ===== SCAN CYCLE COMPLETE =====');
             this.addLog('✅ Scan cycle completed successfully', 'cycle');
         }
@@ -604,7 +671,7 @@ export class ScanEngineService {
     async _monitorPositions(cycleStats) {
         const _monitorStartTime = Date.now();
         const functionId = `_monitor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        console.log(`[ScanEngineService] [MONITOR] 🚀 [${functionId}] Starting _monitorPositions (0ms)`);
+        console.log(`[ScanEngineService] ⏱️ [_monitorPositions] START ${new Date().toISOString()}`);
         
         // CRITICAL: Force async continuation to ensure promise resolves
         await new Promise(resolve => {
@@ -726,8 +793,6 @@ export class ScanEngineService {
                 if (symbolsNeedingIndicators.size > 0) {
                     // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] symbolsNeedingIndicators.size > 0 is TRUE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
                         const _step6b_start = Date.now();
-                        console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6b: Calculating indicators for ${symbolsNeedingIndicators.size} symbols (${Date.now() - _monitorStartTime}ms since start)`);
-                        console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] Symbols:`, Array.from(symbolsNeedingIndicators.keys()));
                     
                     // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO CREATE preloadPromises (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
                     const preloadPromises = Array.from(symbolsNeedingIndicators.entries()).map(([symbolNoSlash, timeframe], index) => {
@@ -797,15 +862,12 @@ export class ScanEngineService {
                         // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO AWAIT Promise.allSettled (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
                         // console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6c: Waiting for ${preloadPromises.length} preload promises (${Date.now() - _monitorStartTime}ms since start)`);
                     const preloadResults = await Promise.allSettled(preloadPromises);
-                    // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] Promise.allSettled COMPLETE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
-                        console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6c complete: Preload promises settled (${Date.now() - _step6c_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
                     const successful = preloadResults.filter(r => r.status === 'fulfilled' && r.value?.success).length;
                     const failed = preloadResults.length - successful;
                     
                     if (successful > 0) {
                         console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] ✅ Successfully preloaded indicators for ${successful} symbol${successful !== 1 ? 's' : ''}${failed > 0 ? ` (${failed} failed)` : ''}`);
                     }
-                        console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 6b complete: Indicator preload finished (${Date.now() - _step6b_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
                     } else {
                     // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] symbolsNeedingIndicators.size > 0 is FALSE (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
                     // console.log(`[ScanEngineService] [MONITOR] [INDICATOR_PRELOAD] No symbols need indicator preloading`);
@@ -827,12 +889,9 @@ export class ScanEngineService {
         // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER Step 6 TRY-CATCH BLOCK (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
         // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] BEFORE Step 7 (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
         const _step7_start = Date.now();
-        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] ABOUT TO LOG Step 7 (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
-        // console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7: About to call monitorAndClosePositions (${Date.now() - _monitorStartTime}ms since start)`);
-        // console.error(`[ScanEngineService] [MONITOR] 🔴🔴🔴 [${functionId}] AFTER Step 7 LOG (${Date.now() - _monitorStartTime}ms) 🔴🔴🔴`);
+        console.log(`[ScanEngineService] ⏱️ [_monitorPositions] Step 7: monitorAndClosePositions START (${Date.now() - _monitorStartTime}ms since start)`);
         let monitorResult;
         try {
-                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7a: CALLING monitorAndClosePositions NOW (${Date.now() - _monitorStartTime}ms since start)`);
                 console.log('[ScanEngineService] [MONITOR] 🔍 Function exists:', typeof positionManager.monitorAndClosePositions);
                 console.log('[ScanEngineService] [MONITOR] 🔍 PositionManager object:', !!positionManager);
                 console.log('[ScanEngineService] [MONITOR] 🔍 About to call the function...');
@@ -843,43 +902,47 @@ export class ScanEngineService {
             // - executeBatchClose: up to 60 seconds
             // - Reconciliation and other operations: buffer
             // - Safety margin for network delays, processing overhead
-            // Total: 300 seconds (5 minutes) to be safe
-                console.log('[ScanEngineService] [MONITOR] 🔍 Setting up 300s timeout for monitorAndClosePositions...');
+            // Total: 600 seconds (10 minutes) to handle large position counts (94+ positions)
+            // Note: With 94 positions, even with optimizations, monitoring can take 5-8 minutes
+                const positionCount = positionManager?.positions?.length || 0;
+                const timeoutSeconds = positionCount > 50 ? 600 : 300; // Increase timeout for large position counts
+                console.log(`[ScanEngineService] [MONITOR] 🔍 Setting up ${timeoutSeconds}s timeout for monitorAndClosePositions (${positionCount} positions)...`);
             let timeoutId;
             const timeoutPromise = new Promise((_, reject) => {
                     timeoutId = setTimeout(() => {
-                        console.error('[ScanEngineService] [MONITOR] ⏱️ TIMEOUT: monitorAndClosePositions exceeded 300 seconds!');
-                        console.error('[ScanEngineService] [MONITOR] ⏱️ This indicates the function is taking longer than expected. Check logs for bottlenecks.');
-                        reject(new Error('monitorAndClosePositions timeout after 300 seconds'));
-                    }, 300000);
+                        console.error(`[ScanEngineService] [MONITOR] ⏱️ TIMEOUT: monitorAndClosePositions exceeded ${timeoutSeconds} seconds!`);
+                        console.error(`[ScanEngineService] [MONITOR] ⏱️ This indicates the function is taking longer than expected. Check logs for bottlenecks.`);
+                        console.error(`[ScanEngineService] [MONITOR] ⏱️ Position count: ${positionCount}, isMonitoring: ${positionManager?.isMonitoring}`);
+                        reject(new Error(`monitorAndClosePositions timeout after ${timeoutSeconds} seconds`));
+                    }, timeoutSeconds * 1000);
                 });
                 
-                const _step7b_start = Date.now();
-                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7b: Getting current prices (${Date.now() - _monitorStartTime}ms since start)`);
                 const currentPrices = priceManagerService.currentPrices;
-                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7b complete: Current prices retrieved (${Date.now() - _step7b_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
-                
-                const _step7c_start = Date.now();
-                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7c: Calling monitorAndClosePositions (${Date.now() - _monitorStartTime}ms since start)`);
                 const monitorPromise = positionManager.monitorAndClosePositions(currentPrices);
-                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7c complete: monitorAndClosePositions promise created (${Date.now() - _step7c_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
-                
-                const _step7d_start = Date.now();
-                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7d: Awaiting monitorAndClosePositions (${Date.now() - _monitorStartTime}ms since start)`);
             try {
             monitorResult = await Promise.race([monitorPromise, timeoutPromise]);
                 // Clear timeout if promise resolved before timeout
                 if (timeoutId) {
                     clearTimeout(timeoutId);
-                    console.log(`[ScanEngineService] [MONITOR] ✅ Timeout cleared - monitorAndClosePositions completed successfully (${Date.now() - _step7d_start}ms)`);
                 }
-                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 7d complete: monitorAndClosePositions completed (${Date.now() - _step7d_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
+                const step7Duration = Date.now() - _step7_start;
+                console.log(`[ScanEngineService] ⏱️ [_monitorPositions] Step 7: monitorAndClosePositions END: ${step7Duration}ms (${(step7Duration/1000).toFixed(2)}s)`);
             } catch (raceError) {
                 // Clear timeout on error
                 if (timeoutId) {
                     clearTimeout(timeoutId);
-                    console.error(`[ScanEngineService] [MONITOR] ⚠️ Timeout cleared after error - monitorAndClosePositions failed (${Date.now() - _step7d_start}ms)`);
                 }
+                
+                // CRITICAL FIX: Ensure isMonitoring flag is cleared even on timeout
+                // This prevents the function from being permanently blocked
+                if (positionManager && typeof positionManager.isMonitoring !== 'undefined') {
+                    const wasMonitoring = positionManager.isMonitoring;
+                    positionManager.isMonitoring = false;
+                    if (wasMonitoring) {
+                        console.warn(`[ScanEngineService] [MONITOR] 🔓 Force-cleared isMonitoring flag after timeout`);
+                    }
+                }
+                
                 throw raceError;
             }
             
@@ -897,6 +960,17 @@ export class ScanEngineService {
                     positions: scannerService.positionManager?.positions?.length || 0,
                     isMonitoring: scannerService.positionManager?.isMonitoring
             });
+            
+            // CRITICAL FIX: Ensure isMonitoring flag is cleared even on outer error
+            // This prevents the function from being permanently blocked
+            if (scannerService.positionManager && typeof scannerService.positionManager.isMonitoring !== 'undefined') {
+                const wasMonitoring = scannerService.positionManager.isMonitoring;
+                scannerService.positionManager.isMonitoring = false;
+                if (wasMonitoring) {
+                    console.warn(`[ScanEngineService] [MONITOR] 🔓 Force-cleared isMonitoring flag after outer error`);
+                }
+            }
+            
             throw monitorError;
         } finally {
             try {
@@ -914,33 +988,15 @@ export class ScanEngineService {
 
         if (tradesWereClosed) {
                 const _step8_start = Date.now();
-                console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8: Refreshing wallet state (${Date.now() - _monitorStartTime}ms since start)`);
 
                 try {
-                    const _step8a_start = Date.now();
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8a: initializeLiveWallet (${Date.now() - _monitorStartTime}ms since start)`);
                     await scannerService.walletManagerService.initializeLiveWallet();
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8a complete (${Date.now() - _step8a_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
-
-                    const _step8b_start = Date.now();
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8b: updateWalletSummary (${Date.now() - _monitorStartTime}ms since start)`);
                     await scannerService.walletManagerService.updateWalletSummary(
-                    this._getCurrentWalletState(),
+                        this._getCurrentWalletState(),
                         scannerService.priceManagerService.currentPrices
                     );
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8b complete (${Date.now() - _step8b_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
-
-                    const _step8c_start = Date.now();
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8c: _persistLatestWalletSummary (${Date.now() - _monitorStartTime}ms since start)`);
                     await scannerService._persistLatestWalletSummary();
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8c complete (${Date.now() - _step8c_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
-
-                    const _step8d_start = Date.now();
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8d: notifyWalletSubscribers (${Date.now() - _monitorStartTime}ms since start)`);
                     scannerService.notifyWalletSubscribers();
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8d complete (${Date.now() - _step8d_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
-
-                    console.log(`[ScanEngineService] [MONITOR] [TIMING] Step 8 complete: Wallet state refreshed (${Date.now() - _step8_start}ms, ${Date.now() - _monitorStartTime}ms total)`);
             } catch (refreshError) {
                 console.error('[AutoScannerService] ❌ Failed to refresh wallet after trades:', refreshError);
                 console.warn(`[AutoScannerService] [MONITOR] ⚠️ Wallet refresh warning: ${refreshError.message}`);
@@ -1110,7 +1166,7 @@ export class ScanEngineService {
         // No need for duplicate calls here
         
         const _totalTime = Date.now() - _monitorStartTime;
-        console.log(`[ScanEngineService] [MONITOR] [${functionId}] ✅ _monitorPositions completed successfully in ${(_totalTime/1000).toFixed(1)}s`);
+        console.log(`[ScanEngineService] ⏱️ [_monitorPositions] END: Total ${_totalTime}ms (${(_totalTime/1000).toFixed(2)}s)`);
         return monitorResult;
         } catch (functionError) {
             const errorTime = Date.now() - _monitorStartTime;
@@ -1282,36 +1338,170 @@ export class ScanEngineService {
 
         const absorbReason = (reason, value) => {
             const count = sumVal(value);
+            if (count <= 0) return; // Skip zero or invalid counts
+            
             const r = String(reason || '').toLowerCase();
-            if (r.includes('combined') && r.includes('strength')) combinedStrengthBelow += count;
-            else if (r.includes('conviction')) convictionBelowDynamic += count;
-            else if (r.includes('insufficient') || (r.includes('remaining') && r.includes('balance'))) insufficientRemainingCap += count;
-            else if (r.includes('balance') && r.includes('limit')) balanceBelowLimit += count;
-            else if (r.includes('regime') && r.includes('mismatch')) regimeMismatch += count;
-            else otherBlocks += count;
+            
+            // Combined strength - check for both words or variations
+            if ((r.includes('combined') && r.includes('strength')) || 
+                r.includes('strength below minimum') ||
+                r.includes('strength below threshold')) {
+                combinedStrengthBelow += count;
+            }
+            // Conviction score - check for conviction keyword
+            // Match: "conviction", "conviction score", "below dynamic threshold" with conviction context
+            else if (r.includes('conviction') || 
+                     r.includes('conviction score') ||
+                     (r.includes('below') && r.includes('threshold') && r.includes('conviction'))) {
+                convictionBelowDynamic += count;
+            }
+            // Insufficient remaining balance/cap - check for remaining balance or cap
+            // Match: "insufficient remaining", "not enough remaining", "remaining balance", "remaining cap", etc.
+            else if (r.includes('insufficient remaining') || 
+                     r.includes('not enough remaining') ||
+                     (r.includes('remaining') && (r.includes('balance') || r.includes('cap') || r.includes('threshold'))) ||
+                     (r.includes('remaining') && r.includes('to threshold'))) {
+                insufficientRemainingCap += count;
+            }
+            // Balance below limit - check for balance and limit together
+            // Match: "balance below limit", "below limit of", "balance" + "limit", etc.
+            else if ((r.includes('balance') && r.includes('limit')) ||
+                     r.includes('balance below limit') ||
+                     r.includes('below limit of') ||
+                     (r.includes('balance') && r.includes('below') && r.includes('limit'))) {
+                balanceBelowLimit += count;
+            }
+            // Regime mismatch - check for regime and mismatch or "doesn't match"
+            else if ((r.includes('regime') && (r.includes('mismatch') || r.includes("doesn't match") || r.includes('does not match'))) ||
+                     r.includes('regime mismatch') ||
+                     (r.includes('strategy regime') && r.includes('market regime'))) {
+                regimeMismatch += count;
+            }
+            // All other reasons
+            else {
+                otherBlocks += count;
+            }
         };
 
+        // Process blockReasons first
         for (const [reason, value] of Object.entries(blockReasons)) {
             absorbReason(reason, value);
         }
         // Many pre-evaluation rejections are logged as skipReasons; include them too
+        // Pre-evaluation blocks should be counted in the breakdown
         for (const [reason, value] of Object.entries(skipReasons)) {
-            absorbReason(reason, value);
+            const r = String(reason || '').toLowerCase();
+            // Process skipReasons that are actually blocking reasons (not just data issues)
+            // Include: regime mismatches, balance issues, combined strength, conviction, max positions, coin issues, etc.
+            // Exclude: data issues like "Insufficient kline data", "price not available", etc.
+            if (r.includes('regime') || 
+                r.includes('balance') || 
+                r.includes('combined') || 
+                r.includes('strength') ||
+                r.includes('conviction') || 
+                r.includes('insufficient') || 
+                r.includes('remaining') ||
+                r.includes('cap') ||
+                r.includes('max positions') ||
+                r.includes('limit') ||
+                (r.includes('coin') && (r.includes('not found') || r.includes('not trading'))) ||
+                r.includes('post-evaluation')) {
+                absorbReason(reason, value);
+            }
         }
 
         const blockedTotal = combinedStrengthBelow + convictionBelowDynamic + balanceBelowLimit + insufficientRemainingCap + regimeMismatch + otherBlocks;
 
-        // Debug once per session to verify blockReasons shape
+        // Debug logging to verify blockReasons shape and counts
         try {
             if (typeof window !== 'undefined' && !window.__blockedReasonsSampled) {
                 window.__blockedReasonsSampled = true;
-                // console.log('[BLOCK_REASONS_SAMPLE]', { blockReasons, combinedStrengthBelow, convictionBelowDynamic, balanceBelowLimit, insufficientRemainingCap, regimeMismatch, otherBlocks });
+                //console.log('[BLOCK_REASONS_DEBUG] blockReasons:', blockReasons);
+                //console.log('[BLOCK_REASONS_DEBUG] skipReasons:', skipReasons);
+                /*console.log('[BLOCK_REASONS_DEBUG] Counts:', {
+                    combinedStrengthBelow,
+                    convictionBelowDynamic,
+                    balanceBelowLimit,
+                    insufficientRemainingCap,
+                    regimeMismatch,
+                    otherBlocks,
+                    blockedTotal
+                });*/
+                
+                // Log sample of reasons that went to "otherBlocks" to help identify patterns
+                const otherReasonsSample = [];
+                const allReasons = { ...blockReasons, ...skipReasons };
+                for (const [reason, value] of Object.entries(allReasons)) {
+                    const r = String(reason || '').toLowerCase();
+                    // Check if this reason would NOT match any specific category
+                    const isOther = !(
+                        (r.includes('combined') && r.includes('strength')) ||
+                        r.includes('conviction') ||
+                        (r.includes('remaining') && (r.includes('balance') || r.includes('cap') || r.includes('threshold'))) ||
+                        (r.includes('balance') && r.includes('limit')) ||
+                        (r.includes('regime') && (r.includes('mismatch') || r.includes("doesn't match")))
+                    );
+                    if (isOther && otherReasonsSample.length < 10) {
+                        otherReasonsSample.push({ reason, count: sumVal(value) });
+                    }
+                }
+                if (otherReasonsSample.length > 0) {
+                    console.log('[BLOCK_REASONS_DEBUG] Sample reasons categorized as "other":', otherReasonsSample);
+                }
             }
         } catch(_) {}
+        
+        // Additional debug: Calculate what should be counted from skipReasons
+        const countedSkipReasons = Object.entries(skipReasons).filter(([reason]) => {
+            const r = String(reason || '').toLowerCase();
+            return r.includes('regime') || 
+                r.includes('balance') || 
+                r.includes('combined') || 
+                r.includes('strength') ||
+                r.includes('conviction') || 
+                r.includes('insufficient') || 
+                r.includes('remaining') ||
+                r.includes('cap') ||
+                r.includes('max positions') ||
+                r.includes('limit') ||
+                (r.includes('coin') && (r.includes('not found') || r.includes('not trading'))) ||
+                r.includes('post-evaluation');
+        });
+        const countedSkipTotal = countedSkipReasons.reduce((sum, [, value]) => sum + sumVal(value), 0);
+        const rawBlockTotal = Object.values(blockReasons).reduce((sum, v) => sum + sumVal(v), 0);
+        const expectedTotal = rawBlockTotal + countedSkipTotal;
+        
+        // Only warn if there's a significant mismatch (allow small rounding differences)
+        if (Math.abs(blockedTotal - expectedTotal) > 5 && blockedTotal > 0) {
+            console.warn('[BLOCK_REASONS_MISMATCH]', {
+                blockedTotal,
+                rawBlockTotal,
+                countedSkipTotal,
+                expectedTotal,
+                difference: blockedTotal - expectedTotal,
+                blockReasons,
+                skipReasons: Object.fromEntries(countedSkipReasons)
+            });
+        }
+        // CRITICAL FIX: Use the same dynamic conviction calculation as SignalDetectionEngine
+        // This ensures consistency between the actual filtering and the logging
         const baseConv = this.scannerService.state?.settings?.minimumConvictionScore ?? 50;
-        const lpmScore = Math.round(this.scannerService.state?.performanceMomentumScore ?? 0);
-        const lpmAdj = Math.max(0, Math.round(lpmScore / 10)); // e.g., 66 -> +6
-        const dynConv = baseConv + lpmAdj;
+        const lpmScore = Number(this.scannerService.state?.performanceMomentumScore ?? 0);
+        
+        // Use the same logic as computeDynamicConvictionThreshold in SignalDetectionEngine.jsx
+        const NEUTRAL_LPM_SCORE = 50;
+        const LPM_ADJUSTMENT_FACTOR = 0.5;
+        
+        let dynConv = baseConv;
+        if (Number.isFinite(lpmScore) && Number.isFinite(baseConv)) {
+            const deviation = lpmScore - NEUTRAL_LPM_SCORE; // Range: -50 to +50
+            const adjustment = deviation * LPM_ADJUSTMENT_FACTOR; // Range: -25 to +25
+            const dynamic = baseConv - adjustment; // Higher LPM = lower conviction needed
+            // CRITICAL FIX: Clamp between 0 and 100 (allows going below base when LPM is high)
+            dynConv = Math.min(100, Math.max(0, dynamic));
+        }
+        
+        const lpmAdj = Number.isFinite(lpmScore) ? (dynConv - baseConv) : 0;
 
         {
             const mrNow = this.scannerService.state?.marketRegime?.regime || 'unknown';
@@ -1321,7 +1511,7 @@ export class ScanEngineService {
                 '═══════════════════════════════════════════════════════',
                 `${blockedTotal} strategies were blocked`,
                 `${combinedStrengthBelow} strategies blocked: combined strength below threshold`,
-                `${convictionBelowDynamic} strategies blocked: conviction score below dynamic threshold (${dynConv}: base ${baseConv} + LPM ${lpmAdj})`,
+                `${convictionBelowDynamic} strategies blocked: conviction score below dynamic threshold (${dynConv.toFixed(1)}: base ${baseConv} + LPM adjustment ${lpmAdj > 0 ? '+' : ''}${lpmAdj.toFixed(1)}, LPM: ${Number.isFinite(lpmScore) ? lpmScore.toFixed(1) : 'N/A'})`,
                 `${balanceBelowLimit} strategies blocked: balance below limit of ${maxCap}`,
                 `${insufficientRemainingCap} strategies blocked: not enough remaining balance to threshold`,
                 `${regimeMismatch} strategies blocked: regime mismatch (market: ${mrNow})`,
@@ -1369,6 +1559,13 @@ export class ScanEngineService {
         this.addLog('═══════════════════════════════════════════════════════', 'cycle');
         this.addLog('🏦 WALLET SUMMARY', 'cycle');
         this.addLog('═══════════════════════════════════════════════════════', 'cycle');
+
+        // Log max cap blocking status if applicable
+        if (cycleStats.maxCapReached) {
+            const allocated = this.scannerService._formatCurrency(cycleStats.maxCapAllocated || this.scannerService._getBalanceAllocatedInTrades());
+            const cap = this.scannerService._formatCurrency(cycleStats.maxCapLimit || this.scannerService.state?.settings?.maxBalanceInvestCapUSDT || 0);
+            this.addLog(`🚫 All position opening is blocked due to exceeding max cap (Allocated: ${allocated} ≥ Cap: ${cap}). Position monitoring continues.`, 'warning');
+        }
 
         await this._logWalletSummary();
 

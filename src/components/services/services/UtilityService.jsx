@@ -160,10 +160,16 @@ export class UtilityService {
         this.scannerService.state.isScanning = false;
         this.scannerService.state.nextScanTime = null;
 
-        // Clear countdown interval
-        if (this.scannerService.lifecycleService.countdownInterval) {
-            clearInterval(this.scannerService.lifecycleService.countdownInterval);
-            this.scannerService.lifecycleService.countdownInterval = null;
+        // Stop countdown timer (both background and main thread)
+        if (this.scannerService.lifecycleService && typeof this.scannerService.lifecycleService._stopCountdown === 'function') {
+            this.scannerService.lifecycleService._stopCountdown();
+        } else {
+            // Fallback: Clear countdown interval manually
+            if (this.scannerService.lifecycleService && this.scannerService.lifecycleService.countdownInterval) {
+                clearInterval(this.scannerService.lifecycleService.countdownInterval);
+                clearTimeout(this.scannerService.lifecycleService.countdownInterval);
+                this.scannerService.lifecycleService.countdownInterval = null;
+            }
         }
 
         // Stop heartbeat service

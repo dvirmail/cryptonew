@@ -32,69 +32,59 @@ export default function WalletStatusWidget() {
                 setDbPnlLoading(true);
                 const tradingMode = isLiveMode ? 'live' : 'testnet';
                 
-                // Use same query as ScanEngineService._logWalletSummary
-                const allTrades = await queueEntityCall('Trade', 'filter', 
-                    { trading_mode: tradingMode }, 
-                    '-exit_timestamp', 
-                    10000
-                ).catch(() => []);
+                // CRITICAL: Use direct database endpoint to bypass in-memory array limitations
+                // This matches the SQL query exactly: WHERE exit_timestamp IS NOT NULL AND entry_price > 0 AND quantity > 0
+                const response = await fetch(`http://localhost:3003/api/trades/direct-db?trading_mode=${tradingMode}`).catch(() => null);
+                if (!response || !response.ok) {
+                    console.error('[WalletStatusWidget] ❌ Failed to fetch from direct-db endpoint, falling back to queueEntityCall');
+                    // Fallback to queueEntityCall
+                    const allTrades = await queueEntityCall('Trade', 'filter', 
+                        { trading_mode: tradingMode }, 
+                        '-exit_timestamp', 
+                        10000
+                    ).catch(() => []);
+                    if (allTrades && allTrades.length > 0) {
+                        // Process fallback trades...
+                        const closedTrades = allTrades.filter(t => {
+                            return t?.exit_timestamp != null 
+                                && Number(t?.entry_price) > 0 
+                                && Number(t?.quantity || t?.quantity_crypto) > 0;
+                        });
+                        const computedPnl = closedTrades.reduce((sum, t) => {
+                            const pnl = Number(t?.pnl_usdt) || 0;
+                            if (isNaN(pnl) || t?.pnl_usdt === null || t?.pnl_usdt === undefined) {
+                                return sum;
+                            }
+                            return sum + pnl;
+                        }, 0);
+                        setDirectDbPnl(computedPnl);
+                    }
+                    return;
+                }
+                
+                const result = await response.json();
+                const allTrades = result.success && result.data ? result.data : [];
                 
                 if (allTrades && allTrades.length > 0) {
-                    // CRITICAL FIX: Deduplicate trades BEFORE calculating P&L to prevent inflated totals
-                    // This matches the DailyPerformanceChart logic and ensures accuracy
-                    const closedTrades = allTrades.filter(t => t?.exit_timestamp != null);
+                    // CRITICAL: Direct DB endpoint already applies SQL query filters, but double-check
+                    // SQL query: SUM(pnl_usdt) WHERE exit_timestamp IS NOT NULL AND entry_price > 0 AND quantity > 0
+                    const closedTrades = allTrades.filter(t => {
+                        // Match SQL query filters exactly (endpoint should already filter, but verify)
+                        return t?.exit_timestamp != null 
+                            && Number(t?.entry_price) > 0 
+                            && Number(t?.quantity || t?.quantity_crypto) > 0;
+                    });
                     
-                    // Deduplicate trades based on unique characteristics
-                    const seen = new Map();
-                    const uniqueTrades = [];
-                    
-                    closedTrades.forEach(trade => {
-                        if (!trade?.exit_timestamp) return;
-                        
-                        // Create a unique key based on trade characteristics
-                        // Using entry_price, exit_price, quantity, entry_timestamp, symbol, and strategy_name
-                        // Rounded values to handle floating point precision issues
-                        const entryPrice = Math.round((Number(trade.entry_price) || 0) * 10000) / 10000;
-                        const exitPrice = Math.round((Number(trade.exit_price) || 0) * 10000) / 10000;
-                        const quantity = Math.round((Number(trade.quantity_crypto) || Number(trade.quantity) || 0) * 1000000) / 1000000;
-                        const entryTs = trade.entry_timestamp ? new Date(trade.entry_timestamp).toISOString() : '';
-                        const symbol = trade.symbol || '';
-                        const strategy = trade.strategy_name || '';
-                        
-                        // Create unique key (allow 1 second tolerance for entry_timestamp)
-                        const entryDate = entryTs ? new Date(entryTs) : null;
-                        const entryDateRounded = entryDate ? new Date(Math.floor(entryDate.getTime() / 1000) * 1000).toISOString() : '';
-                        const uniqueKey = `${symbol}|${strategy}|${entryPrice}|${exitPrice}|${quantity}|${entryDateRounded}`;
-                        
-                        // Keep the first occurrence (earliest by exit_timestamp)
-                        if (!seen.has(uniqueKey)) {
-                            seen.set(uniqueKey, trade);
-                            uniqueTrades.push(trade);
-                        } else {
-                            const existing = seen.get(uniqueKey);
-                            const existingExit = existing?.exit_timestamp ? new Date(existing.exit_timestamp).getTime() : 0;
-                            const currentExit = trade?.exit_timestamp ? new Date(trade.exit_timestamp).getTime() : 0;
-                            if (currentExit > 0 && (existingExit === 0 || currentExit < existingExit)) {
-                                // Remove old and add new
-                                const index = uniqueTrades.indexOf(existing);
-                                if (index >= 0) uniqueTrades.splice(index, 1);
-                                seen.set(uniqueKey, trade);
-                                uniqueTrades.push(trade);
-                            }
+                    // Calculate P&L from ALL closed trades (no deduplication)
+                    // This matches the database SQL query: SELECT SUM(pnl_usdt) FROM trades WHERE ...
+                    const computedPnl = closedTrades.reduce((sum, t) => {
+                        const pnl = Number(t?.pnl_usdt) || 0;
+                        // Skip invalid P&L values (null, undefined, NaN)
+                        if (isNaN(pnl) || t?.pnl_usdt === null || t?.pnl_usdt === undefined) {
+                            return sum;
                         }
-                    });
-                    
-                    // Calculate P&L from deduplicated trades only
-                    const computedPnl = uniqueTrades.reduce((sum, t) => sum + (Number(t?.pnl_usdt) || 0), 0);
-                    
-                    // CRITICAL: Also calculate WITHOUT deduplication to compare with SQL query
-                    const computedPnlWithoutDedup = closedTrades.reduce((sum, t) => sum + (Number(t?.pnl_usdt) || 0), 0);
-                    
-                    // CRITICAL: Check for invalid/null/NaN pnl_usdt values
-                    const invalidPnlTrades = closedTrades.filter(t => {
-                        const pnl = Number(t?.pnl_usdt);
-                        return isNaN(pnl) || t?.pnl_usdt === null || t?.pnl_usdt === undefined;
-                    });
+                        return sum + pnl;
+                    }, 0);
                     
                     setDirectDbPnl(computedPnl);
                 }
@@ -202,10 +192,10 @@ export default function WalletStatusWidget() {
     let pnlSource = 'fallback';
     
     // PRIORITY 1: Use direct DB query result (matches activity log exactly)
-    if (directDbPnl !== null && Number.isFinite(directDbPnl)) {
-        normalizedRealized = directDbPnl;
-        pnlSource = 'directDbQuery';
-    }
+        if (directDbPnl !== null && Number.isFinite(directDbPnl)) {
+            normalizedRealized = directDbPnl;
+            pnlSource = 'directDbQuery';
+        }
     // PRIORITY 2: Fallback to recentTrades if direct DB query hasn't loaded yet
     else if (Array.isArray(recentTrades) && recentTrades.length > 0) {
         try {
@@ -295,7 +285,6 @@ export default function WalletStatusWidget() {
 
     // Render loading state only if we have no cached data and no live data
     if (loading && !cachedSummary && !isLiveTotalEquityValid && !isLiveAvailableBalanceValid) {
-        console.log('[WalletStatusWidget] 🔄 Rendering loading state - no cached data available');
         return (
             <Card className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 w-32">
                 <CardContent className="p-3">
@@ -315,7 +304,6 @@ export default function WalletStatusWidget() {
 
     // Show cached data immediately if available, even while loading
     if (loading && cachedSummary && !isLiveTotalEquityValid && !isLiveAvailableBalanceValid) {
-        console.log('[WalletStatusWidget] 📊 Showing cached data while loading live data');
         // Continue to render the main widget with cached data
     }
 

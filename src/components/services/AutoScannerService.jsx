@@ -131,7 +131,7 @@ class AutoScannerService {
                 '[BATCH_OPEN]',
                 '[BATCH_CLOSE]',
                 '[RECONCILE]',
-                '[PRICE_CONSOLIDATION]',
+                // '[PRICE_CONSOLIDATION]', // Removed to enable price fetching diagnostics
                 '[SCAN_CYCLE]',
                 '[HEARTBEAT]',
                 '[GROUP_INDICATORS]',

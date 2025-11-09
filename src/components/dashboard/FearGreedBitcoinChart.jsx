@@ -97,7 +97,7 @@ export default function FearGreedBitcoinChart({
           date: format(new Date(parseInt(item.timestamp) * 1000), 'yyyy-MM-dd')
         }));
         
-        console.log('[FearGreedBitcoinChart] Fetched Fear & Greed data:', processedData.length, 'records');
+        //console.log('[FearGreedBitcoinChart] Fetched Fear & Greed data:', processedData.length, 'records');
         return processedData;
       } else {
         console.warn('[FearGreedBitcoinChart] Invalid Fear & Greed response format:', response);
@@ -166,7 +166,7 @@ export default function FearGreedBitcoinChart({
           })
           .filter(item => item !== null); // Remove any null entries
         
-        console.log('[FearGreedBitcoinChart] Fetched Bitcoin data:', processedData.length, 'records');
+        //console.log('[FearGreedBitcoinChart] Fetched Bitcoin data:', processedData.length, 'records');
         return processedData;
       } else {
         console.warn('[FearGreedBitcoinChart] Invalid Bitcoin response format:', response);

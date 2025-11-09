@@ -36,8 +36,10 @@ function computeDynamicConvictionThreshold(settings, performanceMomentumScore) {
     const adjustment = deviation * LPM_ADJUSTMENT_FACTOR; // Range: -25 to +25
     const dynamic = base - adjustment; // Higher LPM = lower conviction needed
     
-    // Clamp between base and 100 (conviction can't exceed 100)
-    return Math.min(100, Math.max(base, dynamic));
+    // CRITICAL FIX: Clamp between 0 and 100 (allows going below base when LPM is high)
+    // When LPM > 50: dynamic can be BELOW base (more aggressive)
+    // When LPM < 50: dynamic will be ABOVE base (more conservative)
+    return Math.min(100, Math.max(0, dynamic));
 }
 
 /**
@@ -361,8 +363,14 @@ export class SignalDetectionEngine {
             this.addLog(`Strong signal found for ${strategy.combinationName}.`, 'trade_signal', { level: 2, strategy: strategy.combinationName });
 
             // --- Dynamic Conviction Threshold Logic ---
-            const performanceMomentumScore = this.scannerService?.getState()?.performanceMomentumScore;
+            // CRITICAL FIX: Get LPM score directly from state (it's stored at scannerService.state.performanceMomentumScore)
+            const performanceMomentumScore = this.scannerService?.state?.performanceMomentumScore;
             const dynamicConvictionThreshold = computeDynamicConvictionThreshold(settings, performanceMomentumScore);
+            
+            // Debug log to verify LPM score is being used
+            if (!Number.isFinite(performanceMomentumScore)) {
+                console.warn(`[SignalDetectionEngine] ⚠️ LPM score not available: ${performanceMomentumScore}. Using base conviction threshold: ${settings.minimumConvictionScore}`);
+            }
 
             this.addLog(
                 `[CONVICTION_CHECK] Strategy: ${strategy.combinationName}, Conviction: ${convictionResult.score.toFixed(1)}, Dynamic Threshold: ${dynamicConvictionThreshold.toFixed(1)} (Base: ${settings.minimumConvictionScore}, Momentum: ${Number.isFinite(performanceMomentumScore) ? performanceMomentumScore.toFixed(1) : 'N/A'})`,
@@ -1353,6 +1361,15 @@ export class SignalDetectionEngine {
         this.addLog('[SIGNAL_DETECTION] Starting scan...', 'info');
         const scanStartTime = Date.now();
         this.atrLogCounter = 0;
+        
+        // Clean expired kline cache entries before fetching new data
+        try {
+          const { cleanupExpiredKlineResponseCache } = await import('@/api/localClient');
+          cleanupExpiredKlineResponseCache();
+        } catch (error) {
+          // Silently fail - cache cleanup is not critical
+        }
+        
         if (typeof resetIndicatorManagerDebug === "function") {
             resetIndicatorManagerDebug();
         }
@@ -1929,7 +1946,21 @@ export class SignalDetectionEngine {
                 } else {
                     failedGroups++;
                     const errorMsg = result.status === 'rejected' ? result.reason.message : (result.value?.error || 'Unknown error during group processing');
+                    
+                    // Distinguish between expected failures (like insufficient data) and actual errors
+                    const isExpectedFailure = errorMsg && (
+                        errorMsg.includes('Insufficient k-line data') ||
+                        errorMsg.includes('Insufficient kline data') ||
+                        errorMsg.includes('0 candles')
+                    );
+                    
+                    if (isExpectedFailure) {
+                        // Expected failure - already logged as warning in _processStrategyGroup, just count it
+                        // Don't log again to avoid duplicate messages
+                    } else {
+                        // Actual error - log it
                     this.scannerService.addLog(`[GROUP_PROCESS_ERROR] A strategy group failed processing. Error: ${errorMsg}`, 'error');
+                    }
                 }
             }
 
@@ -1986,15 +2017,167 @@ export class SignalDetectionEngine {
                 }
             }
 
+            // QUALITY FILTER: When EBR < 50%, only open positions for top 20% by conviction
+            let qualityFilteredSignals = filteredSignals;
+            const blockedByQualityFilter = [];
+            const adjustedBalanceRiskFactor = this.scannerService.state?.adjustedBalanceRiskFactor || 100;
+            const ebrPercent = adjustedBalanceRiskFactor; // Already a percentage (0-100)
+            const shouldApplyQualityFilter = ebrPercent < 50;
+
+            // Console log for quality filter check (always visible)
+            //console.log(`[QUALITY_FILTER_CHECK] EBR: ${ebrPercent.toFixed(1)}%, Threshold: 50%, Will apply filter: ${shouldApplyQualityFilter}, Signals before filter: ${filteredSignals.length}`);
+
+            if (shouldApplyQualityFilter && filteredSignals.length > 0) {
+                // Sort signals by conviction score (descending)
+                const sortedSignals = [...filteredSignals].sort((a, b) => {
+                    const scoreA = a.convictionScore || 0;
+                    const scoreB = b.convictionScore || 0;
+                    return scoreB - scoreA; // Descending order
+                });
+                
+                // Calculate top 20% (minimum 1 signal if any exist)
+                const top20PercentCount = Math.max(1, Math.ceil(sortedSignals.length * 0.2));
+                
+                // Take top 20%
+                const top20PercentSignals = sortedSignals.slice(0, top20PercentCount);
+                
+                // Track signals blocked by top 20% filter
+                const blockedByTop20Filter = sortedSignals.slice(top20PercentCount);
+                if (blockedByTop20Filter.length > 0) {
+                    blockedByQualityFilter.push(...blockedByTop20Filter);
+                }
+                
+                // ADDITIONAL FILTER: Only keep signals with conviction score > 80
+                const CONVICTION_THRESHOLD = 80;
+                qualityFilteredSignals = top20PercentSignals.filter(signal => {
+                    const conviction = signal.convictionScore || 0;
+                    return conviction > CONVICTION_THRESHOLD;
+                });
+                
+                // Track signals blocked by conviction > 80 filter
+                const blockedByConvictionFilter = top20PercentSignals.filter(signal => {
+                    const conviction = signal.convictionScore || 0;
+                    return conviction <= CONVICTION_THRESHOLD;
+                });
+                if (blockedByConvictionFilter.length > 0) {
+                    blockedByQualityFilter.push(...blockedByConvictionFilter);
+                }
+
+                // Console log for quality filter success (always visible)
+                const blockedByTop20Count = blockedByTop20Filter.length;
+                const blockedByConvictionCount = blockedByConvictionFilter.length;
+                console.log(`[QUALITY_FILTER_SUCCESS] ✅ Filter applied: EBR ${ebrPercent.toFixed(0)}% < 50%. ` +
+                    `Top 20%: ${top20PercentSignals.length} signals, ` +
+                    `After conviction > 80 filter: ${qualityFilteredSignals.length} signals kept. ` +
+                    `Blocked: ${blockedByTop20Count} by top 20% filter, ${blockedByConvictionCount} by conviction > 80 filter. ` +
+                    `Top signal conviction: ${sortedSignals[0]?.convictionScore?.toFixed(1) || 'N/A'}, ` +
+                    `Bottom kept signal conviction: ${qualityFilteredSignals.length > 0 ? qualityFilteredSignals[qualityFilteredSignals.length - 1]?.convictionScore?.toFixed(1) : 'N/A'}`);
+
+                // Log quality filter application
+                // Calculate minimum conviction score of kept signals
+                const minKeptConviction = qualityFilteredSignals.length > 0
+                    ? Math.min(...qualityFilteredSignals.map(s => s.convictionScore || 0))
+                    : 0;
+                const maxKeptConviction = qualityFilteredSignals.length > 0
+                    ? Math.max(...qualityFilteredSignals.map(s => s.convictionScore || 0))
+                    : 0;
+                
+                if (blockedByQualityFilter.length > 0) {
+                    const blockedByTop20Count = blockedByTop20Filter.length;
+                    const blockedByConvictionCount = blockedByConvictionFilter.length;
+                    this.addLog(
+                        `[QUALITY_FILTER] 🎯 EBR ${ebrPercent.toFixed(0)}% < 50%: Filtered to top 20% by conviction, then to conviction > 80. ` +
+                        `Kept ${qualityFilteredSignals.length} signals (min conviction: ${minKeptConviction.toFixed(1)}, max: ${maxKeptConviction.toFixed(1)}), ` +
+                        `blocked ${blockedByTop20Count} by top 20% filter, ${blockedByConvictionCount} by conviction > 80 filter.`,
+                        'info'
+                    );
+                    
+                    // Log sample of blocked signals (first 3 from each category)
+                    if (blockedByTop20Filter.length > 0) {
+                        this.addLog(`[QUALITY_FILTER] Blocked by top 20% filter (first 3):`, 'info');
+                        blockedByTop20Filter.slice(0, 3).forEach(blocked => {
+                            this.addLog(
+                                `[QUALITY_FILTER]   - ${blocked.symbol} (${blocked.strategy_name}) - Conviction: ${blocked.convictionScore?.toFixed(1) || 'N/A'}`,
+                                'info'
+                            );
+                        });
+                    }
+                    if (blockedByConvictionFilter.length > 0) {
+                        this.addLog(`[QUALITY_FILTER] Blocked by conviction > 80 filter (first 3):`, 'info');
+                        blockedByConvictionFilter.slice(0, 3).forEach(blocked => {
+                            this.addLog(
+                                `[QUALITY_FILTER]   - ${blocked.symbol} (${blocked.strategy_name}) - Conviction: ${blocked.convictionScore?.toFixed(1) || 'N/A'} (required: > 80)`,
+                                'info'
+                            );
+                        });
+                    }
+                } else if (qualityFilteredSignals.length > 0) {
+                    // All signals passed (no blocking occurred, but filter was applied)
+                    this.addLog(
+                        `[QUALITY_FILTER] 🎯 EBR ${ebrPercent.toFixed(0)}% < 50%: Filtered to top 20% by conviction, then to conviction > 80. ` +
+                        `Kept ${qualityFilteredSignals.length} signals (min conviction: ${minKeptConviction.toFixed(1)}, max: ${maxKeptConviction.toFixed(1)}), ` +
+                        `no signals blocked (all top 20% signals had conviction > 80).`,
+                        'info'
+                    );
+                } else if (top20PercentSignals.length > 0) {
+                    // All top 20% signals were filtered out by conviction > 80 filter
+                    const maxConvictionInTop20 = Math.max(...top20PercentSignals.map(s => s.convictionScore || 0));
+                    this.addLog(
+                        `[QUALITY_FILTER] ⚠️ EBR ${ebrPercent.toFixed(0)}% < 50%: Filtered to top 20% (${top20PercentSignals.length} signals), ` +
+                        `but ALL were blocked by conviction > 80 filter. ` +
+                        `Highest conviction in top 20%: ${maxConvictionInTop20.toFixed(1)} (required: > 80). ` +
+                        `No positions will be opened.`,
+                        'warning'
+                    );
+                }
+
+                // Update scanStats with quality-filtered blocks
+                // Track blocks separately for top 20% filter and conviction > 80 filter
+                for (const blocked of blockedByTop20Filter) {
+                    const reason = `Post-evaluation: Below top 20% conviction (EBR ${ebrPercent.toFixed(0)}% < 50%)`;
+                    scanStats.blockedTrades.push({
+                        strategy: blocked.strategy_name,
+                        reason: reason,
+                        details: {
+                            convictionScore: blocked.convictionScore,
+                            ebr: ebrPercent,
+                            filter: 'top_20_percent'
+                        }
+                    });
+                    scanStats.blockReasons[reason] = (scanStats.blockReasons[reason] || 0) + 1;
+                }
+                
+                for (const blocked of blockedByConvictionFilter) {
+                    const reason = `Post-evaluation: Conviction score (${blocked.convictionScore?.toFixed(1) || 'N/A'}) <= 80 (EBR ${ebrPercent.toFixed(0)}% < 50%, top 20% filter passed)`;
+                    scanStats.blockedTrades.push({
+                        strategy: blocked.strategy_name,
+                        reason: reason,
+                        details: {
+                            convictionScore: blocked.convictionScore,
+                            ebr: ebrPercent,
+                            filter: 'conviction_threshold',
+                            threshold: 80
+                        }
+                    });
+                    scanStats.blockReasons[reason] = (scanStats.blockReasons[reason] || 0) + 1;
+                }
+            } else if (shouldApplyQualityFilter && filteredSignals.length === 0) {
+                // Console log when filter would apply but no signals to filter
+                console.log(`[QUALITY_FILTER_CHECK] ⚠️ EBR ${ebrPercent.toFixed(0)}% < 50% but no signals to filter (0 signals passed previous filters)`);
+            } else {
+                // Console log when filter is not applied
+                //console.log(`[QUALITY_FILTER_CHECK] ℹ️ Filter not applied: EBR ${ebrPercent.toFixed(0)}% >= 50% (threshold: 50%). All ${filteredSignals.length} signals will be evaluated.`);
+            }
+
             let actualExecutedPositions = [];
 
-            if (filteredSignals.length > 0) { // Changed from scanStats.pendingTradeRequests to filteredSignals
-                this.addLog(`✅ Calling positionManager.openPositionsBatch with ${filteredSignals.length} eligible signals`, 'info'); // Log updated
+            if (qualityFilteredSignals.length > 0) { // Use qualityFilteredSignals instead of filteredSignals
+                this.addLog(`✅ Calling positionManager.openPositionsBatch with ${qualityFilteredSignals.length} eligible signals`, 'info'); // Log updated
                 
                 // DEBUG: Log the filtered signals structure
                 
                 try {
-                    const batchResult = await this.scannerService.positionManager.openPositionsBatch(filteredSignals); // Use filteredSignals
+                    const batchResult = await this.scannerService.positionManager.openPositionsBatch(qualityFilteredSignals); // Use qualityFilteredSignals
 
                     const executedCount = batchResult?.opened || 0;
                     actualExecutedPositions = batchResult?.openedPositions || [];
@@ -2152,10 +2335,19 @@ export class SignalDetectionEngine {
                 });
             }
             if (Object.keys(cycleStats.blockReasons).length > 0) {
+                // Filter out individual conviction score logs - they're already aggregated in the summary
+                const nonConvictionReasons = Object.entries(cycleStats.blockReasons).filter(([reason]) => {
+                    const r = String(reason || '').toLowerCase();
+                    // Skip individual conviction score entries (they're aggregated in the summary)
+                    return !(r.includes('conviction score') && r.includes('below dynamic threshold'));
+                });
+                
+                if (nonConvictionReasons.length > 0) {
                 this.addLog(`    Reasons for blocking (signal found but trade prevented):`, 'info', 0);
-                Object.entries(cycleStats.blockReasons).forEach(([reason, count]) => {
+                    nonConvictionReasons.forEach(([reason, count]) => {
                     this.addLog(`    - ${reason}: ${count} strategies`, 'info', 0);
                 });
+                }
             }
 
             if (cycleStats.totalConvictionFailures > 0) {

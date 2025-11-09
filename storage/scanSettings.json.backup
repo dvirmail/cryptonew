@@ -3,7 +3,7 @@
     "id": "default",
     "test": true,
     "scanFrequency": 60000,
-    "updated_date": "2025-11-06T09:30:17.560Z",
+    "updated_date": "2025-11-09T08:44:31.435Z",
     "isLiveTradingEnabled": false,
     "isTestnetTradingEnabled": true,
     "minimumCombinedStrength": 450,
@@ -14,12 +14,12 @@
     "defaultPositionSize": 100,
     "useWinStrategySize": false,
     "minimumRegimeConfidence": 60,
-    "minimumConvictionScore": 5,
+    "minimumConvictionScore": 70,
     "signalMatchingMode": "conviction_based",
     "blockTradingInDowntrend": false,
     "resetStatsOnModeSwitch": false,
     "local_proxy_url": "http://localhost:3003",
-    "maxBalancePercentRisk": 80,
+    "maxBalancePercentRisk": 100,
     "maxBalanceInvestCapUSDT": 5000
   },
   {

@@ -68,25 +68,19 @@ export const WalletProvider = ({ children }) => {
     const openPositionsCount = centralState?.open_positions_count || 0;
     const lifetimePnl = centralState?.total_realized_pnl || 0;
     
-    // CRITICAL: Log lifetimePnl source for debugging
-    if (process.env.NODE_ENV === 'development') {
-        const prevLifetimePnl = React.useRef(lifetimePnl);
-        if (prevLifetimePnl.current !== lifetimePnl) {
-            //console.log(`[WalletProvider] ========================================`);
-            //console.log(`[WalletProvider] 📊 LIFETIME P&L UPDATE`);
-            //console.log(`[WalletProvider] Trading Mode: ${tradingMode}`);
-            //console.log(`[WalletProvider] lifetimePnl changed: ${prevLifetimePnl.current.toFixed(2)} → ${lifetimePnl.toFixed(2)}`);
-            //console.log(`[WalletProvider] Source: centralState?.total_realized_pnl`);
-            //console.log(`[WalletProvider] Central State:`, {
-            //    total_realized_pnl: centralState?.total_realized_pnl,
-            //    total_trades_count: centralState?.total_trades_count,
-            //    winning_trades_count: centralState?.winning_trades_count,
-            //    losing_trades_count: centralState?.losing_trades_count,
-            //    last_updated: centralState?.last_updated_timestamp
-            //});
-            //console.log(`[WalletProvider] ========================================`);
-            prevLifetimePnl.current = lifetimePnl;
-        }
+    // CRITICAL: Log lifetimePnl source for debugging - show it's from CENTRALWALLET
+    const prevLifetimePnl = React.useRef(lifetimePnl);
+    if (prevLifetimePnl.current !== lifetimePnl) {
+        console.log(`[WalletProvider] 📊 CENTRALWALLET DATA UPDATE:`);
+        console.log(`[WalletProvider] 📊 lifetimePnl (total_realized_pnl): $${lifetimePnl.toFixed(2)} | Source: centralState?.total_realized_pnl (CENTRALWALLET)`);
+        console.log(`[WalletProvider] 📊 Central State values:`, {
+            total_realized_pnl: centralState?.total_realized_pnl,
+            total_trades_count: centralState?.total_trades_count,
+            winning_trades_count: centralState?.winning_trades_count,
+            losing_trades_count: centralState?.losing_trades_count,
+            last_updated: centralState?.updated_date || centralState?.last_binance_sync || 'N/A'
+        });
+        prevLifetimePnl.current = lifetimePnl;
     }
     
     // Extract arrays from central state
@@ -504,7 +498,7 @@ export const WalletProvider = ({ children }) => {
             };
 
             window.recalculateTradePnlAndRefresh = async () => {
-                //console.log('[WalletProvider] 🔧 Recalculating trade P&L from entry/exit prices and refreshing widgets...');
+                console.log('[WalletProvider] 🔧 Recalculating trade P&L from entry/exit prices and refreshing widgets...');
                 try {
                     // 1. Call the recalculate P&L endpoint
                     const response = await fetch('http://localhost:3003/api/trades/recalculate-pnl', {
@@ -513,29 +507,48 @@ export const WalletProvider = ({ children }) => {
                     });
 
                     if (!response.ok) {
-                        throw new Error(`Recalculate P&L endpoint returned ${response.status}`);
+                        // Try to get detailed error message from response
+                        let errorDetails = '';
+                        try {
+                            const errorData = await response.json();
+                            errorDetails = errorData.details || errorData.error || `HTTP ${response.status}`;
+                            console.error('[WalletProvider] ❌ Recalculate P&L endpoint error:', errorData);
+                        } catch (parseError) {
+                            const errorText = await response.text();
+                            errorDetails = errorText || `HTTP ${response.status}`;
+                            console.error('[WalletProvider] ❌ Recalculate P&L endpoint error (text):', errorText);
+                        }
+                        throw new Error(`Recalculate P&L endpoint returned ${response.status}: ${errorDetails}`);
                     }
 
                     const result = await response.json();
-                    //console.log(`[WalletProvider] ✅ Recalculated P&L for ${result.updatedCount || 0} trades (out of ${result.totalTrades || 0} total)`);
+                    console.log(`[WalletProvider] ✅ Recalculated P&L for ${result.updatedCount || 0} trades (out of ${result.totalTrades || 0} total)`);
+
+                    if (result.errorCount > 0) {
+                        console.warn(`[WalletProvider] ⚠️ ${result.errorCount} trades had errors during recalculation`);
+                        if (result.errors && result.errors.length > 0) {
+                            console.warn('[WalletProvider] ⚠️ Sample errors:', result.errors.slice(0, 5));
+                        }
+                    }
 
                     if (result.updatedCount > 0) {
-                        //console.log(`[WalletProvider] 📊 Sample updated trades:`, result.updatedTrades?.slice(0, 5));
+                        console.log(`[WalletProvider] 📊 Sample updated trades:`, result.updatedTrades?.slice(0, 5));
                     } else {
-                        //console.log('[WalletProvider] ℹ️  No trades needed P&L recalculation - all P&L values are already correct');
+                        console.log('[WalletProvider] ℹ️  No trades needed P&L recalculation - all P&L values are already correct');
                     }
 
                     // CRITICAL: Force P&L recalculation from database after recalculating trade P&L
                     await centralWalletStateManager.recalculateRealizedPnlFromDatabase(tradingMode);
 
                     // Then refresh widgets to ensure P&L is recalculated from database
-                    //console.log('[WalletProvider] 🔄 Refreshing widgets with updated P&L...');
+                    console.log('[WalletProvider] 🔄 Refreshing widgets with updated P&L...');
                     await window.refreshAllTradeWidgets();
 
-                    //console.log('[WalletProvider] ✅ Trade P&L recalculated and widgets refreshed');
+                    console.log('[WalletProvider] ✅ Trade P&L recalculated and widgets refreshed');
                     return result;
                 } catch (error) {
                     console.error('[WalletProvider] ❌ Error recalculating trade P&L:', error);
+                    console.error('[WalletProvider] ❌ Error details:', error.message);
                     throw error;
                 }
             };
@@ -648,6 +661,16 @@ export const WalletProvider = ({ children }) => {
         lastUpdated: centralState?.last_updated_timestamp || new Date().toISOString()
     }), [totalEquity, availableBalance, balanceInTrades, unrealizedPnl, openPositionsCount, lifetimePnl, balances, positions, centralState]);
 
+    // Alias lifetimePnl as totalRealizedPnl for backward compatibility
+    const totalRealizedPnl = lifetimePnl;
+    
+    // Log when totalRealizedPnl is accessed (it's an alias for lifetimePnl from CENTRALWALLET)
+    const prevTotalRealizedPnl = React.useRef(totalRealizedPnl);
+    if (prevTotalRealizedPnl.current !== totalRealizedPnl) {
+        console.log(`[WalletProvider] 📊 totalRealizedPnl (alias for lifetimePnl): $${totalRealizedPnl.toFixed(2)} | Source: CENTRALWALLET (centralState?.total_realized_pnl)`);
+        prevTotalRealizedPnl.current = totalRealizedPnl;
+    }
+    
     // Performance optimization: Memoize context value with shallow comparison
     const contextValue = useMemo(() => {
         const value = {
@@ -658,6 +681,7 @@ export const WalletProvider = ({ children }) => {
             unrealizedPnl,
             openPositionsCount,
             lifetimePnl,
+            totalRealizedPnl, // Alias for lifetimePnl (from CENTRALWALLET)
             
             // Raw data arrays
             balances,
@@ -700,6 +724,7 @@ export const WalletProvider = ({ children }) => {
         unrealizedPnl,
         openPositionsCount,
         lifetimePnl,
+        totalRealizedPnl,
         balances,
         positions,
         dailyPnl,

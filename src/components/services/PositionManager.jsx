@@ -14,14 +14,24 @@ import { generateTradeId } from '@/components/utils/id';
 import * as dynamicSizing from "@/components/utils/dynamicPositionSizing";
 import { reconcileWalletState, walletReconciliation, purgeGhostPositions } from '@/api/functions';
 import PendingOrderManager from './PendingOrderManager';
+import { MOMENTUM_THRESHOLDS } from './constants/momentumWeights';
 
 
 // DUST MANAGEMENT SYSTEM - Original App Implementation
 // Dust Ledger: In-memory Map to track dust instances
 const dustLedger = new Map();
 
+// DUST AGGREGATION SYSTEM - New Implementation
+// Dust Accumulator: In-memory Map to track accumulated dust quantities per coin
+const dustAccumulator = new Map();
+
 // Helper function to get dust ledger key
 function getDustKey(symbol, mode) {
+  return `${mode}:${symbol}`;
+}
+
+// Helper function to get dust accumulator key
+function getDustAccumulatorKey(symbol, mode) {
   return `${mode}:${symbol}`;
 }
 
@@ -29,6 +39,15 @@ function getDustKey(symbol, mode) {
 function getDustLedgerSnapshot() {
   const snapshot = {};
   for (const [key, value] of dustLedger.entries()) {
+    snapshot[key] = value;
+  }
+  return snapshot;
+}
+
+// Helper function to get dust accumulator snapshot
+function getDustAccumulatorSnapshot() {
+  const snapshot = {};
+  for (const [key, value] of dustAccumulator.entries()) {
     snapshot[key] = value;
   }
   return snapshot;
@@ -233,6 +252,7 @@ export default class PositionManager {
             window.testPositionClosing = () => this.testPositionClosing();
             window.deleteAllGhostPositions = () => this.deleteAllGhostPositions();
             window.fixPositionPriceData = () => this.fixPositionPriceData();
+            window.testOpenBONKPosition = (targetValue = 15) => this.testOpenBONKPosition(targetValue);
             window.clearAllPositions = async () => {
                 console.log('🧹 [CLEAR_POSITIONS] Starting comprehensive position cleanup...');
                 
@@ -1498,25 +1518,10 @@ export default class PositionManager {
                 const currentPrice = prices[symbolNoSlash];
 
                 if (!currentPrice || typeof currentPrice !== 'number' || currentPrice <= 0) {
-                    // Try to fetch fresh price if not in cache
-                    if (this.scannerService?.priceManagerService) {
-                        try {
-                            const freshPrice = await this.scannerService.priceManagerService.getFreshCurrentPrice(position.symbol);
-                            if (freshPrice && freshPrice > 0) {
-                                prices[symbolNoSlash] = freshPrice;
-                                // Continue with fresh price
-                            } else {
-                                console.warn(`[PositionManager] ⚠️ No valid price for ${position.symbol}, skipping update`);
+                    // ⚡ PERFORMANCE OPTIMIZATION: Skip individual price fetches - should already be in batch-fetched prices
+                    // If price is missing, it means batch fetch failed for this symbol, skip update rather than fetching individually
+                    console.warn(`[PositionManager] ⚠️ No price available for ${position.symbol} (not in batch-fetched prices), skipping update`);
                                 continue;
-                            }
-                        } catch (err) {
-                            console.warn(`[PositionManager] ⚠️ Failed to fetch price for ${position.symbol}:`, err.message);
-                            continue;
-                        }
-                    } else {
-                        console.warn(`[PositionManager] ⚠️ No price available for ${position.symbol}, skipping update`);
-                        continue;
-                    }
                 }
 
                 const entryPrice = Number(position.entry_price || 0);
@@ -1547,14 +1552,22 @@ export default class PositionManager {
                 position.unrealized_pnl = unrealizedPnl;
                 position.last_price_update = new Date().toISOString();
 
+                // Get position ID - try multiple sources
+                const positionId = position.id || position.db_record_id || position.position_id;
+                
+                if (!positionId) {
+                    console.warn(`[PositionManager] ⚠️ Position ${position.symbol} has no valid ID (id: ${position.id}, db_record_id: ${position.db_record_id}, position_id: ${position.position_id}), skipping database update`);
+                    continue;
+                }
+
                 // Update in database
-                const updatePromise = queueEntityCall('LivePosition', 'update', position.id, {
+                const updatePromise = queueEntityCall('LivePosition', 'update', positionId, {
                     current_price: finalCurrentPrice,
                     unrealized_pnl: unrealizedPnl,
                     last_price_update: new Date().toISOString(),
                     updated_date: new Date().toISOString()
                 }).catch(err => {
-                    console.error(`[PositionManager] ❌ Failed to update position ${position.id} (${position.symbol}):`, err.message);
+                    console.error(`[PositionManager] ❌ Failed to update position ${positionId} (${position.symbol}):`, err.message);
                 });
 
                 updatePromises.push(updatePromise);
@@ -2971,13 +2984,29 @@ export default class PositionManager {
      */
     async _executeBinanceMarketBuyOrder(symbol, quantity, { tradingMode, proxyUrl }) {
         const logPrefix = '[BINANCE_BUY]';
+        const isBONK = symbol && (symbol.includes('BONK') || symbol.replace('/', '').includes('BONK'));
+        
         try {
+            // BONK-specific log at start
+            if (isBONK) {
+                console.log(`[BONK_BUY] 🟡 ========== BONK BUY ORDER START ==========`);
+                console.log(`[BONK_BUY] 🟡 Symbol: ${symbol}`);
+                console.log(`[BONK_BUY] 🟡 Quantity: ${quantity}`);
+                console.log(`[BONK_BUY] 🟡 Trading Mode: ${tradingMode}`);
+            }
+            
             // Validate inputs
             if (!symbol || !quantity || quantity <= 0) {
+                if (isBONK) {
+                    console.error(`[BONK_BUY] ❌ FAILED: Invalid symbol or quantity for buy order`);
+                }
                 throw new Error('Invalid symbol or quantity for buy order');
             }
 
             if (!proxyUrl) {
+                if (isBONK) {
+                    console.error(`[BONK_BUY] ❌ FAILED: Proxy URL not configured for Binance buy order`);
+                }
                 throw new Error('Proxy URL not configured for Binance buy order');
             }
 
@@ -2987,7 +3016,15 @@ export default class PositionManager {
             // Format quantity to proper precision
             const formattedQty = this._formatQuantityForBinance(quantity, binanceSymbol);
             if (!formattedQty || formattedQty === '0') {
+                if (isBONK) {
+                    console.error(`[BONK_BUY] ❌ FAILED: Invalid quantity after formatting. Original: ${quantity}, Formatted: ${formattedQty}`);
+                }
                 throw new Error('Invalid quantity after formatting');
+            }
+
+            if (isBONK) {
+                console.log(`[BONK_BUY] 🟡 Formatted Quantity: ${formattedQty}`);
+                console.log(`[BONK_BUY] 🟡 About to execute Binance BUY order...`);
             }
 
             this.addLog(`${logPrefix} 🚀 Executing Binance BUY: ${formattedQty} ${binanceSymbol}`, 'info');
@@ -3165,6 +3202,19 @@ export default class PositionManager {
                     if (orderStatus && orderStatus.status === 'FILLED') {
                         // ✅ LOG: Confirmation of BUY execution
                         const executedQty = orderStatus.executedQty || binanceResponse.executedQty || formattedQty;
+                        const executedPrice = orderStatus.avgPrice || binanceResponse.avgPrice || orderStatus.price || binanceResponse.price;
+                        
+                        // BONK-specific success log
+                        if (isBONK) {
+                            console.log(`[BONK_BUY] ✅ ========== BONK BUY SUCCESS ==========`);
+                            console.log(`[BONK_BUY] ✅ Order ID: ${binanceResponse.orderId}`);
+                            console.log(`[BONK_BUY] ✅ Executed Quantity: ${executedQty}`);
+                            console.log(`[BONK_BUY] ✅ Executed Price: ${executedPrice || 'N/A'}`);
+                            console.log(`[BONK_BUY] ✅ Symbol: ${binanceSymbol}`);
+                            console.log(`[BONK_BUY] ✅ Status: FILLED`);
+                            console.log(`[BONK_BUY] ✅ ==========================================`);
+                        }
+                        
                         console.log(`[PositionManager] ✅ [BINANCE_BUY_CONFIRMATION] BUY executed successfully on Binance:`);
                         console.log(`[PositionManager] ✅ [BINANCE_BUY_CONFIRMATION] Order ID: ${binanceResponse.orderId}`);
                         console.log(`[PositionManager] ✅ [BINANCE_BUY_CONFIRMATION] Executed Quantity: ${executedQty}`);
@@ -3227,6 +3277,15 @@ export default class PositionManager {
             const errorMessage = error?.message || 'Unknown error';
             const isInsufficientBalance = error.isInsufficient || errorMessage.toLowerCase().includes('insufficient balance');
             
+            // BONK-specific error log
+            if (isBONK) {
+                console.error(`[BONK_BUY] ❌ ========== BONK BUY FAILED ==========`);
+                console.error(`[BONK_BUY] ❌ Error: ${errorMessage}`);
+                console.error(`[BONK_BUY] ❌ Stack: ${error.stack}`);
+                console.error(`[BONK_BUY] ❌ Symbol: ${symbol}`);
+                console.error(`[BONK_BUY] ❌ ==========================================`);
+            }
+            
             this.addLog(`${logPrefix} ❌ Critical error executing Binance market buy for ${symbol}: ${errorMessage}`, 'error', error);
             
             return { 
@@ -3271,27 +3330,164 @@ export default class PositionManager {
         // console.log('🔍 [EXECUTION_TRACE] step_8: _executeBinanceMarketSellOrder entry point reached');
         
         const logPrefix = '[BINANCE_SELL]';
+        const isBONK = position?.symbol && (position.symbol.includes('BONK') || position.symbol.replace('/', '').includes('BONK'));
+        
+        // BONK-specific log at start
+        if (isBONK) {
+            console.log(`[BONK_SELL] 🔴 ========== BONK SELL ORDER START ==========`);
+            console.log(`[BONK_SELL] 🔴 Symbol: ${position?.symbol}`);
+            console.log(`[BONK_SELL] 🔴 Position ID: ${position?.position_id || position?.id}`);
+            console.log(`[BONK_SELL] 🔴 Quantity (raw): ${position?.quantity_crypto || position?.quantity || 'N/A'}`);
+            console.log(`[BONK_SELL] 🔴 Current Price: ${currentPrice || 'N/A'}`);
+            console.log(`[BONK_SELL] 🔴 Trading Mode: ${tradingMode || 'N/A'}`);
+        }
         
         // CRITICAL: Define these variables early so they're available in all catch blocks
         const isClosingContext = options?.exitReason !== undefined || position?.exit_reason !== undefined;
-        const positionQty = Number(position?.quantity_crypto || 0);
+        let positionQty = Number(position?.quantity_crypto || position?.quantity || 0);
         
         try {
             // STRICT: validate presence and positive quantity before formatting or sending orders
-            const rawQty = position?.quantity_crypto;
-            const qtyNum = Number(rawQty);
+            let rawQty = position?.quantity_crypto || position?.quantity;
+            let qtyNum = Number(rawQty);
 
             if (!position || !position.symbol) {
+                if (isBONK) {
+                    console.error(`[BONK_SELL] ❌ FAILED: Invalid position object received`);
+                }
                 this.addLog(`${logPrefix} ❌ Skipping SELL: invalid position object received.`, 'error');
                 return { success: false, error: 'Invalid position object', code: 'INVALID_POSITION', skip: true };
             }
 
+            // CRITICAL FIX: For very low-priced coins like BONK, quantity_crypto might be 0 due to precision issues
+            // Try to fetch actual balance from Binance as fallback
             if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+                const symbolWithSlash = position?.symbol || "";
+                const baseAsset = symbolWithSlash.split("/")[0];
+                const currentTradingMode = tradingMode || position.trading_mode || 'testnet';
+                const currentProxyUrl = proxyUrl || 'http://localhost:3003';
+                
                 this.addLog(
-                    `${logPrefix} ⚠️ Skipping SELL for ${position.symbol}: invalid quantity (${rawQty}). Record looks incomplete/corrupted.`,
+                    `${logPrefix} ⚠️ Invalid quantity (${rawQty}) for ${position.symbol}. Attempting to fetch actual balance from Binance...`,
                     'warning'
                 );
-                return { success: false, error: `Invalid quantity provided: ${rawQty}`, code: 'INVALID_QUANTITY', skip: true };
+                
+                // Try to fetch actual balance from Binance using the helper function
+                try {
+                    if (isBONK) {
+                        console.log(`[BONK_SELL] 🟡 Fetching BONK balance from Binance...`);
+                    }
+                    const freeBalance = await fetchFreshFreeBalance({
+                        baseAsset,
+                        tradingMode: currentTradingMode,
+                        proxyUrl: currentProxyUrl
+                    });
+                    
+                    if (freeBalance > 0) {
+                        qtyNum = freeBalance;
+                        rawQty = freeBalance;
+                        positionQty = freeBalance;
+                        if (isBONK) {
+                            console.log(`[BONK_SELL] ✅ Found BONK balance from Binance: ${freeBalance}. Using this as quantity.`);
+                        }
+                        this.addLog(
+                            `${logPrefix} ✅ Found balance for ${baseAsset} from Binance: ${freeBalance}. Using this as quantity.`,
+                            'info'
+                        );
+                    } else {
+                        // Fallback: try to get balance from current wallet state
+                        const walletState = this.scannerService?.walletManagerService?.getWalletState?.();
+                        if (walletState?.balances) {
+                            const assetBalance = walletState.balances.find(b => b.asset === baseAsset);
+                            if (assetBalance && parseFloat(assetBalance.free) > 0) {
+                                const walletFreeBalance = parseFloat(assetBalance.free);
+                                qtyNum = walletFreeBalance;
+                                rawQty = walletFreeBalance;
+                                positionQty = walletFreeBalance;
+                                this.addLog(
+                                    `${logPrefix} ✅ Found balance for ${baseAsset} in wallet state: ${walletFreeBalance}. Using this as quantity.`,
+                                    'info'
+                                );
+                            } else {
+                                if (isBONK) {
+                                    console.error(`[BONK_SELL] ❌ FAILED: No BONK balance found in Binance account or wallet state. Position may already be closed.`);
+                                }
+                                this.addLog(
+                                    `${logPrefix} ⚠️ No balance found for ${baseAsset} in Binance account or wallet state. Position may already be closed.`,
+                                    'warning'
+                                );
+                                return { success: false, error: `Invalid quantity (${rawQty}) and no balance found for ${baseAsset}`, code: 'INVALID_QUANTITY_NO_BALANCE', skip: true };
+                            }
+                        } else {
+                            if (isBONK) {
+                                console.error(`[BONK_SELL] ❌ FAILED: No BONK balance found in Binance account. Position may already be closed.`);
+                            }
+                            this.addLog(
+                                `${logPrefix} ⚠️ No balance found for ${baseAsset} in Binance account. Position may already be closed.`,
+                                'warning'
+                            );
+                            return { success: false, error: `Invalid quantity (${rawQty}) and no balance found for ${baseAsset}`, code: 'INVALID_QUANTITY_NO_BALANCE', skip: true };
+                        }
+                    }
+                } catch (balanceError) {
+                    if (isBONK) {
+                        console.warn(`[BONK_SELL] ⚠️ Failed to fetch BONK balance from Binance: ${balanceError.message}. Trying wallet state...`);
+                    }
+                    this.addLog(
+                        `${logPrefix} ⚠️ Failed to fetch balance for ${baseAsset}: ${balanceError.message}`,
+                        'warning'
+                    );
+                    // Try wallet state as last resort
+                    try {
+                        const walletState = this.scannerService?.walletManagerService?.getWalletState?.();
+                        if (walletState?.balances) {
+                            const assetBalance = walletState.balances.find(b => b.asset === baseAsset);
+                            if (assetBalance && parseFloat(assetBalance.free) > 0) {
+                                const walletFreeBalance = parseFloat(assetBalance.free);
+                                qtyNum = walletFreeBalance;
+                                rawQty = walletFreeBalance;
+                                positionQty = walletFreeBalance;
+                                if (isBONK) {
+                                    console.log(`[BONK_SELL] ✅ Found BONK balance in wallet state (fallback): ${walletFreeBalance}. Using this as quantity.`);
+                                }
+                                this.addLog(
+                                    `${logPrefix} ✅ Found balance for ${baseAsset} in wallet state (fallback): ${walletFreeBalance}. Using this as quantity.`,
+                                    'info'
+                                );
+                            } else {
+                                if (isBONK) {
+                                    console.error(`[BONK_SELL] ❌ FAILED: No BONK balance found in wallet state fallback either.`);
+                                }
+                            }
+                        } else {
+                            if (isBONK) {
+                                console.error(`[BONK_SELL] ❌ FAILED: Wallet state not available for fallback.`);
+                            }
+                        }
+                    } catch (walletError) {
+                        if (isBONK) {
+                            console.error(`[BONK_SELL] ❌ FAILED: Wallet state fallback also failed: ${walletError.message}`);
+                        }
+                        // Ignore wallet state errors
+                    }
+                }
+                
+                // Final check: if still invalid, skip
+                if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+                    if (isBONK) {
+                        console.error(`[BONK_SELL] ❌ FAILED: Invalid quantity (${rawQty}). Record looks incomplete/corrupted. Skipping sell.`);
+                    }
+                    this.addLog(
+                        `${logPrefix} ⚠️ Skipping SELL for ${position.symbol}: invalid quantity (${rawQty}). Record looks incomplete/corrupted.`,
+                        'warning'
+                    );
+                    return { success: false, error: `Invalid quantity provided: ${rawQty}`, code: 'INVALID_QUANTITY', skip: true };
+                } else {
+                    // BONK-specific log after quantity validation
+                    if (isBONK) {
+                        console.log(`[BONK_SELL] 🟡 Quantity validated: ${qtyNum}. Proceeding with sell order...`);
+                    }
+                }
             }
 
             if (!proxyUrl) {
@@ -3400,9 +3596,14 @@ export default class PositionManager {
             requestedQty = roundDownToStepSize(requestedQty, stepSize); // This is a numeric value
 
             // 3) Validate against lot-size and notional; if below thresholds, skip as dust and trigger reconcile
+            // CRITICAL FIX: Use relative epsilon for very small prices (like BONK at $0.00001241)
+            // For prices < 0.001, use percentage-based epsilon (0.1%) instead of absolute epsilon
             const notional = requestedQty * Number(currentPrice || 0);
-            const belowLot = minQty && requestedQty < minQty - 1e-12;
-            const belowNotional = minNotional && notional < (minNotional - 1e-8);
+            const isVeryLowPrice = Number(currentPrice || 0) < 0.001;
+            const lotEpsilon = isVeryLowPrice ? (minQty * 0.001) : 1e-12; // 0.1% of minQty for very low prices
+            const notionalEpsilon = isVeryLowPrice ? (minNotional * 0.001) : 1e-8; // 0.1% of minNotional for very low prices
+            const belowLot = minQty && requestedQty < (minQty - lotEpsilon);
+            const belowNotional = minNotional && notional < (minNotional - notionalEpsilon);
 
             console.log('[PositionManager] 🔍 DUST THRESHOLD CHECK');
             console.log('[PositionManager] 🔍 Symbol:', symbolKey);
@@ -3531,6 +3732,11 @@ export default class PositionManager {
             const attemptSell = async (qty) => {
                 const quantityStr = _formatQuantityString(qty, stepSize); // Use the new global helper for API string
                 
+                // BONK-specific log before sending sell order
+                if (isBONK) {
+                    console.log(`[BONK_SELL] 🟡 Sending SELL order to Binance: ${quantityStr} BONK`);
+                }
+                
                 // ✅ LOG: Sending SELL request to Binance
                 console.log(`[PositionManager] 📤 [BINANCE_SELL_REQUEST] Sending SELL request to Binance:`);
                 console.log(`[PositionManager] 📤 [BINANCE_SELL_REQUEST] Symbol: ${symbolKey}`);
@@ -3572,6 +3778,13 @@ export default class PositionManager {
                     if (response?.data?.success === false || response?.error) {
                         const errorMsg = response?.data?.data?.message || response?.data?.error || response?.error?.message || "Unknown error";
                         const errorCode = response?.data?.data?.code || response?.data?.code || response?.error?.code;
+                        
+                        // BONK-specific error log
+                        if (isBONK) {
+                            console.error(`[BONK_SELL] ❌ SELL order failed in response: ${errorMsg}`);
+                            console.error(`[BONK_SELL] ❌ Error code: ${errorCode}`);
+                        }
+                        
                         console.log(`[PositionManager] ❌ [BINANCE_SELL_REQUEST] SELL request failed in response: ${errorMsg}`);
                         console.log(`[PositionManager] ❌ [BINANCE_SELL_REQUEST] Error code: ${errorCode}`);
                         // Preserve original error properties for proper error handling
@@ -3585,6 +3798,10 @@ export default class PositionManager {
                     const orderId = response?.data?.data?.orderId || response?.data?.data?.data?.orderId;
                     const executedQty = response?.data?.data?.executedQty || response?.data?.data?.data?.executedQty;
                     if (orderId) {
+                        // BONK-specific success log (early confirmation)
+                        if (isBONK) {
+                            console.log(`[BONK_SELL] ✅ SELL order sent successfully. Order ID: ${orderId}, Quantity: ${executedQty || quantityStr}`);
+                        }
                         console.log(`[PositionManager] ✅ [BINANCE_SELL_CONFIRMATION] SELL executed successfully on Binance:`);
                         console.log(`[PositionManager] ✅ [BINANCE_SELL_CONFIRMATION] Order ID: ${orderId}`);
                         console.log(`[PositionManager] ✅ [BINANCE_SELL_CONFIRMATION] Executed Quantity: ${executedQty || quantityStr}`);
@@ -3597,6 +3814,12 @@ export default class PositionManager {
                     
                 return response;
                 } catch (queueError) {
+                    // BONK-specific error log
+                    if (isBONK) {
+                        console.error(`[BONK_SELL] ❌ SELL order failed: ${queueError?.message || 'Unknown error'}`);
+                        console.error(`[BONK_SELL] ❌ Error code: ${queueError?.code || 'N/A'}`);
+                    }
+                    
                     // ✅ CRITICAL: Catch error from queueFunctionCall immediately
                     console.log(`[PositionManager] ❌ [QUEUE_ERROR_CAUGHT_IN_ATTEMPTSELL] Error caught from queueFunctionCall:`);
                     console.log(`[PositionManager] ❌ [QUEUE_ERROR_CAUGHT_IN_ATTEMPTSELL] Error type:`, typeof queueError);
@@ -3730,6 +3953,19 @@ export default class PositionManager {
                 if (binanceProcessedResponse?.orderId) {
                     // ✅ LOG: Confirmation of SELL execution (main success path)
                     const executedQty = binanceProcessedResponse.executedQty || requestedQty;
+                    
+                    // BONK-specific success log
+                    if (isBONK) {
+                        const execPrice = Number(binanceProcessedResponse?.avgPrice ?? binanceProcessedResponse?.price ?? currentPrice);
+                        console.log(`[BONK_SELL] ✅ ========== BONK SELL SUCCESS ==========`);
+                        console.log(`[BONK_SELL] ✅ Order ID: ${binanceProcessedResponse.orderId}`);
+                        console.log(`[BONK_SELL] ✅ Executed Quantity: ${executedQty}`);
+                        console.log(`[BONK_SELL] ✅ Executed Price: ${execPrice || 'N/A'}`);
+                        console.log(`[BONK_SELL] ✅ Symbol: ${symbolKey}`);
+                        console.log(`[BONK_SELL] ✅ Status: FILLED`);
+                        console.log(`[BONK_SELL] ✅ ==========================================`);
+                    }
+                    
                     console.log(`[PositionManager] ✅ [BINANCE_SELL_CONFIRMATION] SELL executed successfully on Binance (main path):`);
                     console.log(`[PositionManager] ✅ [BINANCE_SELL_CONFIRMATION] Order ID: ${binanceProcessedResponse.orderId}`);
                     console.log(`[PositionManager] ✅ [BINANCE_SELL_CONFIRMATION] Executed Quantity: ${executedQty}`);
@@ -3766,6 +4002,17 @@ export default class PositionManager {
                 return { success: true, orderResult: binanceProcessedResponse }; // Return the raw processed response
 
             } catch (err) {
+                // BONK-specific error log
+                if (isBONK) {
+                    console.error(`[BONK_SELL] ❌ ========== BONK SELL FAILED ==========`);
+                    console.error(`[BONK_SELL] ❌ Error: ${err?.message || 'Unknown error'}`);
+                    console.error(`[BONK_SELL] ❌ Stack: ${err?.stack}`);
+                    console.error(`[BONK_SELL] ❌ Symbol: ${symbolKey}`);
+                    console.error(`[BONK_SELL] ❌ Position Quantity: ${positionQty}`);
+                    console.error(`[BONK_SELL] ❌ Error Code: ${err?.code || 'N/A'}`);
+                    console.error(`[BONK_SELL] ❌ ==========================================`);
+                }
+                
                 // ✅ CRITICAL: Log error immediately to see what we're dealing with
                 log('❌ [ERROR_CAUGHT] Error caught in _executeBinanceMarketSellOrder', 'error', {
                     errorType: typeof err,
@@ -4510,14 +4757,405 @@ export default class PositionManager {
      * @param {Object} currentPrices - An object containing current prices for symbols, e.e., { 'BTCUSDT': 30000 }.
      * @returns {Object} An object containing arrays of trades to create and position IDs to close.
      */
+    /**
+     * Detect and aggregate dust positions at the start of scan cycle
+     * This function:
+     * 1. Checks all open positions for dust (below minQty or minNotional)
+     * 2. Aggregates multiple dust positions of the same coin
+     * 3. Updates database with aggregated status
+     * 4. Tracks accumulated quantities per coin
+     * 5. Marks positions ready to sell when accumulated quantity reaches minimum
+     */
+    async detectAndAggregateDustPositions() {
+        const functionStartTime = Date.now();
+        const functionId = `dust_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        try {
+            console.log(`[PositionManager] [DUST_DETECTION] 🧹 START ${functionId} - ${new Date().toISOString()}`);
+            
+            const tradingMode = this.getTradingMode();
+            const currentPrices = this.scannerService?.priceManagerService?.currentPrices || {};
+            
+            console.log(`[PositionManager] [DUST_DETECTION] 📊 Trading mode: ${tradingMode}`);
+            console.log(`[PositionManager] [DUST_DETECTION] 📊 Current prices available: ${Object.keys(currentPrices || {}).length} symbols`);
+            
+            this.addLog('[PositionManager] 🧹 Starting dust detection and aggregation...', 'system');
+            
+            // Get all open positions
+            const openPositions = this.positions.filter(p => 
+                (p.status === 'open' || p.status === 'trailing') && 
+                (p.trading_mode || tradingMode) === tradingMode
+            );
+            
+            console.log(`[PositionManager] [DUST_DETECTION] 📊 Total positions in memory: ${this.positions.length}`);
+            console.log(`[PositionManager] [DUST_DETECTION] 📊 Open positions to check: ${openPositions.length}`);
+            
+            if (openPositions.length === 0) {
+                console.log(`[PositionManager] [DUST_DETECTION] ✅ No open positions to check (${Date.now() - functionStartTime}ms)`);
+                return { detected: 0, aggregated: 0, ready: 0 };
+            }
+            
+            // Group positions by symbol
+            const positionsBySymbol = new Map();
+            for (const position of openPositions) {
+                const symbol = position.symbol || '';
+                const symbolNoSlash = symbol.replace('/', '');
+                
+                if (!positionsBySymbol.has(symbolNoSlash)) {
+                    positionsBySymbol.set(symbolNoSlash, []);
+                }
+                positionsBySymbol.get(symbolNoSlash).push(position);
+            }
+            
+            let detectedCount = 0;
+            let aggregatedCount = 0;
+            let readyCount = 0;
+            
+            // Check each symbol for dust positions
+            for (const [symbolNoSlash, positions] of positionsBySymbol.entries()) {
+                try {
+                    const symbol = positions[0].symbol || '';
+                    const symbolWithSlash = symbol.includes('/') ? symbol : `${symbolNoSlash.slice(0, -4)}/USDT`;
+                    
+                    console.log(`[PositionManager] [DUST_DETECTION] 🔍 Checking ${symbolWithSlash}: ${positions.length} position(s)`);
+                    
+                    // Get symbol filters
+                    const symbolInfo = this.getExchangeInfo(symbolNoSlash);
+                    if (!symbolInfo) {
+                        console.log(`[PositionManager] [DUST_DETECTION] ⚠️ No exchange info for ${symbolWithSlash}, skipping`);
+                        continue; // Skip if no exchange info
+                    }
+                    
+                    const { minQty, minNotional, stepSize } = getSymbolFiltersFromInfo(symbolInfo);
+                    const currentPrice = currentPrices[symbolNoSlash] || 0;
+                    
+                    console.log(`[PositionManager] [DUST_DETECTION] 📊 ${symbolWithSlash} filters: minQty=${minQty}, minNotional=${minNotional}, stepSize=${stepSize}, price=${currentPrice}`);
+                    
+                    if (minQty <= 0 || minNotional <= 0) {
+                        console.log(`[PositionManager] [DUST_DETECTION] ⚠️ ${symbolWithSlash}: No minimums defined, skipping`);
+                        continue; // Skip if no minimums defined
+                    }
+                    
+                    if (currentPrice <= 0) {
+                        console.log(`[PositionManager] [DUST_DETECTION] ⚠️ ${symbolWithSlash}: No current price available, skipping`);
+                        continue; // Skip if no price
+                    }
+                
+                // Check each position for dust
+                const dustPositions = [];
+                for (const position of positions) {
+                    const quantity = Number(position.quantity_crypto || position.quantity || 0);
+                    const quantityRounded = roundDownToStepSize(quantity, stepSize);
+                    const notional = quantityRounded * currentPrice;
+                    
+                    const isVeryLowPrice = currentPrice < 0.001;
+                    const lotEpsilon = isVeryLowPrice ? (minQty * 0.001) : 1e-12;
+                    const notionalEpsilon = isVeryLowPrice ? (minNotional * 0.001) : 1e-8;
+                    
+                    const belowLot = quantityRounded < (minQty - lotEpsilon);
+                    const belowNotional = notional < (minNotional - notionalEpsilon);
+                    
+                    // Skip if already aggregated
+                    if (position.dust_status === 'dust_aggregated') {
+                        continue;
+                    }
+                    
+                    if (belowLot || belowNotional) {
+                        dustPositions.push({
+                            position,
+                            quantity,
+                            quantityRounded,
+                            notional,
+                            belowLot,
+                            belowNotional
+                        });
+                        detectedCount++;
+                    }
+                }
+                
+                    if (dustPositions.length === 0) {
+                        console.log(`[PositionManager] [DUST_DETECTION] ✅ ${symbolWithSlash}: No dust positions found`);
+                        continue; // No dust positions for this symbol
+                    }
+                    
+                    console.log(`[PositionManager] [DUST_DETECTION] 🧹 ${symbolWithSlash}: Found ${dustPositions.length} dust position(s)`);
+                    
+                    // Calculate total accumulated quantity
+                    const totalQuantity = dustPositions.reduce((sum, dp) => sum + dp.quantity, 0);
+                    const totalQuantityRounded = roundDownToStepSize(totalQuantity, stepSize);
+                    const totalNotional = totalQuantityRounded * currentPrice;
+                    
+                    console.log(`[PositionManager] [DUST_DETECTION] 📊 ${symbolWithSlash}: Total accumulated: ${totalQuantityRounded.toFixed(8)} (notional: $${totalNotional.toFixed(2)})`);
+                    
+                    // Check if accumulated quantity meets minimums
+                    const meetsMinimums = totalQuantityRounded >= minQty && totalNotional >= minNotional;
+                    
+                    console.log(`[PositionManager] [DUST_DETECTION] 📊 ${symbolWithSlash}: Meets minimums: ${meetsMinimums} (needs ${minQty.toFixed(8)} qty, $${minNotional.toFixed(2)} notional)`);
+                
+                    // Get or create dust accumulator entry
+                    const accumulatorKey = getDustAccumulatorKey(symbolNoSlash, tradingMode);
+                    let accumulator = dustAccumulator.get(accumulatorKey);
+                    
+                    if (!accumulator) {
+                        console.log(`[PositionManager] [DUST_DETECTION] 🆕 Creating new accumulator for ${symbolWithSlash}`);
+                        accumulator = {
+                            symbol: symbolWithSlash,
+                            symbolNoSlash,
+                            tradingMode,
+                            totalQuantity: 0,
+                            positionIds: [],
+                            minQty,
+                            minNotional,
+                            stepSize,
+                            status: 'dust_pending',
+                            createdAt: Date.now(),
+                            updatedAt: Date.now()
+                        };
+                        dustAccumulator.set(accumulatorKey, accumulator);
+                    } else {
+                        console.log(`[PositionManager] [DUST_DETECTION] 🔄 Updating existing accumulator for ${symbolWithSlash}`);
+                    }
+                    
+                    // Update accumulator
+                    accumulator.totalQuantity = totalQuantity;
+                    accumulator.positionIds = dustPositions.map(dp => dp.position.id || dp.position.position_id);
+                    accumulator.updatedAt = Date.now();
+                    
+                    // Check if ready to sell
+                    if (meetsMinimums) {
+                        accumulator.status = 'dust_ready';
+                        readyCount++;
+                        console.log(`[PositionManager] [DUST_DETECTION] ✅ ${symbolWithSlash}: READY TO SELL (accumulated ${totalQuantityRounded.toFixed(8)} meets minimums)`);
+                        this.addLog(
+                            `[PositionManager] ✅ ${symbolWithSlash}: Accumulated quantity (${totalQuantityRounded.toFixed(8)}) meets minimums. Ready to sell.`,
+                            'success'
+                        );
+                    } else {
+                        accumulator.status = 'dust_pending';
+                        console.log(`[PositionManager] [DUST_DETECTION] ⏳ ${symbolWithSlash}: PENDING (accumulated ${totalQuantityRounded.toFixed(8)}, needs ${minQty.toFixed(8)} min)`);
+                        this.addLog(
+                            `[PositionManager] 🧹 ${symbolWithSlash}: ${dustPositions.length} dust position(s), total: ${totalQuantityRounded.toFixed(8)} (needs ${minQty.toFixed(8)} min, ${minNotional.toFixed(2)} USDT min)`,
+                            'info'
+                        );
+                    }
+                
+                    // Aggregate positions in database
+                    if (dustPositions.length > 1 || accumulator.positionIds.length > 1) {
+                        console.log(`[PositionManager] [DUST_DETECTION] 🔄 ${symbolWithSlash}: Aggregating ${dustPositions.length} positions`);
+                        
+                        // Multiple positions - create/update aggregated position
+                        const aggregatedPositionId = `dust_agg_${symbolNoSlash}_${tradingMode}`;
+                        
+                        // Find or create aggregated position
+                        let aggregatedPosition = this.positions.find(p => 
+                            p.position_id === aggregatedPositionId || 
+                            (p.dust_status === 'dust_pending' && p.symbol === symbolWithSlash)
+                        );
+                        
+                        if (!aggregatedPosition) {
+                            console.log(`[PositionManager] [DUST_DETECTION] 🆕 Creating new aggregated position for ${symbolWithSlash}`);
+                            // Create new aggregated position
+                            aggregatedPosition = {
+                            id: `dust_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                            position_id: aggregatedPositionId,
+                            symbol: symbolWithSlash,
+                            side: 'BUY',
+                            direction: 'long',
+                            quantity: totalQuantityRounded,
+                            quantity_crypto: totalQuantityRounded,
+                            entry_price: currentPrice, // Use current price as approximate entry
+                            current_price: currentPrice,
+                            entry_value_usdt: totalNotional,
+                            unrealized_pnl: 0,
+                            status: accumulator.status === 'dust_ready' ? 'open' : 'dust_pending',
+                            dust_status: accumulator.status,
+                            trading_mode: tradingMode,
+                            wallet_id: this.scannerService?._getCurrentWalletState()?.walletId || 'default',
+                            entry_timestamp: new Date().toISOString(),
+                            created_date: new Date().toISOString(),
+                            updated_date: new Date().toISOString(),
+                            strategy_name: 'Dust Aggregation',
+                            aggregated_position_ids: accumulator.positionIds,
+                            accumulated_quantity: totalQuantityRounded,
+                            note: accumulator.status === 'dust_pending' 
+                                ? 'Below nominal quantity, waiting for additional quantity'
+                                : 'Accumulated quantity ready to sell'
+                        };
+                        
+                            // Save to database
+                            try {
+                                console.log(`[PositionManager] [DUST_DETECTION] 💾 Saving aggregated position to database: ${symbolWithSlash}`);
+                                await queueEntityCall('LivePosition', 'create', aggregatedPosition);
+                                this.positions.push(aggregatedPosition);
+                                aggregatedCount++;
+                                console.log(`[PositionManager] [DUST_DETECTION] ✅ Successfully created aggregated position for ${symbolWithSlash}`);
+                            } catch (error) {
+                                console.error(`[PositionManager] [DUST_DETECTION] ❌ Failed to create aggregated position for ${symbolWithSlash}:`, error.message);
+                                console.error(`[PositionManager] [DUST_DETECTION] ❌ Error stack:`, error.stack);
+                                console.error(`[PositionManager] [DUST_DETECTION] ❌ Error details:`, {
+                                    symbol: symbolWithSlash,
+                                    aggregatedPositionId,
+                                    totalQuantity: totalQuantityRounded,
+                                    errorCode: error.code,
+                                    errorName: error.name
+                                });
+                            }
+                    } else {
+                        // Update existing aggregated position
+                        aggregatedPosition.quantity = totalQuantityRounded;
+                        aggregatedPosition.quantity_crypto = totalQuantityRounded;
+                        aggregatedPosition.current_price = currentPrice;
+                        aggregatedPosition.entry_value_usdt = totalNotional;
+                        aggregatedPosition.status = accumulator.status === 'dust_ready' ? 'open' : 'dust_pending';
+                        aggregatedPosition.dust_status = accumulator.status;
+                        aggregatedPosition.accumulated_quantity = totalQuantityRounded;
+                        aggregatedPosition.aggregated_position_ids = accumulator.positionIds;
+                        aggregatedPosition.updated_date = new Date().toISOString();
+                        aggregatedPosition.note = accumulator.status === 'dust_pending' 
+                            ? 'Below nominal quantity, waiting for additional quantity'
+                            : 'Accumulated quantity ready to sell';
+                        
+                            // Update in database
+                            try {
+                                console.log(`[PositionManager] [DUST_DETECTION] 💾 Updating aggregated position in database: ${symbolWithSlash}`);
+                                await queueEntityCall('LivePosition', 'update', aggregatedPosition.id, {
+                                    quantity: totalQuantityRounded,
+                                    quantity_crypto: totalQuantityRounded,
+                                    current_price: currentPrice,
+                                    entry_value_usdt: totalNotional,
+                                    status: aggregatedPosition.status,
+                                    dust_status: aggregatedPosition.dust_status,
+                                    accumulated_quantity: totalQuantityRounded,
+                                    aggregated_position_ids: aggregatedPosition.aggregated_position_ids,
+                                    note: aggregatedPosition.note,
+                                    updated_date: aggregatedPosition.updated_date
+                                });
+                                console.log(`[PositionManager] [DUST_DETECTION] ✅ Successfully updated aggregated position for ${symbolWithSlash}`);
+                            } catch (error) {
+                                console.error(`[PositionManager] [DUST_DETECTION] ❌ Failed to update aggregated position for ${symbolWithSlash}:`, error.message);
+                                console.error(`[PositionManager] [DUST_DETECTION] ❌ Error stack:`, error.stack);
+                                console.error(`[PositionManager] [DUST_DETECTION] ❌ Error details:`, {
+                                    symbol: symbolWithSlash,
+                                    positionId: aggregatedPosition.id,
+                                    errorCode: error.code,
+                                    errorName: error.name
+                                });
+                            }
+                    }
+                    
+                        // Mark original positions as aggregated
+                        for (const dp of dustPositions) {
+                            if (dp.position.id && dp.position.id !== aggregatedPosition.id) {
+                                try {
+                                    console.log(`[PositionManager] [DUST_DETECTION] 🏷️ Marking position ${dp.position.id} as aggregated`);
+                                    await queueEntityCall('LivePosition', 'update', dp.position.id, {
+                                        dust_status: 'dust_aggregated',
+                                        aggregated_position_id: aggregatedPosition.id,
+                                        status: 'dust_aggregated',
+                                        note: 'Aggregated into dust position',
+                                        updated_date: new Date().toISOString()
+                                    });
+                                    
+                                    // Remove from in-memory positions (they're now aggregated)
+                                    const index = this.positions.findIndex(p => p.id === dp.position.id);
+                                    if (index >= 0) {
+                                        this.positions.splice(index, 1);
+                                        console.log(`[PositionManager] [DUST_DETECTION] ✅ Removed aggregated position from memory: ${dp.position.id}`);
+                                    }
+                                } catch (error) {
+                                    console.error(`[PositionManager] [DUST_DETECTION] ❌ Failed to mark position as aggregated:`, error.message);
+                                    console.error(`[PositionManager] [DUST_DETECTION] ❌ Error details:`, {
+                                        positionId: dp.position.id,
+                                        symbol: symbolWithSlash,
+                                        errorCode: error.code
+                                    });
+                                }
+                            }
+                        }
+                    } else if (dustPositions.length === 1) {
+                        console.log(`[PositionManager] [DUST_DETECTION] 🔄 ${symbolWithSlash}: Single dust position, updating status only`);
+                    // Single dust position - just update its status
+                    const position = dustPositions[0].position;
+                    const updateData = {
+                        dust_status: accumulator.status,
+                        accumulated_quantity: totalQuantityRounded,
+                        note: accumulator.status === 'dust_pending' 
+                            ? 'Below nominal quantity, waiting for additional quantity'
+                            : 'Accumulated quantity ready to sell',
+                        updated_date: new Date().toISOString()
+                    };
+                    
+                    if (accumulator.status === 'dust_ready') {
+                        updateData.status = 'open'; // Ready to sell
+                    } else {
+                        updateData.status = 'dust_pending';
+                    }
+                    
+                        try {
+                            console.log(`[PositionManager] [DUST_DETECTION] 💾 Updating single dust position status: ${position.id}`);
+                            await queueEntityCall('LivePosition', 'update', position.id, updateData);
+                            Object.assign(position, updateData);
+                            console.log(`[PositionManager] [DUST_DETECTION] ✅ Successfully updated dust position status: ${position.id}`);
+                        } catch (error) {
+                            console.error(`[PositionManager] [DUST_DETECTION] ❌ Failed to update dust position status:`, error.message);
+                            console.error(`[PositionManager] [DUST_DETECTION] ❌ Error stack:`, error.stack);
+                            console.error(`[PositionManager] [DUST_DETECTION] ❌ Error details:`, {
+                                positionId: position.id,
+                                symbol: symbolWithSlash,
+                                errorCode: error.code
+                            });
+                        }
+                    }
+                } catch (symbolError) {
+                    console.error(`[PositionManager] [DUST_DETECTION] ❌ Error processing symbol ${symbolNoSlash}:`, symbolError.message);
+                    console.error(`[PositionManager] [DUST_DETECTION] ❌ Symbol error stack:`, symbolError.stack);
+                    console.error(`[PositionManager] [DUST_DETECTION] ❌ Symbol error details:`, {
+                        symbol: symbolNoSlash,
+                        positionsCount: positions.length,
+                        errorCode: symbolError.code,
+                        errorName: symbolError.name
+                    });
+                    // Continue with next symbol
+                }
+            }
+            
+            const functionDuration = Date.now() - functionStartTime;
+            console.log(`[PositionManager] [DUST_DETECTION] ✅ COMPLETE ${functionId}: ${detectedCount} detected, ${aggregatedCount} aggregated, ${readyCount} ready (${functionDuration}ms)`);
+            
+            this.addLog(
+                `[PositionManager] ✅ Dust detection complete: ${detectedCount} detected, ${aggregatedCount} aggregated, ${readyCount} ready to sell`,
+                'success'
+            );
+            
+            return {
+                detected: detectedCount,
+                aggregated: aggregatedCount,
+                ready: readyCount
+            };
+        } catch (error) {
+            const functionDuration = Date.now() - functionStartTime;
+            console.error(`[PositionManager] [DUST_DETECTION] ❌ ERROR ${functionId} (${functionDuration}ms):`, error.message);
+            console.error(`[PositionManager] [DUST_DETECTION] ❌ Error stack:`, error.stack);
+            console.error(`[PositionManager] [DUST_DETECTION] ❌ Error details:`, {
+                errorCode: error.code,
+                errorName: error.name,
+                errorMessage: error.message,
+                functionId,
+                duration: functionDuration
+            });
+            this.addLog(`[PositionManager] ❌ Error detecting dust positions: ${error.message}`, 'error');
+            return { detected: 0, aggregated: 0, ready: 0, error: error.message };
+        }
+    }
+
     async monitorAndClosePositions(currentPrices = null) {
         const _monitorCloseStartTime = Date.now();
         const functionId = `monitor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] MONITOR_AND_CLOSE_POSITIONS ENTRY (0ms) 🔴🔴🔴`);
+        console.log(`🚀 [POS_MON_ENTRY] monitorAndClosePositions called - positions: ${this.positions.length}, currentPrices keys: ${currentPrices ? Object.keys(currentPrices).length : 0}`);
         
         // Prevent concurrent monitoring to avoid duplicate position processing
         if (this.isMonitoring) {
-            // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] ALREADY MONITORING, RETURNING EARLY (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+            console.log(`⚠️ [POS_MON_ENTRY] Already monitoring, returning early`);
             return { tradesToCreate: [], positionIdsToClose: [] };
         }
         
@@ -4627,13 +5265,6 @@ export default class PositionManager {
                 return { tradesToCreate: [], positionIdsToClose: [] };
             }
 
-            if (!currentPrices || typeof currentPrices !== 'object' || Object.keys(currentPrices).length === 0) {
-                console.log('[PositionManager] ⚠️ No current prices available for monitoring');
-                this.addLog('[DEBUG_MONITOR] ⚠️ No current prices available for monitoring', 'warning');
-                this.addLog('[POSITIONS_MONITOR] ⚠️ No valid price data available, skipping monitoring', 'warning');
-                return { tradesToCreate: [], positionIdsToClose: [] };
-            }
-
             // Logging from outline, adapted
             this.addLog(`[MONITOR] 🛡️ Monitoring ${this.positions.length} open positions in ${mode.toUpperCase()} wallet (ID: ${walletId}).`, 'scan', { level: 1 });
             // END Logging
@@ -4662,6 +5293,86 @@ export default class PositionManager {
 
             const pricesSource = currentPrices || this.scannerService.currentPrices || {};
             
+            // ⚡ PERFORMANCE OPTIMIZATION: Batch fetch all fresh prices BEFORE position loop
+            // This eliminates sequential API calls (64 positions × 1.5s = 96s → ~5s with batching)
+            // NOTE: We ALWAYS fetch fresh prices even if currentPrices exists, because we need current prices for closing positions
+            const _batchPriceFetchStart = Date.now();
+            const freshPriceMap = {}; // Map of cleanSymbol -> fresh price
+            
+            if (this.scannerService?.priceManagerService) {
+                try {
+                    // Get unique symbols from all positions that need monitoring
+                    const uniqueSymbols = [...new Set(
+                        this.positions
+                            .filter(p => p.status === 'open' || p.status === 'trailing')
+                            .map(p => p.symbol)
+                    )];
+                    
+                    // ⚡ PERFORMANCE: Use PriceCacheService batch endpoint directly (single API call)
+                    // This makes ONE API call for all symbols instead of N individual calls
+                    try {
+                        const normalizedSymbols = uniqueSymbols.map(s => s.replace('/', ''));
+                        const tradingMode = this.scannerService?.state?.tradingMode || 'testnet';
+                        
+                        // Use PriceCacheService.getBatchPrices which uses the batch endpoint
+                        const priceCache = this.scannerService?.priceCacheService || priceCacheService;
+                        if (priceCache && typeof priceCache.getBatchPrices === 'function') {
+                            const priceMap = await priceCache.getBatchPrices(normalizedSymbols, tradingMode);
+                            
+                            // Convert Map to object
+                            priceMap.forEach((price, symbol) => {
+                                if (price && !isNaN(price) && price > 0) {
+                                    freshPriceMap[symbol] = price;
+                                }
+                            });
+                        } else {
+                            // Fallback: Use getBinancePrices if priceCacheService not available
+                            const { getBinancePrices } = await import('@/api/functions');
+                            const priceResponse = await getBinancePrices({ symbols: normalizedSymbols });
+                            
+                            // Process batch response
+                            let priceArray = null;
+                            if (Array.isArray(priceResponse)) {
+                                priceArray = priceResponse;
+                            } else if (priceResponse?.data && Array.isArray(priceResponse.data)) {
+                                priceArray = priceResponse.data;
+                            } else if (priceResponse?.success && priceResponse.data && Array.isArray(priceResponse.data)) {
+                                priceArray = priceResponse.data;
+                            }
+                            
+                            if (priceArray && priceArray.length > 0) {
+                                for (const item of priceArray) {
+                                    if (item && item.symbol && item.price && !item.error) {
+                                        const cleanSymbol = item.symbol.replace('/', '');
+                                        const price = parseFloat(item.price);
+                                        if (!isNaN(price) && price > 0) {
+                                            freshPriceMap[cleanSymbol] = price;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch (batchError) {
+                        console.error(`[PositionManager] ❌ Batch price fetch failed:`, batchError.message);
+                        // Don't fallback to individual calls - use cached prices instead
+                    }
+                } catch (error) {
+                    console.error(`[PositionManager] ❌ Batch price fetch failed:`, error.message);
+                }
+            }
+            
+            // Check if we have any prices (from batch fetch or cached) before proceeding
+            const hasPrices = Object.keys(freshPriceMap).length > 0 || 
+                             (pricesSource && Object.keys(pricesSource).length > 0) ||
+                             (this.scannerService.currentPrices && Object.keys(this.scannerService.currentPrices).length > 0);
+            
+            if (!hasPrices) {
+                console.log('[PositionManager] ⚠️ No prices available (neither batch-fetched nor cached)');
+                this.addLog('[DEBUG_MONITOR] ⚠️ No prices available for monitoring', 'warning');
+                this.addLog('[POSITIONS_MONITOR] ⚠️ No valid price data available, skipping monitoring', 'warning');
+                return { tradesToCreate: [], positionIdsToClose: [] };
+            }
+            
             // eslint-disable-next-line no-unused-vars
             let loopIterations = 0;
 
@@ -4673,11 +5384,23 @@ export default class PositionManager {
             });
 
             const positionLoopPromise = (async () => {
+                const _positionLoopStart = Date.now();
                 // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] POSITION LOOP STARTED (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
             for (const position of this.positions) { // Looping directly over this.positions
+                const _positionIterationStart = Date.now();
                 loopIterations++;
                 if (loopIterations % 10 === 0 || loopIterations === 1) {
                     // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] POSITION LOOP ITERATION ${loopIterations}/${this.positions.length} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+                }
+                
+                // CRITICAL: Skip dust_pending positions - they will be sold when accumulated quantity reaches minimum
+                if (position.dust_status === 'dust_pending' || position.status === 'dust_pending') {
+                    continue; // Skip this position - it's waiting for more quantity
+                }
+                
+                // CRITICAL: Skip aggregated positions - they're already merged into aggregated position
+                if (position.dust_status === 'dust_aggregated' || position.status === 'dust_aggregated') {
+                    continue; // Skip this position - it's been aggregated
                 }
                 
                 // DEBUG: Track position loop progress
@@ -4696,27 +5419,20 @@ export default class PositionManager {
                 }
                 
                 // CRITICAL FIX: Validate that position has an ID before processing
-                if (!position.id) {
-                    this.addLog('[DEBUG_MONITOR] ❌ CRITICAL: Position has no DB ID!', 'error', {
-                        position_id: position.position_id,
-                        symbol: position.symbol,
-                        strategy_name: position.strategy_name,
-                        hasDbRecordId: !!position.db_record_id,
-                        dbRecordId: position.db_record_id
-                    });
-                    
-                    // Try to fix the missing ID by using db_record_id if available
-                    if (position.db_record_id) {
-                        // Don't override position.id - it should already be set correctly
-                        this.addLog(`[DEBUG_MONITOR] 🔧 Position has db_record_id: ${position.db_record_id}, position.id: ${position.id}`, 'info');
-                    } else {
+                // Use same fallback logic as updatePositionsWithCurrentPrices (line 1554)
+                const positionId = position.id || position.db_record_id || position.position_id;
+                
+                if (!positionId) {
+                    // Only log as error if truly no ID available from any source
                     this.scannerService.addLog(
-                        `[MONITOR] ⚠️ Skipping position ${position.symbol} - missing database ID`,
+                        `[MONITOR] ⚠️ Skipping position ${position.symbol} - missing database ID (no id, db_record_id, or position_id)`,
                         'warning'
                     );
                     continue;
-                    }
                 }
+                
+                // If position.id is missing but we have db_record_id, use it (but don't modify the position object)
+                // The positionId variable above already handles this fallback
                     
                 if (position.status !== 'open' && position.status !== 'trailing') {
                     this.addLog(`[DEBUG_MONITOR] ⏭️ Skipping position - status is ${position.status}`, 'debug');
@@ -4730,83 +5446,47 @@ export default class PositionManager {
 
                 try {
                     const cleanSymbol = position.symbol.replace('/', '');
-                    let currentPrice = pricesSource[cleanSymbol];
+                    const entryPrice = Number(position.entry_price || 0);
+                    
+                    // ⚡ PERFORMANCE OPTIMIZATION: Use batch-fetched fresh price instead of individual API call
+                    // First, try to get price from batch-fetched freshPriceMap
+                    let currentPrice = freshPriceMap[cleanSymbol];
+                    
+                    // If not in batch map, fall back to cached prices
+                    if (!currentPrice || isNaN(currentPrice) || currentPrice <= 0) {
+                        currentPrice = pricesSource[cleanSymbol];
+                    }
                     
                     // CRITICAL FIX: Detect stale prices and log error (but don't reject)
                     // If price seems unrealistic (>50% different from entry), log error but allow to proceed
-                    const entryPrice = Number(position.entry_price || 0);
                     if (currentPrice && entryPrice > 0) {
                         const priceDiffPercent = Math.abs((currentPrice - entryPrice) / entryPrice) * 100;
                         if (priceDiffPercent > 50) {
-                            console.error(`[PositionManager] 🚨 STALE PRICE DETECTED: Cached price ${currentPrice} is >50% different from entry ${entryPrice} (${priceDiffPercent.toFixed(2)}%) for ${position.symbol}`);
-                            console.error(`[PositionManager] 🚨 This may indicate cached price is from 24hr ticker's lastPrice (stale) rather than current price`);
+                            console.error(`[PositionManager] 🚨 STALE PRICE DETECTED: Price ${currentPrice} is >50% different from entry ${entryPrice} (${priceDiffPercent.toFixed(2)}%) for ${position.symbol}`);
+                            console.error(`[PositionManager] 🚨 This may indicate stale price data`);
                             if (position.symbol === 'ETH/USDT' && (currentPrice === 4160.88 || Math.abs(currentPrice - 4160.88) < 0.01)) {
-                                console.error(`[PositionManager] 🚨🚨🚨 CONFIRMED: 4160.88 detected in cached price for ETH! 🚨🚨🚨`);
+                                console.error(`[PositionManager] 🚨🚨🚨 CONFIRMED: 4160.88 detected in price for ETH! 🚨🚨🚨`);
                             }
-                            // Force fresh fetch but don't reject
-                            currentPrice = null;
-                        }
-                    }
-                    
-                    // CRITICAL FIX: ALWAYS fetch FRESH price from Binance when closing positions (bypass cache completely)
-                    // This prevents stale prices like 1889.03 or 4160.88 for ETH (should be ~3800-3900)
-                    // Use getFreshCurrentPrice() which directly calls /api/v3/ticker/price (current price, not 24hr ticker)
-                    if (this.scannerService.priceManagerService) {
-                        try {
-                            const fetchedPrice = await this.scannerService.priceManagerService.getFreshCurrentPrice(position.symbol);
-                                if (fetchedPrice && !isNaN(fetchedPrice) && fetchedPrice > 0) {
-                                // CRITICAL: Detect stale prices and log error (but don't reject)
-                                if (entryPrice > 0) {
-                                    const fetchedDiffPercent = Math.abs((fetchedPrice - entryPrice) / entryPrice) * 100;
-                                    if (fetchedDiffPercent > 50) {
-                                        console.error(`[PositionManager] 🚨 STALE PRICE DETECTED: Fresh price ${fetchedPrice} is >50% different from entry ${entryPrice} for ${position.symbol}`);
-                                        console.error(`[PositionManager] 🚨 Price difference: ${fetchedDiffPercent.toFixed(2)}% - This may indicate wrong price from Binance API`);
-                                        if (position.symbol === 'ETH/USDT' && (fetchedPrice === 4160.88 || Math.abs(fetchedPrice - 4160.88) < 0.01)) {
-                                            console.error(`[PositionManager] 🚨🚨🚨 CONFIRMED: 4160.88 detected in fresh price for ETH! 🚨🚨🚨`);
-                                        }
-                                        this.scannerService.addLog(`[POSITION_MONITOR] ⚠️ Warning: Fresh price ${fetchedPrice} differs significantly from entry ${entryPrice} (${fetchedDiffPercent.toFixed(2)}%) for ${position.symbol}`, 'warning');
-                                        // Still use the fetched price (it's from Binance API, source of truth)
+                            // Still use the price (it's from Binance API, source of truth)
                                         // But log the error for investigation
+                            this.scannerService.addLog(`[POSITION_MONITOR] ⚠️ Warning: Price ${currentPrice} differs significantly from entry ${entryPrice} (${priceDiffPercent.toFixed(2)}%) for ${position.symbol}`, 'warning');
                                     }
                                 }
-                                    currentPrice = fetchedPrice;
-                                // console.log(`[PositionManager] ✅ Fetched FRESH price (bypassing cache) for ${position.symbol}: ${currentPrice}`);
                                 
                                 // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
-                                if (position.symbol === 'ETH/USDT') {
+                    if (position.symbol === 'ETH/USDT' && currentPrice) {
                                     const ETH_ALERT_MIN = 3500;
                                     const ETH_ALERT_MAX = 4000;
                                     if (currentPrice < ETH_ALERT_MIN || currentPrice > ETH_ALERT_MAX) {
                                         //console.error(`[PositionManager] 🚨🚨🚨 ETH PRICE ALERT 🚨🚨🚨`);
                                         //console.error(`[PositionManager] 🚨 ETH price ${currentPrice} is outside alert range [${ETH_ALERT_MIN}, ${ETH_ALERT_MAX}]`);
-                                        /*console.error(`[PositionManager] 🚨 Full details:`, {
-                                            symbol: position.symbol,
-                                            currentPrice: currentPrice,
-                                            entryPrice: entryPrice,
-                                            positionId: position.position_id || position.id,
-                                            priceDifference: currentPrice < ETH_ALERT_MIN ? 
-                                                `${(ETH_ALERT_MIN - currentPrice).toFixed(2)} below minimum` : 
-                                                `${(currentPrice - ETH_ALERT_MAX).toFixed(2)} above maximum`,
-                                            percentDifference: currentPrice < ETH_ALERT_MIN ? 
-                                                `${((ETH_ALERT_MIN - currentPrice) / ETH_ALERT_MIN * 100).toFixed(2)}%` : 
-                                                `${((currentPrice - ETH_ALERT_MAX) / ETH_ALERT_MAX * 100).toFixed(2)}%`,
-                                            priceDiffFromEntry: entryPrice > 0 ? `${((currentPrice - entryPrice) / entryPrice * 100).toFixed(2)}%` : 'N/A',
-                                            timestamp: new Date().toISOString(),
-                                            source: 'monitorAndClosePositions_early',
-                                            tradingMode: this.tradingMode
-                                        });*/
-                                        //console.error(`[PositionManager] 🚨🚨🚨 END ETH PRICE ALERT 🚨🚨🚨`);
-                                    }
-                                }
-                            } else {
-                                console.warn(`[PositionManager] ⚠️ Fresh price fetch returned invalid value for ${position.symbol}: ${fetchedPrice}`);
-                                }
-                            } catch (error) {
-                            console.error(`[PositionManager] ❌ Failed to fetch fresh price for ${position.symbol}:`, error.message);
                         }
                     }
                     
-                    // LAST RESORT: Only use cached price if fresh fetch completely failed AND cached price is valid
+                    // ⚡ PERFORMANCE: Removed individual price fetch fallback - all prices should be in batch-fetched freshPriceMap
+                    // If price is missing, it means batch fetch failed for this symbol - skip position rather than fetching individually
+                    
+                    // LAST RESORT: Only use cached price if batch fetch completely failed AND cached price is valid
                     // Log error if stale price detected but don't reject
                     if ((!currentPrice || isNaN(currentPrice) || currentPrice <= 0) && this.scannerService.currentPrices?.[cleanSymbol]) {
                         const cachedPrice = this.scannerService.currentPrices[cleanSymbol];
@@ -5327,7 +6007,10 @@ export default class PositionManager {
                 this.addLog(`[DEBUG_MONITOR] Error stack: ${error.stack}`, 'error');
                 this.addLog(`[POSITIONS_MONITOR] Error monitoring position ${position?.position_id || 'unknown'}: ${error.message}`, 'error');
             }
+            
         }
+        
+        const positionLoopTime = Date.now() - _positionLoopStart;
             })(); // Close the positionLoopPromise
 
             // Race the position loop against the timeout
@@ -5361,7 +6044,11 @@ export default class PositionManager {
         }
 
         // Update all open positions with current prices and unrealized P&L
-        await this.updatePositionsWithCurrentPrices(currentPrices);
+        // ⚡ PERFORMANCE: Use batch-fetched prices (freshPriceMap) merged with currentPrices
+        const _updatePricesStart = Date.now();
+        const mergedPrices = { ...currentPrices, ...freshPriceMap };
+        await this.updatePositionsWithCurrentPrices(mergedPrices);
+        const updatePricesTime = Date.now() - _updatePricesStart;
 
         // If any position tracking updates happened, persist the wallet state
         if (this.needsWalletSave) {
@@ -5371,6 +6058,8 @@ export default class PositionManager {
         }
 
         // console.error(`[PositionManager] 🔴🔴🔴 [${functionId}] POSITION LOOP COMPLETE, tradesToCreate: ${tradesToCreate.length} (${Date.now() - _monitorCloseStartTime}ms) 🔴🔴🔴`);
+        
+        const totalTime = Date.now() - _monitorCloseStartTime;
         
         console.log(`[PositionManager] 🔍 MONITORING COMPLETE:`, {
             tradesToCreate: tradesToCreate.length,
@@ -5448,7 +6137,8 @@ export default class PositionManager {
                 
                 const _executeBatchCloseStartTime = Date.now();
                 console.log(`[PositionManager] 🚀 Calling executeBatchClose for ${positionsCount} positions (timeout: ${timeoutSeconds}s)`);
-                const executeBatchClosePromise = this.executeBatchClose(validTradesToCreate, validPositionIdsToClose);
+                // ⚡ PERFORMANCE OPTIMIZATION: Pass batch-fetched prices to avoid redundant fetching
+                const executeBatchClosePromise = this.executeBatchClose(validTradesToCreate, validPositionIdsToClose, freshPriceMap);
                 
                 let closeResult;
                 try {
@@ -5902,7 +6592,8 @@ export default class PositionManager {
             // Track successful positions opened in this batch
             let successfulPositionsInBatch = 0;
 
-            for (const signal of signals) {
+            for (let i = 0; i < signals.length; i++) {
+                const signal = signals[i];
                 try {
                     console.log('[PositionManager] 🚀 Processing signal:', signal.combination?.strategy_name, signal.combination?.symbol);
                     console.log('[PositionManager] 🔍 Signal object debug:', {
@@ -6159,40 +6850,181 @@ export default class PositionManager {
                        const effectiveAvailableBalance = availableBalance; // Use actual available balance, not total equity
                        
                        // LPM/EBR Integration: Get adjustedBalanceRiskFactor from scanner state
-                       const adjustedBalanceRiskFactor = this.scannerService?.state?.adjustedBalanceRiskFactor || null;
-                       console.log('[PositionManager] 🎯 LPM/EBR: Using adjustedBalanceRiskFactor:', adjustedBalanceRiskFactor);
+                       // CRITICAL FIX: EBR is calculated in PHASE 7 but positions open in PHASE 5
+                       // Always ensure EBR is available - use last known value or calculate from current LPM
+                       let adjustedBalanceRiskFactor = this.scannerService?.state?.adjustedBalanceRiskFactor;
+                       
+                       // Debug: Always log for first signal to see what we're starting with
+                       if (i === 0) {
+                           console.log(`[EBR_CALC] 🔍 EBR Check - Initial state: {adjustedBalanceRiskFactor: ${adjustedBalanceRiskFactor}, type: ${typeof adjustedBalanceRiskFactor}, isFinite: ${Number.isFinite(adjustedBalanceRiskFactor)}, hasState: ${!!this.scannerService?.state}}`);
+                       }
+                       
+                       // If EBR is not available or invalid, calculate it from current LPM score using same logic as PerformanceMetricsService
+                       // Check for null, undefined, NaN, or non-finite values (but allow 0 as valid EBR)
+                       if (adjustedBalanceRiskFactor == null || !Number.isFinite(adjustedBalanceRiskFactor)) {
+                           const lpmScore = this.scannerService?.state?.performanceMomentumScore;
+                           const maxBalancePercentRisk = this.scannerService?.state?.settings?.maxBalancePercentRisk || 100;
+                           
+                           // Debug: Log why EBR calculation is needed
+                           if (i === 0) {
+                               console.log(`[EBR_CALC] 🔧 Calculating EBR - lpmScore: ${lpmScore}, maxBalancePercentRisk: ${maxBalancePercentRisk}`);
+                           }
+                           
+                           if (lpmScore !== null && lpmScore !== undefined && Number.isFinite(lpmScore)) {
+                               // Calculate EBR from LPM using same thresholds as PerformanceMetricsService
+                               const clampedScore = Math.max(0, Math.min(100, Math.round(lpmScore)));
+                               
+                               if (clampedScore >= MOMENTUM_THRESHOLDS.excellent) {
+                                   adjustedBalanceRiskFactor = maxBalancePercentRisk;
+                               } else if (clampedScore >= MOMENTUM_THRESHOLDS.good) {
+                                   const scoreRange = MOMENTUM_THRESHOLDS.excellent - MOMENTUM_THRESHOLDS.good;
+                                   const scorePosition = clampedScore - MOMENTUM_THRESHOLDS.good;
+                                   const scaleFactor = 0.6 + (0.4 * (scorePosition / scoreRange));
+                                   adjustedBalanceRiskFactor = maxBalancePercentRisk * scaleFactor;
+                               } else if (clampedScore >= MOMENTUM_THRESHOLDS.poor) {
+                                   const scoreRange = MOMENTUM_THRESHOLDS.good - MOMENTUM_THRESHOLDS.poor;
+                                   const scorePosition = clampedScore - MOMENTUM_THRESHOLDS.poor;
+                                   const scaleFactor = 0.2 + (0.4 * (scorePosition / scoreRange));
+                                   adjustedBalanceRiskFactor = maxBalancePercentRisk * scaleFactor;
+                               } else {
+                                   adjustedBalanceRiskFactor = Math.max(MOMENTUM_THRESHOLDS.minimum, maxBalancePercentRisk * 0.1);
+                               }
+                               
+                               adjustedBalanceRiskFactor = Math.max(MOMENTUM_THRESHOLDS.minimum, Math.min(maxBalancePercentRisk, Math.round(adjustedBalanceRiskFactor)));
+                               
+                               // Update state so it's available for next position
+                               if (this.scannerService.state) {
+                                   this.scannerService.state.adjustedBalanceRiskFactor = adjustedBalanceRiskFactor;
+                               }
+                               
+                               // Debug: Log successful calculation
+                               if (i === 0) {
+                                   console.log(`[EBR_CALC] 🎯 LPM/EBR: Calculated adjustedBalanceRiskFactor: ${adjustedBalanceRiskFactor} (type: ${typeof adjustedBalanceRiskFactor})`);
+                               }
+                           
+                           } else {
+                               // No LPM score available - use configured max as fallback
+                               adjustedBalanceRiskFactor = maxBalancePercentRisk;
+                               // Update state with fallback value
+                               if (this.scannerService.state) {
+                                   this.scannerService.state.adjustedBalanceRiskFactor = adjustedBalanceRiskFactor;
+                               }
+                               if (i === 0) {
+                                   console.log(`[EBR_CALC] ⚠️ No LPM score available, using maxBalancePercentRisk fallback: ${adjustedBalanceRiskFactor}`);
+                               }
+                           }
+                       } else {
+                           // EBR already exists in state - ensure it's valid and update state to be safe
+                           if (this.scannerService.state && Number.isFinite(adjustedBalanceRiskFactor)) {
+                               this.scannerService.state.adjustedBalanceRiskFactor = adjustedBalanceRiskFactor;
+                           }
+                       }
+                       
+                       // Final validation - ensure EBR is never null/undefined when passed to calculatePositionSize
+                       if (adjustedBalanceRiskFactor === null || adjustedBalanceRiskFactor === undefined || !Number.isFinite(adjustedBalanceRiskFactor)) {
+                           // Last resort: use 100% if everything else failed
+                           adjustedBalanceRiskFactor = 100;
+                           // Update state with last resort value
+                           if (this.scannerService.state) {
+                               this.scannerService.state.adjustedBalanceRiskFactor = adjustedBalanceRiskFactor;
+                           }
+                           if (i === 0) {
+                               console.log(`[EBR_CALC] ⚠️ EBR validation failed, using last resort: ${adjustedBalanceRiskFactor}`);
+                           }
+                       }
+                       
+                       // Debug: Log final EBR value before passing to calculatePositionSize (only for first few signals to avoid spam)
+                       if (i < 3) {
+                           console.log(`[EBR_CALC] ✅ Signal ${i}: adjustedBalanceRiskFactor being passed to calculatePositionSize: ${adjustedBalanceRiskFactor} (type: ${typeof adjustedBalanceRiskFactor})`);
+                       }
                        
                        // Get LPM score for position sizing
                        const lpmScore = this.scannerService?.state?.performanceMomentumScore || 50;
                        
-                       console.log('[PositionManager] 🔍 Position size calculation inputs:', {
-                           strategySettings: strategySettings,
-                           currentPrice: currentPrice,
-                           convictionScore: convictionScore || 50,
-                           convictionDetails: convictionDetails || {},
-                           availableCash: effectiveAvailableBalance,
-                           totalWalletBalance: totalEquity,
-                           balanceInTrades: actualBalanceInTrades,
-                           symbol: symbol,
-                           exchangeInfo: (() => {
-                               const exchangeInfo = this.getExchangeInfo ? this.getExchangeInfo(symbolNoSlash) : null;
-                               console.log('[PositionManager] 🔍 Exchange info for', symbolNoSlash, ':', {
-                                   hasExchangeInfo: !!exchangeInfo,
-                                   hasFilters: !!exchangeInfo?.filters,
-                                   filtersType: typeof exchangeInfo?.filters,
-                                   filtersIsArray: Array.isArray(exchangeInfo?.filters),
-                                   filtersKeys: exchangeInfo?.filters ? Object.keys(exchangeInfo.filters) : 'no filters',
-                                   lotSizeFilter: exchangeInfo?.filters?.LOT_SIZE,
-                                   minNotionalFilter: exchangeInfo?.filters?.MIN_NOTIONAL
-                               });
-                               return exchangeInfo;
-                           })(),
-                           indicators: { atr: atrValue },
-                           adjustedBalanceRiskFactor: adjustedBalanceRiskFactor,
-                           lpmScore: lpmScore
-                       });
+                       // Position size calculation inputs prepared
                        
-                       const positionSizeResult = calculatePositionSize({
+                       // TEST MODE: If signal has _forcePositionValue, override position size calculation
+                       let positionSizeResult;
+                       if (signal._forcePositionValue && signal._forcePositionValue > 0) {
+                           console.log(`🧪 [TEST_BONK] 🔧 FORCING position value to $${signal._forcePositionValue}`);
+                           const forcedQuantity = signal._forcePositionValue / currentPrice;
+                               const exchangeInfo = this.getExchangeInfo ? this.getExchangeInfo(symbolNoSlash) : null;
+                           
+                           // Apply exchange filters to the forced quantity
+                           // Import the module and access the function
+                           const dynamicSizingModule = await import('@/components/utils/dynamicPositionSizing');
+                           const dynamicSizingDefault = dynamicSizingModule.default || dynamicSizingModule;
+                           
+                           // applyExchangeFilters is not exported, so we'll calculate it manually
+                           // Use the same logic from dynamicPositionSizing
+                           let filteredQuantity = forcedQuantity;
+                           const appliedFilters = [];
+                           
+                           if (exchangeInfo) {
+                               const lotSizeFilter = exchangeInfo.filters?.LOT_SIZE;
+                               const minNotionalFilter = exchangeInfo.filters?.MIN_NOTIONAL;
+                               const stepSize = lotSizeFilter?.stepSize ? parseFloat(lotSizeFilter.stepSize) : 0.00000001;
+                               const minQty = lotSizeFilter?.minQty ? parseFloat(lotSizeFilter.minQty) : 0;
+                               const minNotional = minNotionalFilter?.minNotional ? parseFloat(minNotionalFilter.minNotional) : 0;
+                               
+                               // Floor to stepSize
+                               if (stepSize > 0) {
+                                   filteredQuantity = Math.floor(filteredQuantity / stepSize) * stepSize;
+                               }
+                               
+                               // Auto-raise to minQty if below
+                               if (minQty > 0 && filteredQuantity < minQty) {
+                                   const minQtyCost = minQty * currentPrice;
+                                   if (effectiveAvailableBalance >= minQtyCost) {
+                                       filteredQuantity = minQty;
+                                       if (stepSize > 0) {
+                                           filteredQuantity = Math.floor(filteredQuantity / stepSize) * stepSize;
+                                       }
+                                       appliedFilters.push(`Auto-raised to minQty: ${filteredQuantity}`);
+                                   }
+                               }
+                               
+                               // Auto-raise to minNotional if below
+                               let notionalValue = filteredQuantity * currentPrice;
+                               if (minNotional > 0 && notionalValue < minNotional) {
+                                   const requiredQty = minNotional / currentPrice;
+                                   const requiredCost = requiredQty * currentPrice;
+                                   if (effectiveAvailableBalance >= requiredCost) {
+                                       filteredQuantity = requiredQty;
+                                       if (stepSize > 0) {
+                                           filteredQuantity = Math.floor(filteredQuantity / stepSize) * stepSize;
+                                       }
+                                       appliedFilters.push(`Auto-raised to minNotional: ${filteredQuantity}`);
+                                   }
+                               }
+                           }
+                           
+                           const filtered = {
+                               quantityCrypto: filteredQuantity,
+                               positionValueUSDT: filteredQuantity * currentPrice,
+                               appliedFilters: appliedFilters
+                           };
+                           
+                           positionSizeResult = {
+                               isValid: true,
+                               positionSize: signal._forcePositionValue,
+                               quantityCrypto: filtered.quantityCrypto,
+                               positionValueUSDT: filtered.positionValueUSDT,
+                               riskAmount: signal._forcePositionValue * 0.02, // 2% risk
+                               stopLossPrice: currentPrice * 0.98, // 2% stop loss
+                               convictionMultiplier: 1,
+                               calculationMethod: 'forced_test_value',
+                               rawQuantityCrypto: forcedQuantity,
+                               appliedFilters: filtered.appliedFilters || []
+                           };
+                           
+                           console.log(`🧪 [TEST_BONK] 🔧 Forced position size result:`, {
+                               quantityCrypto: positionSizeResult.quantityCrypto,
+                               positionValueUSDT: positionSizeResult.positionValueUSDT,
+                               appliedFilters: positionSizeResult.appliedFilters
+                           });
+                       } else {
+                           positionSizeResult = dynamicSizing.calculatePositionSize({
                            strategySettings: strategySettings,
                            currentPrice: currentPrice,
                            convictionScore: convictionScore || 50,
@@ -6203,7 +7035,7 @@ export default class PositionManager {
                            symbol: symbol,
                            exchangeInfo: (() => {
                                const exchangeInfo = this.getExchangeInfo ? this.getExchangeInfo(symbolNoSlash) : null;
-                               console.log('[PositionManager] 🔍 Exchange info for', symbolNoSlash, ':', {
+                                   /*console.log('[POS_SIZE_INPUTS] 🔍 Exchange info for', symbolNoSlash, ':', {
                                    hasExchangeInfo: !!exchangeInfo,
                                    hasFilters: !!exchangeInfo?.filters,
                                    filtersType: typeof exchangeInfo?.filters,
@@ -6211,7 +7043,7 @@ export default class PositionManager {
                                    filtersKeys: exchangeInfo?.filters ? Object.keys(exchangeInfo.filters) : 'no filters',
                                    lotSizeFilter: exchangeInfo?.filters?.LOT_SIZE,
                                    minNotionalFilter: exchangeInfo?.filters?.MIN_NOTIONAL
-                               });
+                               });*/
                                return exchangeInfo;
                            })(),
                            indicators: { atr: atrValue }, // Pass latest valid ATR value to position sizing
@@ -6219,11 +7051,11 @@ export default class PositionManager {
                            lpmScore: lpmScore, // Pass LPM score for position sizing
                            openPositions: this.positions || [] // Pass current open positions for portfolio heat management
                        });
+                       }
                        
-                       console.log('[PositionManager] 🔍 Position size calculation result:', positionSizeResult);
                        
                        if (positionSizeResult.error || !positionSizeResult.isValid) {
-                           console.error('[PositionManager] ❌ Position size calculation failed:', {
+                           console.error('[POS_SIZE_ERROR] ❌ Position size calculation failed:', {
                                symbol: signal.symbol || combination.symbol,
                                error: positionSizeResult.error || positionSizeResult.reason,
                                message: positionSizeResult.message
@@ -6232,6 +7064,25 @@ export default class PositionManager {
                            result.errors.push({
                                signal: signal,
                                error: `Position sizing failed: ${positionSizeResult.error || positionSizeResult.reason}`
+                           });
+                           continue;
+                       }
+                       
+                       // CRITICAL: Validate quantity is not zero before proceeding
+                       if (!positionSizeResult.quantityCrypto || positionSizeResult.quantityCrypto <= 0) {
+                           console.error('[POS_SIZE_ERROR] ❌ CRITICAL: Position size calculation returned zero quantity:', {
+                               symbol: signal.symbol || combination.symbol,
+                               quantityCrypto: positionSizeResult.quantityCrypto,
+                               positionValueUSDT: positionSizeResult.positionValueUSDT,
+                               isValid: positionSizeResult.isValid,
+                               error: positionSizeResult.error,
+                               reason: positionSizeResult.reason,
+                               message: 'Position cannot be created with zero quantity - this indicates a calculation error'
+                           });
+                           
+                           result.errors.push({
+                               signal: signal,
+                               error: `Position sizing returned zero quantity - calculation error (likely ATR failure for very small price)`
                            });
                            continue;
                        }
@@ -6343,6 +7194,119 @@ export default class PositionManager {
                                error: `Binance buy order failed: ${binanceBuyResult.error}`
                            });
                            continue;
+                       }
+                       
+                       // CRITICAL: Check if order expired (common on testnet due to lack of liquidity)
+                       const orderStatus = binanceBuyResult.orderResult?.status;
+                       const initialExecutedQty = parseFloat(binanceBuyResult.orderResult?.executedQty || 0);
+                       
+                       // Enhanced logging for BONK/testnet debugging
+                       const isBONK = symbol && (symbol.includes('BONK') || symbol.replace('/', '').includes('BONK'));
+                       if (isBONK || orderStatus === 'EXPIRED') {
+                           const orderResult = binanceBuyResult.orderResult || {};
+                           console.log(`🧪 [TEST_BONK] 📋 FULL BINANCE ORDER RESPONSE:`, {
+                               symbol: symbol,
+                               success: binanceBuyResult.success,
+                               error: binanceBuyResult.error,
+                               orderStatus: orderStatus,
+                               // Key liquidity indicators
+                               executedQty: initialExecutedQty,
+                               origQty: orderResult.origQty,
+                               cummulativeQuoteQty: orderResult.cummulativeQuoteQty,
+                               fills: orderResult.fills,
+                               fillCount: orderResult.fills?.length || 0,
+                               // Order details
+                               orderId: orderResult.orderId,
+                               clientOrderId: orderResult.clientOrderId,
+                               timeInForce: orderResult.timeInForce,
+                               type: orderResult.type,
+                               side: orderResult.side,
+                               price: orderResult.price,
+                               stopPrice: orderResult.stopPrice,
+                               icebergQty: orderResult.icebergQty,
+                               origQuoteOrderQty: orderResult.origQuoteOrderQty,
+                               // Timestamps
+                               time: orderResult.time,
+                               updateTime: orderResult.updateTime,
+                               isWorking: orderResult.isWorking,
+                               workingTime: orderResult.workingTime,
+                               // Additional fields
+                               orderListId: orderResult.orderListId,
+                               selfTradePreventionMode: orderResult.selfTradePreventionMode,
+                               // Full JSON for complete inspection
+                               fullResponseJSON: JSON.stringify(orderResult, null, 2)
+                           });
+                           
+                           // Liquidity issue confirmation checklist
+                           const checklist = {
+                               '1. Order Status is EXPIRED': orderStatus === 'EXPIRED' ? '✅ YES' : '❌ NO',
+                               '2. Executed Quantity is 0': initialExecutedQty <= 0 ? '✅ YES' : '❌ NO',
+                               '3. No Fills Array or Empty': (!orderResult.fills || orderResult.fills.length === 0) ? '✅ YES' : '❌ NO',
+                               '4. Cumulative Quote Qty is 0': (!orderResult.cummulativeQuoteQty || parseFloat(orderResult.cummulativeQuoteQty) <= 0) ? '✅ YES' : '❌ NO',
+                               '5. Is Working is False': orderResult.isWorking === false ? '✅ YES' : '❌ NO',
+                               '6. On Testnet': tradingMode === 'testnet' ? '✅ YES' : '❌ NO'
+                           };
+                           
+                           const isConfirmed = orderStatus === 'EXPIRED' && initialExecutedQty <= 0 && (!orderResult.fills || orderResult.fills.length === 0);
+                           const conclusion = isConfirmed 
+                               ? '✅ CONFIRMED: Real liquidity issue - order expired without any fills' 
+                               : '❓ INCONCLUSIVE: Check individual indicators above';
+                           
+                           console.log(`🧪 [TEST_BONK] 🔍 LIQUIDITY ISSUE CHECKLIST:`);
+                           Object.entries(checklist).forEach(([key, value]) => {
+                               console.log(`🧪 [TEST_BONK]    ${key}: ${value}`);
+                           });
+                           console.log(`🧪 [TEST_BONK]    CONCLUSION: ${conclusion}`);
+                           
+                           // Also log as object for easy inspection
+                           console.log(`🧪 [TEST_BONK] 🔍 LIQUIDITY ISSUE CHECKLIST (object):`, {
+                               ...checklist,
+                               CONCLUSION: conclusion
+                           });
+                       }
+                       
+                       if (orderStatus === 'EXPIRED' && initialExecutedQty <= 0) {
+                           const liquidityIssueDetails = {
+                               symbol,
+                               orderId: binanceBuyResult.orderResult?.orderId,
+                               status: orderStatus,
+                               executedQty: initialExecutedQty,
+                               origQty: binanceBuyResult.orderResult?.origQty,
+                               cummulativeQuoteQty: binanceBuyResult.orderResult?.cummulativeQuoteQty,
+                               fills: binanceBuyResult.orderResult?.fills,
+                               timeInForce: binanceBuyResult.orderResult?.timeInForce,
+                               orderTime: binanceBuyResult.orderResult?.time,
+                               updateTime: binanceBuyResult.orderResult?.updateTime,
+                               isWorking: binanceBuyResult.orderResult?.isWorking,
+                               confirmation: {
+                                   isExpired: orderStatus === 'EXPIRED',
+                                   hasNoFill: initialExecutedQty <= 0,
+                                   hasNoFills: !binanceBuyResult.orderResult?.fills || binanceBuyResult.orderResult.fills.length === 0,
+                                   isTestnet: tradingMode === 'testnet',
+                                   note: 'Order expired on testnet - no liquidity to match. Position will not be created.'
+                               }
+                           };
+                           
+                           console.warn(`[PositionManager] ⚠️ Order expired without fill for ${symbol} (testnet liquidity issue):`, liquidityIssueDetails);
+                           
+                           if (isBONK) {
+                               console.log(`🧪 [TEST_BONK] ❌ LIQUIDITY ISSUE CONFIRMED:`, {
+                                   orderStatus: 'EXPIRED',
+                                   executedQty: initialExecutedQty,
+                                   hasFills: !!(binanceBuyResult.orderResult?.fills && binanceBuyResult.orderResult.fills.length > 0),
+                                   fillCount: binanceBuyResult.orderResult?.fills?.length || 0,
+                                   confirmation: 'This is a real liquidity issue - order expired without any fills on testnet',
+                                   recommendation: 'On testnet, BONK orders often expire due to lack of matching orders. This is expected behavior.'
+                               });
+                           }
+                           
+                           this.addLog(`[PositionManager] ⚠️ Order expired for ${symbol} - no position created (testnet liquidity issue)`, 'warning');
+                           result.errors.push({
+                               signal: signal,
+                               error: `Order expired without fill (testnet liquidity issue)`,
+                               details: liquidityIssueDetails
+                           });
+                           continue; // Skip position creation for expired orders
                        }
                        
                        console.log('[PositionManager] ✅ Binance buy order successful, waiting for wallet sync...');
@@ -6509,8 +7473,10 @@ export default class PositionManager {
                        
                        // CRITICAL FIX: If executedQty is still 0 but order was successful, use requested quantity
                        // This handles cases where Binance API doesn't return executedQty immediately (common with low-priced coins like BONK)
+                       // BUT: Don't use fallback for EXPIRED orders - they didn't fill
                        const requestedQty = positionSizeResult?.quantityCrypto || positionSizeResult?.quantity || 0;
-                       if (executedQty <= 0 && binanceBuyResult.success && !binanceBuyResult.error && requestedQty > 0) {
+                       const isExpired = orderResult.status === 'EXPIRED';
+                       if (executedQty <= 0 && binanceBuyResult.success && !binanceBuyResult.error && requestedQty > 0 && !isExpired) {
                            console.log('[PositionManager] ⚠️ executedQty is 0 but order succeeded, using requested quantity as fallback:', {
                                symbol,
                                requestedQty,
@@ -6520,6 +7486,16 @@ export default class PositionManager {
                                note: 'Binance API may not return executedQty immediately for low-priced coins - using requested quantity'
                            });
                            executedQty = requestedQty;
+                       } else if (isExpired && executedQty <= 0) {
+                           // Order expired - don't create position
+                           console.warn(`[PositionManager] ⚠️ Order expired for ${symbol}, skipping position creation:`, {
+                               symbol,
+                               orderId: orderResult.orderId,
+                               executedQty,
+                               note: 'Order expired without fill - no position created'
+                           });
+                           this.addLog(`[PositionManager] ⚠️ Order expired for ${symbol} - no position created`, 'warning');
+                           continue; // Skip position creation
                        }
                        
                        // For pending orders, use the requested quantity instead
@@ -6611,6 +7587,32 @@ export default class PositionManager {
                        const positionId = `pos_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
                        const walletId = this._getCurrentWalletState()?.id || 'unknown';
                        
+                       // 🔍 DIAGNOSTIC LOGS FOR BONK/PEPE: Track quantity_crypto sources
+                       const isLowPriceCoin = symbolNoSlash.includes('BONK') || symbolNoSlash.includes('PEPE');
+                       if (isLowPriceCoin) {
+                           console.log(`[QUANTITY_DIAGNOSTIC] 🔍 ========== QUANTITY DIAGNOSTIC FOR ${symbol} ==========`);
+                           console.log(`[QUANTITY_DIAGNOSTIC] Entry Price: ${executedPrice} (type: ${typeof executedPrice})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC] binanceBuyResult.orderResult?.executedQty:`, binanceBuyResult.orderResult?.executedQty, `(type: ${typeof binanceBuyResult.orderResult?.executedQty}, raw: ${JSON.stringify(binanceBuyResult.orderResult?.executedQty)})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC] positionSizeResult.quantityCrypto:`, positionSizeResult.quantityCrypto, `(type: ${typeof positionSizeResult.quantityCrypto})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC] positionSizeResult.positionSizeUSDT:`, positionSizeResult.positionSizeUSDT, `(type: ${typeof positionSizeResult.positionSizeUSDT})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC] Calculated quantity (positionSizeUSDT / entryPrice): ${positionSizeResult.positionSizeUSDT && executedPrice ? positionSizeResult.positionSizeUSDT / executedPrice : 'N/A'}`);
+                           console.log(`[QUANTITY_DIAGNOSTIC] binanceBuyResult.orderResult (full):`, JSON.stringify(binanceBuyResult.orderResult, null, 2));
+                       }
+                       
+                       // Determine quantity_crypto value
+                       const quantityFromBinance = binanceBuyResult.orderResult?.executedQty;
+                       const quantityFromPositionSize = positionSizeResult.quantityCrypto;
+                       const finalQuantityCrypto = quantityFromBinance || quantityFromPositionSize || 0;
+                       
+                       if (isLowPriceCoin) {
+                           console.log(`[QUANTITY_DIAGNOSTIC] Quantity sources evaluation:`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - quantityFromBinance: ${quantityFromBinance} (${quantityFromBinance ? '✅ USED' : '❌ FALSY'})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - quantityFromPositionSize: ${quantityFromPositionSize} (${quantityFromPositionSize ? '✅ USED' : '❌ FALSY'})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - finalQuantityCrypto: ${finalQuantityCrypto} (type: ${typeof finalQuantityCrypto})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - ParseFloat(finalQuantityCrypto): ${parseFloat(finalQuantityCrypto)}`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - Number(finalQuantityCrypto): ${Number(finalQuantityCrypto)}`);
+                       }
+                       
                        const positionData = {
                            position_id: positionId,
                            strategy_name: strategy_name,
@@ -6618,7 +7620,7 @@ export default class PositionManager {
                            direction: combination.direction || 'long',
                            entry_price: executedPrice, // CRITICAL FIX: Use Binance executed price, not cached currentPrice
                            current_price: executedPrice, // CRITICAL FIX: Set current_price to executed price to prevent ghost detection
-                           quantity_crypto: binanceBuyResult.orderResult?.executedQty || positionSizeResult.quantityCrypto || 0,
+                           quantity_crypto: finalQuantityCrypto,
                            entry_value_usdt: positionSizeResult.positionValueUSDT || 0,
                            conviction_score: convictionScore || 0,
                            conviction_details: convictionDetails || {},
@@ -6627,7 +7629,22 @@ export default class PositionManager {
                            market_regime: signal.market_regime || 'unknown',
                            regime_confidence: signal.regime_confidence || 0,
                            combined_strength: signal.combined_strength || 0, // CRITICAL FIX: Add combined_strength
-                           atr_value: signal.atr_value || null,
+                           atr_value: (() => {
+                               const atrVal = signal.atr_value || null;
+                               // Log ATR availability for first few positions to diagnose
+                               if (result.opened < 3) {
+                                   /*console.log(`[ATR_DIAGNOSTIC] Position ${result.opened + 1} (${symbol}):`, {
+                                       hasAtrInSignal: signal.atr_value !== undefined && signal.atr_value !== null,
+                                       atrValue: atrVal,
+                                       atrType: typeof atrVal,
+                                       atrIsFinite: Number.isFinite(atrVal),
+                                       atrPercent: atrVal && executedPrice ? `${((atrVal / executedPrice) * 100).toFixed(4)}%` : 'N/A',
+                                       signalKeys: Object.keys(signal).filter(k => k.includes('atr') || k.includes('ATR')),
+                                       note: atrVal ? 'ATR available' : 'ATR missing - will be null in database'
+                                   });*/
+                               }
+                               return atrVal;
+                           })(),
                            is_event_driven_strategy: signal.is_event_driven_strategy || false,
                 entry_timestamp: new Date().toISOString(),
                 status: 'open',
@@ -6677,14 +7694,7 @@ export default class PositionManager {
                            btc_price_at_open: await this._getBitcoinPriceAtOpen(),
                            
                            // NEW: Entry quality metrics
-                           ...(await (async () => {
-                               console.log(`[PositionManager] 🔍 About to call _calculateEntryQuality for ${symbol}`);
-                               const entryQuality = await this._calculateEntryQuality(symbol, executedPrice, signal);
-                               console.log(`[PositionManager] 🔍 Received entry quality result:`, entryQuality);
-                               console.log(`[PositionManager] 🔍 Entry quality result keys:`, Object.keys(entryQuality || {}));
-                               console.log(`[PositionManager] 🔍 Entry quality result values:`, Object.values(entryQuality || {}));
-                               return entryQuality;
-                           })()),
+                           ...(await this._calculateEntryQuality(symbol, executedPrice, signal)),
                            
                            entry_timestamp: new Date().toISOString(),
                            created_date: new Date().toISOString(),
@@ -6698,6 +7708,16 @@ export default class PositionManager {
                            // Order execution timing
                            entry_fill_time_ms: entryFillTimeMs
                        };
+                       
+                       // 🔍 DIAGNOSTIC LOGS FOR BONK/PEPE: Log complete positionData quantity fields
+                       if (isLowPriceCoin) {
+                           console.log(`[QUANTITY_DIAGNOSTIC] 📋 COMPLETE positionData quantity fields:`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - quantity_crypto: ${positionData.quantity_crypto} (type: ${typeof positionData.quantity_crypto})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - entry_value_usdt: ${positionData.entry_value_usdt} (type: ${typeof positionData.entry_value_usdt})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - entry_price: ${positionData.entry_price} (type: ${typeof positionData.entry_price})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - binance_executed_quantity: ${positionData.binance_executed_quantity} (type: ${typeof positionData.binance_executed_quantity})`);
+                           console.log(`[QUANTITY_DIAGNOSTIC]   - Verification (entry_value_usdt / entry_price): ${positionData.entry_value_usdt && positionData.entry_price ? (positionData.entry_value_usdt / positionData.entry_price).toFixed(8) : 'N/A'}`);
+                       }
                     
                     // ✅ ENTRY QUALITY VERIFICATION: Log all entry quality fields immediately after calculation
                     // console.log('='.repeat(80)); // Commented out to reduce console flooding
@@ -6970,8 +7990,28 @@ export default class PositionManager {
                     
                     let createdPosition;
                     try {
+                        // 🔍 DIAGNOSTIC LOGS FOR BONK/PEPE: Log what we're sending to database
+                        if (isLowPriceCoin) {
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📤 BEFORE DATABASE CREATE - positionData.quantity_crypto:`, positionData.quantity_crypto, `(type: ${typeof positionData.quantity_crypto})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📤 positionData.entry_value_usdt:`, positionData.entry_value_usdt, `(type: ${typeof positionData.entry_value_usdt})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📤 positionData.entry_price:`, positionData.entry_price, `(type: ${typeof positionData.entry_price})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📤 Calculated verification (entry_value_usdt / entry_price): ${positionData.entry_value_usdt && positionData.entry_price ? positionData.entry_value_usdt / positionData.entry_price : 'N/A'}`);
+                        }
+                        
                         createdPosition = await LivePosition.create(positionData);
                         console.log('[PositionManager] ✅ LivePosition.create() completed successfully');
+                        
+                        // 🔍 DIAGNOSTIC LOGS FOR BONK/PEPE: Log what was actually saved
+                        if (isLowPriceCoin) {
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📥 AFTER DATABASE CREATE - createdPosition.quantity_crypto:`, createdPosition?.quantity_crypto, `(type: ${typeof createdPosition?.quantity_crypto}, raw: ${JSON.stringify(createdPosition?.quantity_crypto)})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📥 createdPosition.entry_value_usdt:`, createdPosition?.entry_value_usdt, `(type: ${typeof createdPosition?.entry_value_usdt})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📥 createdPosition.entry_price:`, createdPosition?.entry_price, `(type: ${typeof createdPosition?.entry_price})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📥 ParseFloat(createdPosition.quantity_crypto): ${createdPosition?.quantity_crypto ? parseFloat(createdPosition.quantity_crypto) : 'N/A'}`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📥 Number(createdPosition.quantity_crypto): ${createdPosition?.quantity_crypto ? Number(createdPosition.quantity_crypto) : 'N/A'}`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📥 Calculated verification (entry_value_usdt / entry_price): ${createdPosition?.entry_value_usdt && createdPosition?.entry_price ? createdPosition.entry_value_usdt / createdPosition.entry_price : 'N/A'}`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 📥 binance_executed_quantity:`, createdPosition?.binance_executed_quantity, `(type: ${typeof createdPosition?.binance_executed_quantity})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] ==========================================`);
+                        }
                     } catch (createError) {
                         console.error('[PositionManager] ❌ ERROR: LivePosition.create() failed:', createError);
                         console.error('[PositionManager] ❌ Error details:', {
@@ -7007,6 +8047,16 @@ export default class PositionManager {
                         
                         // CRITICAL FIX: Map ALL fields from createdPosition to ensure analytics fields are preserved
                         // This matches the mapping in loadManagedState to ensure consistency
+                        const parsedQuantityCrypto = parseFloat(createdPosition.quantity_crypto) || 0;
+                        
+                        // 🔍 DIAGNOSTIC LOGS FOR BONK/PEPE: Log after parsing
+                        if (isLowPriceCoin) {
+                            console.log(`[QUANTITY_DIAGNOSTIC] 🔄 AFTER PARSING - parsedQuantityCrypto:`, parsedQuantityCrypto, `(type: ${typeof parsedQuantityCrypto})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 🔄 createdPosition.quantity_crypto (before parse):`, createdPosition.quantity_crypto, `(type: ${typeof createdPosition.quantity_crypto})`);
+                            console.log(`[QUANTITY_DIAGNOSTIC] 🔄 parseFloat result:`, parseFloat(createdPosition.quantity_crypto));
+                            console.log(`[QUANTITY_DIAGNOSTIC] 🔄 || 0 fallback used:`, !parseFloat(createdPosition.quantity_crypto));
+                        }
+                        
                         const mappedPosition = {
                             id: createdPosition.id, // Ensure the id field is set
                             position_id: createdPosition.position_id,
@@ -7015,7 +8065,7 @@ export default class PositionManager {
                             symbol: createdPosition.symbol,
                             direction: createdPosition.direction,
                             entry_price: parseFloat(createdPosition.entry_price) || 0,
-                            quantity_crypto: parseFloat(createdPosition.quantity_crypto) || 0,
+                            quantity_crypto: parsedQuantityCrypto,
                             entry_value_usdt: parseFloat(createdPosition.entry_value_usdt) || 0,
                             entry_timestamp: createdPosition.entry_timestamp,
                             status: createdPosition.status,
@@ -7384,8 +8434,40 @@ export default class PositionManager {
                            continue;
                        }
                        
+                       // Get EBR for position fixing (same logic as position opening)
+                       let adjustedBalanceRiskFactor = this.scannerService?.state?.adjustedBalanceRiskFactor;
+                       if ((adjustedBalanceRiskFactor === null || adjustedBalanceRiskFactor === undefined || !Number.isFinite(adjustedBalanceRiskFactor))) {
+                           const lpmScore = this.scannerService?.state?.performanceMomentumScore;
+                           const maxBalancePercentRisk = this.scannerService?.state?.settings?.maxBalancePercentRisk || 100;
+                           if (lpmScore !== null && lpmScore !== undefined && Number.isFinite(lpmScore)) {
+                               const clampedScore = Math.max(0, Math.min(100, Math.round(lpmScore)));
+                               if (clampedScore >= MOMENTUM_THRESHOLDS.excellent) {
+                                   adjustedBalanceRiskFactor = maxBalancePercentRisk;
+                               } else if (clampedScore >= MOMENTUM_THRESHOLDS.good) {
+                                   const scoreRange = MOMENTUM_THRESHOLDS.excellent - MOMENTUM_THRESHOLDS.good;
+                                   const scorePosition = clampedScore - MOMENTUM_THRESHOLDS.good;
+                                   const scaleFactor = 0.6 + (0.4 * (scorePosition / scoreRange));
+                                   adjustedBalanceRiskFactor = maxBalancePercentRisk * scaleFactor;
+                               } else if (clampedScore >= MOMENTUM_THRESHOLDS.poor) {
+                                   const scoreRange = MOMENTUM_THRESHOLDS.good - MOMENTUM_THRESHOLDS.poor;
+                                   const scorePosition = clampedScore - MOMENTUM_THRESHOLDS.poor;
+                                   const scaleFactor = 0.2 + (0.4 * (scorePosition / scoreRange));
+                                   adjustedBalanceRiskFactor = maxBalancePercentRisk * scaleFactor;
+                               } else {
+                                   adjustedBalanceRiskFactor = Math.max(MOMENTUM_THRESHOLDS.minimum, maxBalancePercentRisk * 0.1);
+                               }
+                               adjustedBalanceRiskFactor = Math.max(MOMENTUM_THRESHOLDS.minimum, Math.min(maxBalancePercentRisk, Math.round(adjustedBalanceRiskFactor)));
+                           } else {
+                               adjustedBalanceRiskFactor = maxBalancePercentRisk;
+                           }
+                       }
+                       if (adjustedBalanceRiskFactor === null || adjustedBalanceRiskFactor === undefined || !Number.isFinite(adjustedBalanceRiskFactor)) {
+                           adjustedBalanceRiskFactor = 100;
+                       }
+                       const lpmScore = this.scannerService?.state?.performanceMomentumScore || 50;
+                       
                        // Use ATR-based sizing if ATR data is available
-                       const positionSizeResult = calculatePositionSize({
+                       const positionSizeResult = dynamicSizing.calculatePositionSize({
                            strategySettings: strategySettings,
                            currentPrice: currentPrice,
                            convictionScore: position.conviction_score || 50,
@@ -7396,7 +8478,7 @@ export default class PositionManager {
                            symbol: position.symbol,
                            exchangeInfo: (() => {
                                const exchangeInfo = this.getExchangeInfo ? this.getExchangeInfo(symbolNoSlash) : null;
-                               console.log('[PositionManager] 🔍 Exchange info for', symbolNoSlash, ':', {
+                               console.log('[POS_FIX_INPUTS] 🔍 Exchange info for', symbolNoSlash, ':', {
                                    hasExchangeInfo: !!exchangeInfo,
                                    hasFilters: !!exchangeInfo?.filters,
                                    filtersType: typeof exchangeInfo?.filters,
@@ -7407,11 +8489,13 @@ export default class PositionManager {
                                });
                                return exchangeInfo;
                            })(),
-                           indicators: { atr: [atrData] } // Pass ATR data
+                           indicators: { atr: [atrData] }, // Pass ATR data
+                           adjustedBalanceRiskFactor: adjustedBalanceRiskFactor, // Pass EBR
+                           lpmScore: lpmScore // Pass LPM score
                        });
                        
                        if (positionSizeResult.error || !positionSizeResult.isValid) {
-                           console.error(`[PositionManager] ❌ ATR-based position sizing failed for ${position.symbol}:`, {
+                           console.error(`[POS_FIX_ERROR] ❌ ATR-based position sizing failed for ${position.symbol}:`, {
                                error: positionSizeResult.error || positionSizeResult.reason,
                                message: positionSizeResult.message
                            });
@@ -8043,9 +9127,10 @@ export default class PositionManager {
      * Execute batch close of positions
      * @param {Array} tradesToCreate - Array of Trade objects to create
      * @param {Array} positionIdsToClose - Array of position IDs to close
+     * @param {Object} freshPriceMap - Optional map of cleanSymbol -> price from batch fetch (performance optimization)
      * @returns {Object} Result with success status and details
      */
-    async executeBatchClose(tradesToCreate, positionIdsToClose) {
+    async executeBatchClose(tradesToCreate, positionIdsToClose, freshPriceMap = null) {
         const _batchCloseStartTime = Date.now();
         const positionsCount = positionIdsToClose.length;
         console.log(`[PositionManager] 🚀 executeBatchClose started: ${positionsCount} positions to close`);
@@ -8182,83 +9267,37 @@ export default class PositionManager {
             //console.log(`🔥🔥🔥 Will process ${tradesToCreate.length} trades and close ${positionIdsToClose.length} positions 🔥🔥🔥`);
             //console.log('[PositionManager] 🔍 [BATCH_CLOSE_LOOP] About to enter position processing loop...');
             
-            // CRITICAL FIX: Fetch current prices from API before attempting to close positions
-            //console.log('🔥🔥🔥 FETCHING CURRENT PRICES FROM API 🔥🔥🔥');
-            const symbols = [...new Set(tradesToCreate.map(t => t.symbol))];
-            //console.log(`🔥🔥🔥 Need prices for ${symbols.length} symbols:`, symbols);
+            // ⚡ PERFORMANCE OPTIMIZATION: Use batch-fetched prices if available, otherwise fetch individually
+            let allPositionsData;
             
-            //console.log('[position_manager_debug] 🔍 About to fetch prices for all positions...');
-            //console.log('[position_manager_debug] 🔍 THIS IS A CRITICAL CHECKPOINT - FETCHING PRICES');
-            
-            // Add timeout to price fetching to prevent hanging
-            const priceFetchTimeout = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('Price fetch timeout after 20 seconds')), 20000);
-            });
-            
-            const priceFetchPromise = Promise.all(
-                this.positions.map(async (p) => {
-                    //console.log(`[position_manager_debug] 🔍 Processing position for price fetch: ${p.symbol}`);
-                    const symbolNoSlash = p.symbol.replace('/', '');
-                    try {
-                        // Find the corresponding trade data for this position
-                        const tradeIndex = positionIdsToClose.findIndex(id => 
+            if (freshPriceMap && Object.keys(freshPriceMap).length > 0) {
+                // Use batch-fetched prices (much faster - no API calls needed)
+                allPositionsData = this.positions
+                    .filter(p => {
+                        // Only include positions that are being closed
+                        return positionIdsToClose.some(id => 
                             id === p.id || id === p.db_record_id || id === p.position_id
                         );
-                        const tradeData = tradeIndex >= 0 ? tradesToCreate[tradeIndex] : null;
-                        
-                // CRITICAL FIX: Always fetch FRESH price when closing positions (bypass cache)
-                // Use getFreshCurrentPrice() which directly calls Binance /api/v3/ticker/price
-                let price = null;
-                        
-                if (this.scannerService.priceManagerService) {
-                            try {
-                        price = await this.scannerService.priceManagerService.getFreshCurrentPrice(p.symbol);
-                        // console.log(`[PositionManager] ✅ Fetched FRESH price for ${p.symbol}: ${price}`);
-                            } catch (error) {
-                        console.error(`[PositionManager] ❌ Failed to fetch fresh price for ${p.symbol}:`, error.message);
-                    }
-                }
-                
-                // Fallback to cached price only if fresh fetch completely failed
-                if ((!price || isNaN(price) || price <= 0) && this.scannerService.currentPrices?.[symbolNoSlash]) {
-                    price = this.scannerService.currentPrices[symbolNoSlash];
-                    console.warn(`[PositionManager] ⚠️ Using cached price as fallback for ${p.symbol}: ${price} (fresh fetch failed)`);
-                }
-                
-                // NEVER use tradeData.exit_price as fallback - it may be stale/wrong
-                if (!price || isNaN(price) || price <= 0) {
-                    console.error(`[PositionManager] ❌ CRITICAL: No valid price available for ${p.symbol} after all attempts`);
-                        }
-                        
+                    })
+                    .map(p => {
+                        const symbolNoSlash = p.symbol.replace('/', '');
+                        const price = freshPriceMap[symbolNoSlash] || null;
                         return { symbol: p.symbol, symbolNoSlash, price };
-                    } catch (error) {
-                        console.log(`[PositionManager] ⚠️ Could not fetch price for ${p.symbol}:`, error);
-                        return { symbol: p.symbol, symbolNoSlash, price: null };
-                    }
-                })
-            );
-            
-            let allPositionsData;
-            try {
-                allPositionsData = await Promise.race([priceFetchPromise, priceFetchTimeout]);
-                //console.log('[position_manager_debug] 🔍 Price fetch completed successfully');
-            } catch (timeoutError) {
-                console.error('[position_manager_debug] ❌ Price fetch timeout:', timeoutError.message);
-                this.addLog(`[MONITOR] ❌ Price fetch timeout: ${timeoutError.message}`, 'error');
-                // CRITICAL FIX: Don't use trade data prices as fallback - they may be stale/wrong
-            // Use entry prices as last resort (better than stale exit prices)
-                console.warn(`[PositionManager] ⚠️ Price fetch timeout - using entry prices as fallback (will fetch fresh prices later)`);
-                allPositionsData = tradesToCreate.map(t => {
-                    // Find the position to get entry_price
-                    const pos = this.positions.find(p => 
-                        p.id === t.trade_id || 
-                        p.position_id === t.trade_id || 
-                        p.db_record_id === t.trade_id
-                    );
+                    });
+            } else {
+                // ⚡ PERFORMANCE: If no batch prices, use cached prices (don't fetch individually)
+                allPositionsData = this.positions
+                    .filter(p => {
+                        return positionIdsToClose.some(id => 
+                            id === p.id || id === p.db_record_id || id === p.position_id
+                        );
+                    })
+                    .map(p => {
+                        const symbolNoSlash = p.symbol.replace('/', '');
                     return {
-                    symbol: t.symbol,
-                    symbolNoSlash: t.symbol.replace('/', ''),
-                        price: null // Set to null - will be fetched fresh in executeBatchClose
+                            symbol: p.symbol, 
+                            symbolNoSlash, 
+                            price: this.scannerService.currentPrices?.[symbolNoSlash] || null 
                     };
                 });
             }
@@ -8369,55 +9408,31 @@ export default class PositionManager {
                 const symbolNoSlash = position.symbol.replace('/', '');
                 const entryPrice = Number(position.entry_price || 0);
                 
-                // CRITICAL FIX: ALWAYS fetch FRESH price from Binance when closing positions (bypass cache completely)
-                // This prevents stale prices like 1889.03 or 4160.88 for ETH (should be ~3800-3900)
-                // Use getFreshCurrentPrice() which directly calls /api/v3/ticker/price (current price, not 24hr ticker)
+                // ⚡ PERFORMANCE OPTIMIZATION: Use batch-fetched price from freshPriceMap (passed from monitorAndClosePositions)
+                // First try batch-fetched price, then cached price, skip individual fetch
                 let currentPrice = null;
                 
-                const _priceFetchStartTime = Date.now();
-                if (this.scannerService.priceManagerService) {
-                    try {
-                        currentPrice = await this.scannerService.priceManagerService.getFreshCurrentPrice(position.symbol);
-                        const _priceFetchTime = Date.now() - _priceFetchStartTime;
-                        if (currentPrice && !isNaN(currentPrice) && currentPrice > 0) {
-                            // console.log(`${positionMarker} ✅ Fetched FRESH price for ${position.symbol}: ${currentPrice} (${_priceFetchTime}ms)`);
+                // Try batch-fetched price first
+                if (freshPriceMap && freshPriceMap[symbolNoSlash]) {
+                    currentPrice = freshPriceMap[symbolNoSlash];
+                }
+                
+                // Fallback to cached price if batch price not available
+                if ((!currentPrice || isNaN(currentPrice) || currentPrice <= 0) && this.scannerService.currentPrices?.[symbolNoSlash]) {
+                    currentPrice = this.scannerService.currentPrices[symbolNoSlash];
+                    console.warn(`⚠️ [BATCH_CLOSE] Using cached price for ${position.symbol} (batch price not available)`);
+                }
                             
                             // SPECIAL: Extra validation for ETH - alert if outside 3500-4000 range
-                            if (position.symbol === 'ETH/USDT') {
+                if (currentPrice && !isNaN(currentPrice) && currentPrice > 0 && position.symbol === 'ETH/USDT') {
                                 const ETH_ALERT_MIN = 3500;
                                 const ETH_ALERT_MAX = 4000;
                                 if (currentPrice < ETH_ALERT_MIN || currentPrice > ETH_ALERT_MAX) {
-                                   /* console.error(`[PositionManager] 🚨🚨🚨 ETH PRICE ALERT 🚨🚨🚨`);
-                                    console.error(`[PositionManager] 🚨 ETH price ${currentPrice} is outside alert range [${ETH_ALERT_MIN}, ${ETH_ALERT_MAX}]`);
-                                    console.error(`[PositionManager] 🚨 Full details:`, {
-                                        symbol: position.symbol,
-                                        currentPrice: currentPrice,
-                                        entryPrice: entryPrice,
-                                        positionId: position.position_id || position.id,
-                                        priceDifference: currentPrice < ETH_ALERT_MIN ? 
-                                            `${(ETH_ALERT_MIN - currentPrice).toFixed(2)} below minimum` : 
-                                            `${(currentPrice - ETH_ALERT_MAX).toFixed(2)} above maximum`,
-                                        percentDifference: currentPrice < ETH_ALERT_MIN ? 
-                                            `${((ETH_ALERT_MIN - currentPrice) / ETH_ALERT_MIN * 100).toFixed(2)}%` : 
-                                            `${((currentPrice - ETH_ALERT_MAX) / ETH_ALERT_MAX * 100).toFixed(2)}%`,
-                                        priceDiffFromEntry: entryPrice > 0 ? `${((currentPrice - entryPrice) / entryPrice * 100).toFixed(2)}%` : 'N/A',
-                                        timestamp: new Date().toISOString(),
-                                        source: 'monitorAndClosePositions',
-                                        tradingMode: this.tradingMode,
-                                        exitReason: tradeData?.exit_reason
-                                    });*/
-                                    //console.error(`[PositionManager] 🚨🚨🚨 END ETH PRICE ALERT 🚨🚨🚨`);
-                                }
-                            }
-                        } else {
-                            console.warn(`[PositionManager] ⚠️ Fresh price fetch returned invalid value for ${position.symbol}: ${currentPrice}`);
-                        }
-                    } catch (error) {
-                        console.error(`[PositionManager] ❌ Failed to fetch fresh price for ${position.symbol}:`, error.message);
+                        // Price outside expected range - log but continue
                     }
                 }
                 
-                // LAST RESORT: Only use cached price if fresh fetch completely failed AND cached price is valid
+                // LAST RESORT: Only use cached price if batch fetch completely failed AND cached price is valid
                 // Log error if stale price detected but don't reject
                 if ((!currentPrice || isNaN(currentPrice) || currentPrice <= 0) && this.scannerService.currentPrices?.[symbolNoSlash]) {
                     const cachedPrice = this.scannerService.currentPrices[symbolNoSlash];
@@ -8433,7 +9448,7 @@ export default class PositionManager {
                         }
                         // Use cached price even if stale (last resort)
                         currentPrice = cachedPrice;
-                        console.warn(`[PositionManager] ⚠️ Using cached price as last resort for ${position.symbol}: ${currentPrice} (fresh fetch failed)`);
+                        console.warn(`[PositionManager] ⚠️ Using cached price as last resort for ${position.symbol}: ${currentPrice} (batch fetch failed)`);
                     } else {
                         // No entry_price to validate - still use cached but log warning
                         currentPrice = cachedPrice;
@@ -8445,7 +9460,7 @@ export default class PositionManager {
                 // Final validation - if still no valid price, skip this position
                 if (!currentPrice || isNaN(currentPrice) || currentPrice <= 0) {
                     console.error(`[PositionManager] ❌ CRITICAL: No valid current price available for ${position.symbol} after all attempts`);
-                    console.error(`[PositionManager] ❌ Price sources checked: fresh fetch=failed, cached=${!!this.scannerService.currentPrices?.[symbolNoSlash]}`);
+                    console.error(`[PositionManager] ❌ Price sources checked: batch fetch=failed, cached=${!!this.scannerService.currentPrices?.[symbolNoSlash]}`);
                     console.error(`[PositionManager] ❌ tradeData.exit_price=${tradeData.exit_price} (NOT USED as it may be stale)`);
                     errors.push(`No valid price for ${position.symbol} - all fetch attempts failed`);
                     continue;
@@ -9672,8 +10687,11 @@ export default class PositionManager {
                 // ADX score (0-100): Higher ADX = higher volatility
                 const adxScore = Math.min(100, Math.max(0, (adx / 50) * 100));
                 
+                // CRITICAL FIX: BBW is stored as percentage (e.g., 5.789 = 5.789%), not decimal (0.05789)
+                // Convert to decimal first if BBW > 1 (indicating percentage format)
+                const bbwDecimal = bbw > 1 ? bbw / 100 : bbw;
                 // BBW score (0-100): Higher BBW = higher volatility (BBW is typically 0-0.5, scale to 0-100)
-                const bbwScore = Math.min(100, Math.max(0, (bbw / 0.5) * 100));
+                const bbwScore = Math.min(100, Math.max(0, (bbwDecimal / 0.5) * 100));
                 
                 // Combined volatility score (weighted: ADX 40%, BBW 60%)
                 const volatilityScore = (adxScore * 0.4) + (bbwScore * 0.6);
@@ -9777,8 +10795,6 @@ export default class PositionManager {
      * @returns {Promise<Object>} Entry quality metrics
      */
     async _calculateEntryQuality(symbol, entryPrice, signal) {
-        // COMMENTED OUT: Too verbose, flooding console
-        // console.log(`[Entry Quality] 🔍 STARTING calculation for ${symbol} at price ${entryPrice}`);
         try {
             const symbolNoSlash = symbol.replace('/', '');
             
@@ -9792,6 +10808,246 @@ export default class PositionManager {
             // Try multiple sources for support/resistance data
             let srData = signal?.supportResistance || signal?.sr_data || null;
             
+            // If not in signal, try to get from scanner service's indicators
+            // Check both currentIndicators and indicators (different naming conventions)
+            if (!srData) {
+                const indicators = this.scannerService?.state?.currentIndicators?.[symbolNoSlash] 
+                    || this.scannerService?.state?.indicators?.[symbolNoSlash];
+                
+                // Extract support/resistance from indicators if available
+                // Try multiple naming conventions for support/resistance
+                // User confirmed: it's "supportresistance" (one word, no underscore)
+                // From indicatorManager.jsx line 1216: indicators.supportresistance = safeCalculate(...)
+                // The structure is an array where each element is { support: [], resistance: [] } or null
+                let srArray = indicators?.supportresistance;
+                
+                // Check if supportresistance exists and is an array
+                if (srArray && Array.isArray(srArray) && srArray.length > 0) {
+                    // Find the last valid (non-null) entry
+                    let lastSr = null;
+                    let lastIndex = -1;
+                    for (let i = srArray.length - 1; i >= 0; i--) {
+                        if (srArray[i] !== null && srArray[i] !== undefined && typeof srArray[i] === 'object') {
+                            lastSr = srArray[i];
+                            lastIndex = i;
+                            break;
+                        }
+                    }
+                    
+                    if (lastSr && typeof lastSr === 'object') {
+                        // Extract support and resistance arrays directly
+                        const support = Array.isArray(lastSr.support) ? lastSr.support : [];
+                        const resistance = Array.isArray(lastSr.resistance) ? lastSr.resistance : [];
+                        
+                        if (support.length > 0 || resistance.length > 0) {
+                            srData = { support, resistance };
+                        }
+                    }
+                } else if (indicators?.supportresistance && !Array.isArray(indicators.supportresistance)) {
+                    // If it's not an array, check if it's an object with support/resistance directly
+                    if (typeof indicators.supportresistance === 'object' && !Array.isArray(indicators.supportresistance)) {
+                        const directSupport = indicators.supportresistance.support || indicators.supportresistance.supportLevels;
+                        const directResistance = indicators.supportresistance.resistance || indicators.supportresistance.resistanceLevels;
+                        if ((Array.isArray(directSupport) && directSupport.length > 0) || 
+                            (Array.isArray(directResistance) && directResistance.length > 0)) {
+                            srData = {
+                                support: Array.isArray(directSupport) ? directSupport : [],
+                                resistance: Array.isArray(directResistance) ? directResistance : []
+                            };
+                        }
+                    }
+                } else {
+                    // Fallback: Check if support/resistance is directly in indicators (not in an array)
+                    if (indicators && typeof indicators === 'object') {
+                        const directSupport = indicators.support || indicators.supportLevels;
+                        const directResistance = indicators.resistance || indicators.resistanceLevels;
+                        if ((Array.isArray(directSupport) && directSupport.length > 0) || 
+                            (Array.isArray(directResistance) && directResistance.length > 0)) {
+                            srData = {
+                                support: Array.isArray(directSupport) ? directSupport : [],
+                                resistance: Array.isArray(directResistance) ? directResistance : []
+                            };
+                        }
+                    }
+                }
+            }
+            
+            if (srData && Array.isArray(srData.support) && Array.isArray(srData.resistance)) {
+                const supportLevels = srData.support.filter(s => s && s < entryPrice && s > 0);
+                const resistanceLevels = srData.resistance.filter(r => r && r > entryPrice && r > 0);
+                
+                // Find nearest support (below entry price)
+                if (supportLevels.length > 0) {
+                    const nearestSupport = Math.max(...supportLevels);
+                    const distanceToSupport = ((entryPrice - nearestSupport) / entryPrice) * 100;
+                    entryDistanceToSupportPercent = parseFloat(distanceToSupport.toFixed(4));
+                    // CRITICAL FIX: Reduced threshold from 2.0% to 0.5% to prevent consolidation zone entries
+                    entryNearSupport = distanceToSupport <= 0.5; // Within 0.5% (was 2.0%)
+                }
+                
+                // Find nearest resistance (above entry price)
+                if (resistanceLevels.length > 0) {
+                    const nearestResistance = Math.min(...resistanceLevels);
+                    const distanceToResistance = ((nearestResistance - entryPrice) / entryPrice) * 100;
+                    entryDistanceToResistancePercent = parseFloat(distanceToResistance.toFixed(4));
+                    // CRITICAL FIX: Reduced threshold from 2.0% to 0.5% for consistency
+                    entryNearResistance = distanceToResistance <= 0.5; // Within 0.5% (was 2.0%)
+                }
+                
+                // CRITICAL FIX: Prevent entries from being marked as BOTH "near support" AND "near resistance"
+                // This indicates entry is in a consolidation zone (worst location), not at a support bounce
+                if (entryNearSupport && entryNearResistance) {
+                    const gapBetweenLevels = entryDistanceToSupportPercent + entryDistanceToResistancePercent;
+                    
+                    // If gap is <3%, this is a consolidation zone - don't mark as "near support"
+                    // Consolidation zone entries are the worst performers (21.9% win rate)
+                    if (gapBetweenLevels < 3.0) {
+                        entryNearSupport = false; // Don't classify as "near support" - it's consolidation
+                        // Keep entryNearResistance as is (or also set to false if desired)
+                    }
+                }
+            }
+            
+            // Calculate momentum score from recent price changes
+            // Use price cache if available to get recent prices
+            let entryMomentumScore = null;
+            try {
+                // Use priceCacheService directly (it's a singleton imported at top of file)
+                const priceCache = priceCacheService;
+                if (priceCache && typeof priceCache.getTicker24hr === 'function') {
+                    // Get price from 24hr ticker for price change percent
+                    const ticker24hr = await priceCache.getTicker24hr(symbolNoSlash);
+                    
+                    if (ticker24hr && ticker24hr.priceChangePercent !== undefined && ticker24hr.priceChangePercent !== null) {
+                        const priceChangePercent = parseFloat(ticker24hr.priceChangePercent);
+                        
+                        if (!isNaN(priceChangePercent)) {
+                            // Convert 24hr price change to momentum score (0-100)
+                            // Positive change = bullish momentum, negative = bearish
+                            // Scale: -10% to +10% maps to 0-100
+                            entryMomentumScore = Math.max(0, Math.min(100, 50 + (priceChangePercent * 5)));
+                        }
+                    }
+                }
+            } catch (momentumError) {
+                console.warn(`[PositionManager] Error calculating momentum for ${symbol}:`, momentumError.message);
+            }
+            
+            // Calculate entry relative to day high/low
+            // Use daily kline data (1d interval) for accurate calendar day high/low
+            // This is more reliable than 24hr ticker which is a rolling 24hr window
+            let entryRelativeToDayHighPercent = null;
+            let entryRelativeToDayLowPercent = null;
+            try {
+                if (entryPrice) {
+                    // Use getKlineData for daily candles (more accurate than 24hr ticker)
+                    const { getKlineData } = await import('@/api/functions');
+                    const klineResponse = await getKlineData({
+                        symbols: [symbolNoSlash],
+                        interval: '1d',
+                        limit: 2,  // Get today and yesterday (yesterday for average volume calculation)
+                        priority: 1 // High priority for position monitoring
+                    });
+                    
+                    if (klineResponse?.success && klineResponse?.data?.[symbolNoSlash]?.success && 
+                        klineResponse?.data?.[symbolNoSlash]?.data && 
+                        Array.isArray(klineResponse.data[symbolNoSlash].data) &&
+                        klineResponse.data[symbolNoSlash].data.length > 0) {
+                        
+                        // Get the most recent daily candle (today)
+                        const todayCandle = klineResponse.data[symbolNoSlash].data[
+                            klineResponse.data[symbolNoSlash].data.length - 1
+                        ];
+                        
+                        // Handle both array and object formats
+                        let dayHigh, dayLow;
+                        if (Array.isArray(todayCandle)) {
+                            dayHigh = parseFloat(todayCandle[2]); // high is index 2
+                            dayLow = parseFloat(todayCandle[3]);   // low is index 3
+                        } else if (todayCandle && typeof todayCandle === 'object') {
+                            dayHigh = parseFloat(todayCandle.high || todayCandle.h || todayCandle.highPrice);
+                            dayLow = parseFloat(todayCandle.low || todayCandle.l || todayCandle.lowPrice);
+                        }
+                        
+                        if (dayHigh !== null && !isNaN(dayHigh) && dayLow !== null && !isNaN(dayLow) && dayHigh > dayLow) {
+                            const dayRange = dayHigh - dayLow;
+                            
+                            if (dayRange > 0) {
+                                // Entry as % of day range (0-100)
+                                entryRelativeToDayHighPercent = ((entryPrice - dayLow) / dayRange) * 100;
+                                entryRelativeToDayLowPercent = ((dayHigh - entryPrice) / dayRange) * 100;
+                            }
+                        }
+                    }
+                }
+            } catch (dayRangeError) {
+                console.warn(`[PositionManager] Error calculating day range for ${symbol}:`, dayRangeError.message);
+            }
+            
+            // Calculate entry volume vs average
+            // Use daily kline data to calculate average volume over recent days
+            let entryVolumeVsAverage = null;
+            try {
+                // Fetch daily klines to get today's volume and calculate average
+                const { getKlineData } = await import('@/api/functions');
+                const klineResponse = await getKlineData({
+                    symbols: [symbolNoSlash],
+                    interval: '1d',
+                    limit: 30,  // Get last 30 days for average calculation
+                    priority: 1 // High priority for position monitoring
+                });
+                
+                if (klineResponse?.success && klineResponse?.data?.[symbolNoSlash]?.success && 
+                    klineResponse?.data?.[symbolNoSlash]?.data && 
+                    Array.isArray(klineResponse.data[symbolNoSlash].data) &&
+                    klineResponse.data[symbolNoSlash].data.length > 1) {
+                    
+                    const candles = klineResponse.data[symbolNoSlash].data;
+                    
+                    // Get today's volume (most recent candle)
+                    const todayCandle = candles[candles.length - 1];
+                    let todayVolume = null;
+                    if (Array.isArray(todayCandle)) {
+                        todayVolume = parseFloat(todayCandle[5]); // volume is index 5
+                    } else if (todayCandle && typeof todayCandle === 'object') {
+                        todayVolume = parseFloat(todayCandle.volume || todayCandle.v || todayCandle.quoteVolume);
+                    }
+                    
+                    // Calculate average volume from previous days (exclude today)
+                    const previousCandles = candles.slice(0, -1);
+                    const volumes = previousCandles
+                        .map(candle => {
+                            if (Array.isArray(candle)) {
+                                return parseFloat(candle[5]);
+                            } else if (candle && typeof candle === 'object') {
+                                return parseFloat(candle.volume || candle.v || candle.quoteVolume);
+                            }
+                            return null;
+                        })
+                        .filter(v => v !== null && !isNaN(v) && v > 0);
+                    
+                    if (todayVolume !== null && !isNaN(todayVolume) && todayVolume > 0 && volumes.length > 0) {
+                        const avgVolume = volumes.reduce((sum, v) => sum + v, 0) / volumes.length;
+                        if (avgVolume > 0) {
+                            entryVolumeVsAverage = todayVolume / avgVolume; // Ratio: >1 = above average, <1 = below average
+                        }
+                    }
+                }
+            } catch (volumeError) {
+                console.warn(`[PositionManager] Error calculating volume for ${symbol}:`, volumeError.message);
+            }
+            
+            const result = {
+                entry_near_support: entryNearSupport,
+                entry_near_resistance: entryNearResistance,
+                entry_distance_to_support_percent: entryDistanceToSupportPercent,
+                entry_distance_to_resistance_percent: entryDistanceToResistancePercent,
+                entry_momentum_score: entryMomentumScore !== null ? parseFloat(entryMomentumScore.toFixed(2)) : null,
+                entry_relative_to_day_high_percent: entryRelativeToDayHighPercent !== null ? parseFloat(entryRelativeToDayHighPercent.toFixed(4)) : null,
+                entry_relative_to_day_low_percent: entryRelativeToDayLowPercent !== null ? parseFloat(entryRelativeToDayLowPercent.toFixed(4)) : null,
+                entry_volume_vs_average: entryVolumeVsAverage
+            };
+            
             // COMMENTED OUT: Too verbose, flooding console
             /*
             console.log(`[Entry Quality] 🔍 Support/Resistance Data Check #1:`, {
@@ -9802,12 +11058,6 @@ export default class PositionManager {
                 srDataType: srData ? typeof srData : 'null',
                 srDataKeys: srData && typeof srData === 'object' ? Object.keys(srData) : 'N/A'
             });
-            
-            // If not in signal, try to get from scanner service's indicators
-            // Check both currentIndicators and indicators (different naming conventions)
-            if (!srData) {
-                const indicators = this.scannerService?.state?.currentIndicators?.[symbolNoSlash] 
-                    || this.scannerService?.state?.indicators?.[symbolNoSlash];
                 
                 console.log(`[Entry Quality] 🔍 Support/Resistance Data Check #2 (from indicators):`, {
                     hasScannerService: !!this.scannerService,
@@ -10053,55 +11303,25 @@ export default class PositionManager {
             // Use price cache if available to get recent prices
             let entryMomentumScore = null;
             try {
-                console.log(`[Entry Quality] 🔍 Momentum Score Calculation:`, {
-                    hasScannerService: !!this.scannerService,
-                    hasPriceCacheService: !!this.scannerService?.priceCacheService,
-                    scannerServiceKeys: this.scannerService ? Object.keys(this.scannerService).filter(k => k.toLowerCase().includes('price') || k.toLowerCase().includes('cache')).slice(0, 10) : 'N/A',
-                    // Try alternative access methods
-                    hasPriceManagerService: !!this.scannerService?.priceManagerService,
-                    hasPriceService: !!this.scannerService?.priceService
-                });
-                
                 // Use priceCacheService directly (it's a singleton imported at top of file)
                 const priceCache = priceCacheService;
                 if (priceCache && typeof priceCache.getTicker24hr === 'function') {
-                    console.log(`[Entry Quality] ✅ Found price cache service, fetching ticker24hr...`);
                     // Get price from 24hr ticker for price change percent
                     const ticker24hr = await priceCache.getTicker24hr(symbolNoSlash);
-                    console.log(`[Entry Quality] 🔍 Ticker24hr fetch result:`, {
-                        hasTicker24hr: !!ticker24hr,
-                        priceChangePercent: ticker24hr?.priceChangePercent,
-                        priceChangePercentType: ticker24hr?.priceChangePercent !== undefined ? typeof ticker24hr.priceChangePercent : 'undefined'
-                    });
                     
                     if (ticker24hr && ticker24hr.priceChangePercent !== undefined && ticker24hr.priceChangePercent !== null) {
                         const priceChangePercent = parseFloat(ticker24hr.priceChangePercent);
-                        console.log(`[Entry Quality] 🔍 Parsed priceChangePercent:`, {
-                            priceChangePercent,
-                            isNaN: isNaN(priceChangePercent)
-                        });
                         
                         if (!isNaN(priceChangePercent)) {
                             // Convert 24hr price change to momentum score (0-100)
                             // Positive change = bullish momentum, negative = bearish
                             // Scale: -10% to +10% maps to 0-100
                             entryMomentumScore = Math.max(0, Math.min(100, 50 + (priceChangePercent * 5)));
-                            console.log(`[Entry Quality] ✅ Calculated momentum score:`, {
-                                priceChangePercent,
-                                entryMomentumScore
-                            });
-                        } else {
-                            console.log(`[Entry Quality] ⚠️ priceChangePercent is NaN:`, priceChangePercent);
                         }
-                    } else {
-                        console.log(`[Entry Quality] ⚠️ No valid priceChangePercent in ticker24hr`);
                     }
-                } else {
-                    console.log(`[Entry Quality] ⚠️ No priceCacheService available`);
                 }
             } catch (momentumError) {
-                console.warn('[Entry Quality] ❌ Error calculating momentum score:', momentumError.message);
-                console.warn('[Entry Quality] ❌ Error stack:', momentumError.stack);
+                console.warn(`[PositionManager] Error calculating momentum for ${symbol}:`, momentumError.message);
             }
             
             // Calculate entry relative to day high/low
@@ -10152,7 +11372,7 @@ export default class PositionManager {
                     }
                 }
             } catch (dayRangeError) {
-                console.warn('[PositionManager] Could not calculate day range metrics from klines, falling back to 24hr ticker:', dayRangeError.message);
+                console.warn(`[PositionManager] Error calculating day range for ${symbol}:`, dayRangeError.message);
                 
                 // Fallback to 24hr ticker if kline fetch fails
                 try {
@@ -10228,7 +11448,7 @@ export default class PositionManager {
                     }
                 }
             } catch (volumeError) {
-                console.warn('[PositionManager] Could not calculate volume metrics from klines:', volumeError.message);
+                console.warn(`[PositionManager] Error calculating volume for ${symbol}:`, volumeError.message);
                 // If kline fetch fails, set to null (no fallback to 24hr ticker as it's not calendar day accurate)
             }
             
@@ -10348,7 +11568,10 @@ export default class PositionManager {
                 const bbw = marketVolatility.bbw || 0.1;
                 
                 const adxScore = Math.min(100, Math.max(0, (adx / 50) * 100));
-                const bbwScore = Math.min(100, Math.max(0, (bbw / 0.5) * 100));
+                // CRITICAL FIX: BBW is stored as percentage (e.g., 5.789 = 5.789%), not decimal (0.05789)
+                // Convert to decimal first if BBW > 1 (indicating percentage format)
+                const bbwDecimal = bbw > 1 ? bbw / 100 : bbw;
+                const bbwScore = Math.min(100, Math.max(0, (bbwDecimal / 0.5) * 100));
                 const volatilityScore = (adxScore * 0.4) + (bbwScore * 0.6);
                 return Math.round(volatilityScore);
             }
@@ -10743,6 +11966,266 @@ export default class PositionManager {
                 similarTradesCount: null,
                 consecutiveWinsBefore: null,
                 consecutiveLossesBefore: null
+            };
+        }
+    }
+
+    /**
+     * Test function to manually open a BONK position with a specific value
+     * This is for debugging quantity calculation issues with very small price coins
+     * @param {number} targetValue - Target position value in USDT (default: 15)
+     * @returns {Promise<Object>} Result of position opening
+     */
+    async testOpenBONKPosition(targetValue = 15) {
+        console.log(`🧪 [TEST_BONK] ========== TEST OPEN BONK POSITION ($${targetValue}) ==========`);
+        
+        try {
+            const symbol = 'BONK/USDT';
+            const symbolNoSlash = 'BONKUSDT';
+            const tradingMode = this.getTradingMode();
+            const proxyUrl = this.scannerService?.state?.settings?.local_proxy_url || 'http://localhost:3003';
+            
+            // 1. Get current BONK price
+            console.log(`🧪 [TEST_BONK] Step 1: Fetching current BONK price...`);
+            const { getBinancePrices } = await import('@/api/functions');
+            const priceResponse = await getBinancePrices({ symbols: [symbolNoSlash], tradingMode, proxyUrl });
+            
+            if (!priceResponse || !Array.isArray(priceResponse) || priceResponse.length === 0) {
+                throw new Error('Failed to fetch BONK price');
+            }
+            
+            const currentPrice = parseFloat(priceResponse[0]?.price || priceResponse[0]?.lastPrice || 0);
+            if (!currentPrice || currentPrice <= 0) {
+                throw new Error(`Invalid BONK price: ${currentPrice}`);
+            }
+            
+            console.log(`🧪 [TEST_BONK] ✅ Current BONK price: $${currentPrice}`);
+            
+            // 2. Calculate quantity for target value
+            const targetQuantity = targetValue / currentPrice;
+            console.log(`🧪 [TEST_BONK] Step 2: Calculated target quantity: ${targetQuantity} BONK for $${targetValue}`);
+            
+            // 3. Get exchange info for BONK
+            console.log(`🧪 [TEST_BONK] Step 3: Getting exchange info for BONK...`);
+            await this.loadExchangeInfo();
+            const exchangeInfo = this.getExchangeInfo(symbolNoSlash);
+            console.log(`🧪 [TEST_BONK] Exchange info:`, {
+                hasExchangeInfo: !!exchangeInfo,
+                lotSizeFilter: exchangeInfo?.filters?.LOT_SIZE,
+                minNotionalFilter: exchangeInfo?.filters?.MIN_NOTIONAL
+            });
+            
+            // 4. Calculate ATR for BONK
+            console.log(`🧪 [TEST_BONK] Step 4: Calculating ATR for BONK...`);
+            let atrValue = null;
+            let atrDetails = null;
+            try {
+                const { getKlineData } = await import('@/api/functions');
+                console.log(`🧪 [TEST_BONK] Fetching kline data for ${symbolNoSlash}...`);
+                const klineResponse = await getKlineData({
+                    symbols: [symbolNoSlash], // Note: symbols (plural, array) not symbol
+                    interval: '15m',
+                    limit: 100
+                });
+                
+                console.log(`🧪 [TEST_BONK] Kline response:`, {
+                    success: klineResponse?.success,
+                    hasData: !!klineResponse?.data,
+                    dataType: typeof klineResponse?.data,
+                    dataKeys: klineResponse?.data ? Object.keys(klineResponse.data) : 'no data'
+                });
+                
+                // getKlineData returns { success: true, data: { [symbol]: { data: [...] } } }
+                let klineData = null;
+                if (klineResponse?.success && klineResponse?.data) {
+                    const symbolData = klineResponse.data[symbolNoSlash];
+                    if (symbolData) {
+                        if (symbolData.error) {
+                            throw new Error(symbolData.error);
+                        }
+                        // The data might be nested: symbolData.data or directly symbolData
+                        klineData = symbolData.data || symbolData;
+                    }
+                }
+                
+                console.log(`🧪 [TEST_BONK] Extracted kline data:`, {
+                    isArray: Array.isArray(klineData),
+                    length: klineData?.length || 0,
+                    sample: klineData && klineData.length > 0 ? klineData[0] : 'no data'
+                });
+                
+                if (klineData && Array.isArray(klineData) && klineData.length >= 14) {
+                    const atrPeriod = 14;
+                    console.log(`🧪 [TEST_BONK] Calculating ATR from ${klineData.length} candles with period ${atrPeriod}...`);
+                    const atrValues = unifiedCalculateATR(klineData, atrPeriod, { debug: true, validateData: true });
+                    
+                    console.log(`🧪 [TEST_BONK] ATR calculation result:`, {
+                        isArray: Array.isArray(atrValues),
+                        length: atrValues?.length || 0,
+                        validCount: atrValues ? atrValues.filter(v => v !== null && v !== undefined && Number.isFinite(v)).length : 0
+                    });
+                    
+                    if (atrValues && Array.isArray(atrValues) && atrValues.length > 0) {
+                        // Get the last valid ATR value
+                        const validATRs = atrValues.filter(v => v !== null && v !== undefined && Number.isFinite(v));
+                        if (validATRs.length > 0) {
+                            atrValue = validATRs[validATRs.length - 1];
+                            
+                            // Calculate ATR as percentage of price
+                            const atrPercent = atrValue ? (atrValue / currentPrice) * 100 : null;
+                            
+                            atrDetails = {
+                                atrValue: atrValue,
+                                atrPercent: atrPercent,
+                                atrValuesLength: atrValues.length,
+                                validATRsCount: validATRs.length,
+                                klineDataLength: klineData.length,
+                                period: atrPeriod,
+                                atrVsPrice: atrValue ? `${(atrPercent || 0).toFixed(4)}%` : 'N/A',
+                                sampleATRs: validATRs.slice(-5) // Last 5 valid ATR values
+                            };
+                            
+                            console.log(`🧪 [TEST_BONK] ✅ ATR calculated successfully:`, atrDetails);
+                        } else {
+                            console.warn(`🧪 [TEST_BONK] ⚠️ ATR calculation returned no valid values`);
+                            atrDetails = {
+                                error: 'No valid ATR values',
+                                atrValuesLength: atrValues.length,
+                                klineDataLength: klineData.length,
+                                atrValuesSample: atrValues.slice(-5) // Show sample for debugging
+                            };
+                        }
+                    } else {
+                        console.warn(`🧪 [TEST_BONK] ⚠️ ATR calculation returned empty or invalid array`);
+                        atrDetails = {
+                            error: 'Empty or invalid ATR array',
+                            klineDataLength: klineData.length,
+                            atrValuesType: typeof atrValues,
+                            atrValuesIsArray: Array.isArray(atrValues)
+                        };
+                    }
+                } else {
+                    console.warn(`🧪 [TEST_BONK] ⚠️ Insufficient kline data for ATR:`, {
+                        klineDataLength: klineData?.length || 0,
+                        required: 14,
+                        isArray: Array.isArray(klineData),
+                        klineDataType: typeof klineData,
+                        response: klineResponse
+                    });
+                    atrDetails = {
+                        error: 'Insufficient kline data',
+                        klineDataLength: klineData?.length || 0,
+                        required: 14,
+                        responseSuccess: klineResponse?.success,
+                        responseError: klineResponse?.error
+                    };
+                }
+            } catch (atrError) {
+                console.error(`🧪 [TEST_BONK] ❌ ATR calculation failed:`, atrError);
+                console.error(`🧪 [TEST_BONK] ❌ ATR error stack:`, atrError.stack);
+                atrDetails = {
+                    error: atrError.message,
+                    stack: atrError.stack
+                };
+            }
+            
+            // Log ATR summary
+            console.log(`🧪 [TEST_BONK] 📊 ATR Summary:`, {
+                atrValue: atrValue,
+                atrPercent: atrValue ? `${((atrValue / currentPrice) * 100).toFixed(4)}%` : 'N/A',
+                currentPrice: currentPrice,
+                atrDetails: atrDetails
+            });
+            
+            // 5. Create a mock signal object
+            console.log(`🧪 [TEST_BONK] Step 5: Creating mock signal...`);
+            const mockSignal = {
+                symbol: symbol,
+                combination: {
+                    symbol: symbol,
+                    strategy_name: 'Test BONK Strategy',
+                    useWinStrategySize: false,
+                    defaultPositionSize: targetValue,
+                    riskPerTrade: 2,
+                    enableTrailingTakeProfit: false
+                },
+                currentPrice: currentPrice,
+                convictionScore: 75,
+                convictionDetails: {},
+                conviction_breakdown: {},
+                conviction_multiplier: 1,
+                market_regime: this.scannerService?.state?.marketRegime || 'uptrend',
+                regime_confidence: 80,
+                combined_strength: 250,
+                atr_value: atrValue, // Include calculated ATR
+                is_event_driven_strategy: false,
+                trigger_signals: []
+            };
+            
+            console.log(`🧪 [TEST_BONK] Mock signal created with ATR:`, {
+                symbol: mockSignal.symbol,
+                currentPrice: mockSignal.currentPrice,
+                atr_value: mockSignal.atr_value,
+                atrPercent: mockSignal.atr_value ? `${((mockSignal.atr_value / mockSignal.currentPrice) * 100).toFixed(4)}%` : 'N/A'
+            });
+            
+            // 6. Override position size calculation to force $15 value
+            console.log(`🧪 [TEST_BONK] Step 6: Overriding position size to $${targetValue}...`);
+            
+            // Temporarily override calculatePositionSize to return our target value
+            const originalCalculatePositionSize = (await import('@/components/utils/dynamicPositionSizing')).default?.calculatePositionSize;
+            
+            // Create a modified signal that will result in $15 position
+            const modifiedSignal = {
+                ...mockSignal,
+                _forcePositionValue: targetValue // Flag to force position value
+            };
+            
+            // 7. Call openPositionsBatch with the modified signal
+            console.log(`🧪 [TEST_BONK] Step 7: Opening position via openPositionsBatch...`);
+            const result = await this.openPositionsBatch([modifiedSignal]);
+            
+            console.log(`🧪 [TEST_BONK] ========== RESULT ==========`);
+            console.log(`🧪 [TEST_BONK] Opened: ${result.opened}`);
+            console.log(`🧪 [TEST_BONK] Errors: ${result.errors.length}`);
+            if (result.openedPositions.length > 0) {
+                const position = result.openedPositions[0];
+                console.log(`🧪 [TEST_BONK] Position ID: ${position.position_id || position.id}`);
+                console.log(`🧪 [TEST_BONK] Quantity: ${position.quantity_crypto}`);
+                console.log(`🧪 [TEST_BONK] Entry Price: ${position.entry_price}`);
+                console.log(`🧪 [TEST_BONK] Entry Value: $${(parseFloat(position.quantity_crypto) * parseFloat(position.entry_price)).toFixed(2)}`);
+                console.log(`🧪 [TEST_BONK] ATR Value: ${position.atr_value || 'N/A'}`);
+                if (position.atr_value && position.entry_price) {
+                    const positionAtrPercent = (position.atr_value / position.entry_price) * 100;
+                    console.log(`🧪 [TEST_BONK] ATR as % of Entry Price: ${positionAtrPercent.toFixed(4)}%`);
+                }
+            }
+            if (result.errors.length > 0) {
+                console.error(`🧪 [TEST_BONK] Errors:`, result.errors);
+            }
+            
+            // Final ATR summary
+            console.log(`🧪 [TEST_BONK] ========== ATR SUMMARY ==========`);
+            console.log(`🧪 [TEST_BONK] ATR Value: ${atrValue || 'N/A'}`);
+            if (atrValue && currentPrice) {
+                console.log(`🧪 [TEST_BONK] ATR as % of Price: ${((atrValue / currentPrice) * 100).toFixed(4)}%`);
+                console.log(`🧪 [TEST_BONK] Price: $${currentPrice}`);
+                console.log(`🧪 [TEST_BONK] ATR: ${atrValue}`);
+            }
+            if (atrDetails) {
+                console.log(`🧪 [TEST_BONK] ATR Details:`, atrDetails);
+            }
+            console.log(`🧪 [TEST_BONK] ==========================================`);
+            
+            return result;
+            
+        } catch (error) {
+            console.error(`🧪 [TEST_BONK] ❌ Error:`, error);
+            console.error(`🧪 [TEST_BONK] ❌ Stack:`, error.stack);
+            return {
+                opened: 0,
+                openedPositions: [],
+                errors: [{ error: error.message, stack: error.stack }]
             };
         }
     }

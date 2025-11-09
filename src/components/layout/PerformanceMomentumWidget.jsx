@@ -25,8 +25,10 @@ function computeDynamicConvictionThreshold(baseMin = 0, momentum) {
   const adjustment = deviation * LPM_ADJUSTMENT_FACTOR; // Range: -25 to +25
   const dynamic = base - adjustment; // Higher LPM = lower conviction needed
   
-  // Clamp between base and 100 (conviction can't exceed 100)
-  return Math.min(100, Math.max(base, dynamic));
+  // CRITICAL FIX: Clamp between 0 and 100 (allows going below base when LPM is high)
+  // When LPM > 50: dynamic can be BELOW base (more aggressive)
+  // When LPM < 50: dynamic will be ABOVE base (more conservative)
+  return Math.min(100, Math.max(0, dynamic));
 }
 
 // Simple BreakdownRow component without complex tooltips
@@ -179,7 +181,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                     label="Unrealized P&L"
                     score={breakdown.unrealized.score}
                     weight={breakdown.unrealized.weight}
-                    tooltip="Live P&L of all open positions. Higher scores indicate profitable open trades. The most significant leading factor (23% weight)."
+                    tooltip="Live P&L of all open positions. Higher scores indicate profitable open trades. 30% weight."
                   />
                   {/* Enhanced: show actual Unrealized P&L value and percent below the score */}
                   <div className="mt-1 ml-4 text-[10px] sm:text-xs text-gray-600 dark:text-gray-300">
@@ -193,7 +195,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                     label="Realized P&L"
                     score={breakdown.realized.score}
                     weight={breakdown.realized.weight}
-                    tooltip="Performance of last 100 closed trades with recency weighting. Higher scores indicate recent profitable trades. Equal weight to unrealized P&L (23% weight)."
+                    tooltip="Performance of last 100 closed trades with recency weighting. Higher scores indicate recent profitable trades. DOMINANT FACTOR - 40% weight."
                   />
                   {/* Enhanced: show actual Realized P&L details below the score */}
                   <div className="mt-1 ml-4 text-[10px] sm:text-xs text-gray-600 dark:text-gray-300">
@@ -201,15 +203,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                   </div>
                 </>
               )}
-              {breakdown.regime && (
-                <BreakdownRow
-                  label="Market Regime"
-                  score={breakdown.regime.score}
-                  weight={breakdown.regime.weight}
-                  details={breakdown.regime.details}
-                  tooltip="Current market trend analysis. Higher scores for confirmed uptrends, lower for downtrends or ranging markets. 15% weight."
-                />
-              )}
+              {/* Market Regime removed - it's context, not performance momentum */}
               {breakdown.volatility && (
                 <BreakdownRow
                   label="Market Volatility"
@@ -219,15 +213,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                   tooltip="Trend strength measured by ADX and Bollinger Band Width. Higher scores indicate stronger, less choppy trends. 10% weight."
                 />
               )}
-              {breakdown.opportunityRate && (
-                <BreakdownRow
-                  label="Opportunity Rate"
-                  score={breakdown.opportunityRate.score}
-                  weight={breakdown.opportunityRate.weight}
-                  details={breakdown.opportunityRate.details}
-                  tooltip="Rate of new high-quality trade signals being found. Indicates a target-rich trading environment. 15% weight."
-                />
-              )}
+              {/* Opportunity Rate removed - strategy count is not a performance metric */}
               {breakdown.fearAndGreed && (
                 <BreakdownRow
                   label="Fear & Greed Index"
@@ -243,7 +229,7 @@ const PerformanceMomentumWidget = ({ baseMinimumConviction = 0 }) => {
                   score={breakdown.signalQuality.score}
                   weight={breakdown.signalQuality.weight}
                   details={breakdown.signalQuality.details}
-                  tooltip="Average strength of all active strategies. Higher scores indicate strategies are finding stronger signals. 4% weight."
+                  tooltip="Average strength of all active strategies. Higher scores indicate strategies are finding stronger signals. 10% weight."
                 />
               )}
             </div>

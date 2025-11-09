@@ -15,6 +15,7 @@ import ConvictionProfitChart from '@/components/dashboard/ConvictionProfitChart'
 import TimeframePerformanceChart from '@/components/dashboard/TimeframePerformanceChart';
 import FearGreedBitcoinChart from '@/components/dashboard/FearGreedBitcoinChart';
 import TradeAnalyticsDashboard from '@/components/analytics/TradeAnalyticsDashboard';
+import CumulativePnLChart from '@/components/analytics/CumulativePnLChart';
 import TradeAdvisorChat from '@/components/ai/TradeAdvisorChat';
 import { useTradingMode } from '@/components/providers/TradingModeProvider';
 import { queueEntityCall } from '@/components/utils/apiQueue';
@@ -483,6 +484,9 @@ export default function Analytics() {
                             <CardContent><div className="text-2xl font-bold">{summaryMetrics.profitFactor === Infinity ? '∞' : summaryMetrics.profitFactor.toFixed(2)}</div></CardContent>
                         </Card>
                     </div>
+
+                    {/* Cumulative P&L Chart */}
+                    <CumulativePnLChart tradingMode={isLiveMode ? 'live' : 'testnet'} />
 
                     {/* NEW: Trade Analytics Dashboard with Exit Metrics */}
                     <TradeAnalyticsDashboard tradingMode={isLiveMode ? 'live' : 'testnet'} />

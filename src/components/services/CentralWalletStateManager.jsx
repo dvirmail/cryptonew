@@ -440,44 +440,74 @@ class CentralWalletStateManager {
                 return total + (parseFloat(pos.entry_value_usdt) || 0);
             }, 0) || 0;
 
-            // Calculate unrealized P&L using live prices (fallback to stored current_price/entry_price)
+            // CRITICAL FIX: Calculate unrealized P&L using same formula as LPM (PerformanceMetricsService)
+            // Use same formula: (currentPrice - entry_price) * quantity_crypto for long positions
+            // This ensures Wallet widget uses the correct calculation (but shows ALL positions, not just last 100)
             let unrealizedPnl = 0;
+            
             try {
-                const symbols = Array.from(new Set((positions || []).map(p => (p.symbol || '').replace('/', '')))).filter(Boolean);
-                let priceMap = {};
-                if (symbols.length > 0) {
-                    const priceResp = await liveTradingAPI({
-                        action: 'getSymbolPriceTicker',
-                        symbols,
-                        tradingMode: tradingMode,
-                        proxyUrl: 'http://localhost:3003'
-                    });
-                    const responseData = priceResp?.data || priceResp;
-                    const list = responseData?.data || responseData;
-                    if (Array.isArray(list)) {
-                        for (const item of list) {
-                            if (item?.symbol && item?.price) priceMap[item.symbol] = parseFloat(item.price);
+                // Filter to open/trailing positions (ALL positions, not limited to 100)
+                const openPositions = (positions || [])
+                    .filter(pos => pos.status === 'open' || pos.status === 'trailing');
+                
+                if (openPositions.length > 0) {
+                    const symbols = Array.from(new Set(openPositions.map(p => (p.symbol || '').replace('/', '')))).filter(Boolean);
+                    let priceMap = {};
+                    if (symbols.length > 0) {
+                        const priceResp = await liveTradingAPI({
+                            action: 'getSymbolPriceTicker',
+                            symbols,
+                            tradingMode: tradingMode,
+                            proxyUrl: 'http://localhost:3003'
+                        });
+                        const responseData = priceResp?.data || priceResp;
+                        const list = responseData?.data || responseData;
+                        if (Array.isArray(list)) {
+                            for (const item of list) {
+                                if (item?.symbol && item?.price) priceMap[item.symbol] = parseFloat(item.price);
+                            }
+                        } else if (list?.symbol && list?.price) {
+                            priceMap[list.symbol] = parseFloat(list.price);
                         }
-                    } else if (list?.symbol && list?.price) {
-                        priceMap[list.symbol] = parseFloat(list.price);
                     }
+                    
+                    // CRITICAL FIX: Use same formula as LPM: (currentPrice - entry_price) * quantity_crypto
+                    unrealizedPnl = openPositions.reduce((total, pos) => {
+                        const key = (pos.symbol || '').replace('/', '');
+                        const live = priceMap[key];
+                        const currentPrice = Number.isFinite(live) ? live : (parseFloat(pos.current_price) || parseFloat(pos.entry_price) || 0);
+                        const entryPrice = parseFloat(pos.entry_price) || 0;
+                        const quantityCrypto = parseFloat(pos.quantity_crypto) || 0;
+                        
+                        if (currentPrice > 0 && entryPrice > 0 && quantityCrypto > 0) {
+                            // Use same formula as PerformanceMetricsService
+                            const unrealizedPnlUSDT = pos.direction === 'long'
+                                ? (currentPrice - entryPrice) * quantityCrypto
+                                : (entryPrice - currentPrice) * quantityCrypto;
+                            return total + unrealizedPnlUSDT;
+                        }
+                        return total;
+                    }, 0);
                 }
-                unrealizedPnl = positions?.reduce((total, pos) => {
-                    const key = (pos.symbol || '').replace('/', '');
-                    const live = priceMap[key];
-                    const current = Number.isFinite(live) ? live : (parseFloat(pos.current_price) || parseFloat(pos.entry_price) || 0);
-                    const qty = parseFloat(pos.quantity_crypto) || 0;
-                    const currentValue = current * qty;
-                    const entryValue = parseFloat(pos.entry_value_usdt) || 0;
-                    return total + (currentValue - entryValue);
-                }, 0) || 0;
             } catch (pErr) {
                 console.warn('[CentralWalletStateManager] ⚠️ Failed live price fetch for unrealized PnL, falling back:', pErr?.message);
-                unrealizedPnl = positions?.reduce((total, pos) => {
-                    const currentValue = (parseFloat(pos.current_price) || parseFloat(pos.entry_price) || 0) * (parseFloat(pos.quantity_crypto) || 0);
-                    const entryValue = parseFloat(pos.entry_value_usdt) || 0;
-                    return total + (currentValue - entryValue);
-                }, 0) || 0;
+                // Fallback: use same logic but with stored prices (ALL positions, not limited)
+                const openPositions = (positions || [])
+                    .filter(pos => pos.status === 'open' || pos.status === 'trailing');
+                
+                unrealizedPnl = openPositions.reduce((total, pos) => {
+                    const currentPrice = parseFloat(pos.current_price) || parseFloat(pos.entry_price) || 0;
+                    const entryPrice = parseFloat(pos.entry_price) || 0;
+                    const quantityCrypto = parseFloat(pos.quantity_crypto) || 0;
+                    
+                    if (currentPrice > 0 && entryPrice > 0 && quantityCrypto > 0) {
+                        const unrealizedPnlUSDT = pos.direction === 'long'
+                            ? (currentPrice - entryPrice) * quantityCrypto
+                            : (entryPrice - currentPrice) * quantityCrypto;
+                        return total + unrealizedPnlUSDT;
+                    }
+                    return total;
+                }, 0);
             }
 
             // Calculate crypto assets value (excluding USDT)
@@ -518,6 +548,7 @@ class CentralWalletStateManager {
 
             // Update the central state
             const positionsCount = positions?.length || 0;
+            const now = new Date().toISOString();
             const updatedState = {
                 ...this.currentState,
                 available_balance: availableBalance,
@@ -532,7 +563,8 @@ class CentralWalletStateManager {
                 unrealized_pnl: unrealizedPnl,
                 crypto_assets_value: cryptoAssetsValue,
                 open_positions_count: positions?.length || 0,
-                last_binance_sync: new Date().toISOString(),
+                last_binance_sync: now,
+                updated_date: now, // Ensure updated_date is always set
                 balances: accountData.balances || [],
                 positions: positions || [],
                 status: 'synced'
@@ -628,62 +660,94 @@ class CentralWalletStateManager {
     /**
      * Recalculate total realized P&L directly from database (source of truth)
      * This should be called whenever trades are added/updated to ensure accuracy
+     * CRITICAL: Uses direct database query to match SQL query exactly (no deduplication, same filters)
      * @param {string} tradingMode - Trading mode
      * @returns {Promise<number>} Total realized P&L
      */
     async recalculateRealizedPnlFromDatabase(tradingMode) {
         try {
-            const { queueEntityCall } = await import('@/components/utils/apiQueue');
+            // CRITICAL: Use direct database endpoint to match SQL query exactly
+            // SQL: WHERE exit_timestamp IS NOT NULL AND entry_price > 0 AND quantity > 0 AND trading_mode = 'testnet'
+            // This endpoint does NOT perform deduplication, matching the raw SQL query behavior
+            const scannerService = getAutoScannerService();
+            const proxyUrl = scannerService?.state?.settings?.local_proxy_url 
+                || this.currentState?.settings?.local_proxy_url 
+                || 'http://localhost:3003';
+            const response = await fetch(`${proxyUrl}/api/trades/direct-db?trading_mode=${tradingMode}`).catch(() => null);
             
-            // Fetch ALL closed trades for this trading mode (only those with exit_timestamp)
-            const allTrades = await queueEntityCall('Trade', 'filter', 
-                { 
-                    trading_mode: tradingMode,
-                    exit_timestamp: { $ne: null } // Only closed trades
-                }, 
-                '-exit_timestamp', 
-                100000 // Large limit to get all trades
-            ).catch(() => []);
-
-            // CRITICAL FIX: Deduplicate trades before calculating P&L to prevent inflated numbers
-            const deduplicatedTrades = [];
-            const seenTrades = new Map();
-            
-            if (allTrades && allTrades.length > 0) {
-                allTrades.forEach(trade => {
-                    if (!trade.exit_timestamp || !trade.entry_timestamp) return;
+            if (!response || !response.ok) {
+                console.warn('[CentralWalletStateManager] ⚠️ Failed to fetch from direct-db endpoint, falling back to queueEntityCall');
+                // Fallback to queueEntityCall (with deduplication)
+                const { queueEntityCall } = await import('@/components/utils/apiQueue');
+                const allTrades = await queueEntityCall('Trade', 'filter', 
+                    { 
+                        trading_mode: tradingMode,
+                        exit_timestamp: { $ne: null }
+                    }, 
+                    '-exit_timestamp', 
+                    100000
+                ).catch(() => []);
+                
+                // Apply same filters as SQL query
+                const filteredTrades = (allTrades || []).filter(trade => {
+                    return trade.exit_timestamp 
+                        && Number(trade.entry_price) > 0 
+                        && Number(trade.quantity || trade.quantity_crypto) > 0;
+                });
+                
+                let totalRealizedPnl = 0;
+                let totalTradesCount = 0;
+                let winningTradesCount = 0;
+                let losingTradesCount = 0;
+                let totalGrossProfit = 0;
+                let totalGrossLoss = 0;
+                
+                filteredTrades.forEach(trade => {
+                    totalTradesCount++;
+                    const pnl = Number(trade.pnl_usdt || 0);
+                    totalRealizedPnl += pnl;
                     
-                    // Create unique key based on trade characteristics
-                    const entryPrice = Math.round((Number(trade.entry_price) || 0) * 10000) / 10000;
-                    const exitPrice = Math.round((Number(trade.exit_price) || 0) * 10000) / 10000;
-                    const quantity = Math.round((Number(trade.quantity_crypto) || Number(trade.quantity) || 0) * 1000000) / 1000000;
-                    const entryDate = trade.entry_timestamp ? new Date(trade.entry_timestamp) : null;
-                    const entryDateRounded = entryDate ? new Date(Math.floor(entryDate.getTime() / 1000) * 1000).toISOString() : '';
-                    const symbol = trade.symbol || '';
-                    const strategy = trade.strategy_name || '';
-                    
-                    const uniqueKey = `${symbol}|${strategy}|${entryPrice}|${exitPrice}|${quantity}|${entryDateRounded}`;
-                    
-                    if (!seenTrades.has(uniqueKey)) {
-                        seenTrades.set(uniqueKey, trade);
-                        deduplicatedTrades.push(trade);
-                    } else {
-                        // Keep the trade with the earliest exit_timestamp
-                        const existing = seenTrades.get(uniqueKey);
-                        const existingExit = existing?.exit_timestamp ? new Date(existing.exit_timestamp).getTime() : 0;
-                        const currentExit = trade?.exit_timestamp ? new Date(trade.exit_timestamp).getTime() : 0;
-                        if (currentExit > 0 && (existingExit === 0 || currentExit < existingExit)) {
-                            const index = deduplicatedTrades.indexOf(existing);
-                            if (index >= 0) deduplicatedTrades.splice(index, 1);
-                            seenTrades.set(uniqueKey, trade);
-                            deduplicatedTrades.push(trade);
-                        }
+                    if (pnl > 0) {
+                        winningTradesCount++;
+                        totalGrossProfit += pnl;
+                    } else if (pnl < 0) {
+                        losingTradesCount++;
+                        totalGrossLoss += Math.abs(pnl);
                     }
                 });
                 
-                if (seenTrades.size < allTrades.length) {
+                // Update state
+                if (this.currentState) {
+                    const updatedState = {
+                        ...this.currentState,
+                        total_realized_pnl: totalRealizedPnl,
+                        total_trades_count: totalTradesCount,
+                        winning_trades_count: winningTradesCount,
+                        losing_trades_count: losingTradesCount,
+                        total_gross_profit: totalGrossProfit,
+                        total_gross_loss: totalGrossLoss,
+                        updated_date: new Date().toISOString()
+                    };
+                    
+                    const { queueEntityCall: updateQueueEntityCall } = await import('@/components/utils/apiQueue');
+                    const savedState = await updateQueueEntityCall('CentralWalletState', 'update', this.currentState.id, updatedState);
+                    this.currentState = savedState;
+                    this.notifySubscribers();
                 }
+                
+                return totalRealizedPnl;
             }
+            
+            const result = await response.json();
+            const allTrades = (result.success && result.data) ? result.data : [];
+            
+            // CRITICAL: No deduplication - match SQL query behavior exactly
+            // Filter trades to ensure they meet the same criteria (should already be filtered by endpoint, but double-check)
+            const validTrades = allTrades.filter(trade => {
+                return trade.exit_timestamp 
+                    && Number(trade.entry_price) > 0 
+                    && Number(trade.quantity || trade.quantity_crypto) > 0;
+            });
 
             let totalRealizedPnl = 0;
             let totalTradesCount = 0;
@@ -692,26 +756,25 @@ class CentralWalletStateManager {
             let totalGrossProfit = 0;
             let totalGrossLoss = 0;
 
-            if (deduplicatedTrades && deduplicatedTrades.length > 0) {
-                deduplicatedTrades.forEach(trade => {
-                    if (trade.exit_timestamp) { // Double-check: only closed trades
-                        totalTradesCount++;
-                        const pnl = Number(trade.pnl_usdt || 0);
-                        totalRealizedPnl += pnl;
+            if (validTrades && validTrades.length > 0) {
+                validTrades.forEach(trade => {
+                    totalTradesCount++;
+                    const pnl = Number(trade.pnl_usdt || 0);
+                    totalRealizedPnl += pnl;
 
-                        if (pnl > 0) {
-                            winningTradesCount++;
-                            totalGrossProfit += pnl;
-                        } else if (pnl < 0) {
-                            losingTradesCount++;
-                            totalGrossLoss += Math.abs(pnl);
-                        }
+                    if (pnl > 0) {
+                        winningTradesCount++;
+                        totalGrossProfit += pnl;
+                    } else if (pnl < 0) {
+                        losingTradesCount++;
+                        totalGrossLoss += Math.abs(pnl);
                     }
                 });
             }
 
             // Update the central state with recalculated values
             if (this.currentState) {
+                const { queueEntityCall } = await import('@/components/utils/apiQueue');
                 const updatedState = {
                     ...this.currentState,
                     total_realized_pnl: totalRealizedPnl,
@@ -732,7 +795,6 @@ class CentralWalletStateManager {
 
                 this.currentState = savedState;
                 this.notifySubscribers();
-
             }
 
             return totalRealizedPnl;

@@ -564,7 +564,11 @@ export function calculatePositionSize(options) {
     const balanceInTrades = options.balanceInTrades || 0; // Amount currently invested in trades
     
     // LPM/EBR Integration: Use adjustedBalanceRiskFactor if provided
-    const adjustedBalanceRiskFactor = options.adjustedBalanceRiskFactor || null; // EBR (0-100)
+    // CRITICAL FIX: Use explicit null check, not || operator, because 0 is a valid EBR value
+    const adjustedBalanceRiskFactor = (options.adjustedBalanceRiskFactor !== undefined && options.adjustedBalanceRiskFactor !== null) 
+        ? options.adjustedBalanceRiskFactor 
+        : null; // EBR (0-100)
+    
     const currentLpmScore = options?.lpmScore || 50; // Default to neutral if not provided
     // Momentum must NOT change risk%; keep strategy risk as-is
     const effectiveRiskPerTrade = riskPerTrade;
@@ -750,13 +754,21 @@ export function calculatePositionSize(options) {
 
     // Apply EBR scaling to base position size (user requirement):
     // finalSize = basePositionSize * (EBR/100). Respect min trade value and available cash caps.
-    if (adjustedBalanceRiskFactor !== null && Number.isFinite(defaultPositionSize)) {
+    // CRITICAL: EBR scaling must ALWAYS be applied when adjustedBalanceRiskFactor is provided
+    // CRITICAL FIX: Ensure defaultPositionSize is valid, use basePositionSize as fallback
+    const validDefaultSize = (Number.isFinite(defaultPositionSize) && defaultPositionSize > 0) 
+        ? defaultPositionSize 
+        : (Number.isFinite(basePositionSize) && basePositionSize > 0 ? basePositionSize : 100);
+    
+    if (adjustedBalanceRiskFactor !== null && adjustedBalanceRiskFactor !== undefined && Number.isFinite(adjustedBalanceRiskFactor) && validDefaultSize > 0) {
         // Enforce EBR sizing as the source of truth for position size
         const ebrMultiplier = Math.max(0, Math.min(100, adjustedBalanceRiskFactor)) / 100;
+        const rawTargetSize = validDefaultSize * ebrMultiplier;
         const targetSizeUSDT = Math.min(
-            Math.max(defaultPositionSize * ebrMultiplier, minimumTradeValue),
+            Math.max(rawTargetSize, minimumTradeValue),
             adjustedAvailableCash
         );
+        
         // Convert to quantity and run through exchange filters for validity
         const desiredQty = targetSizeUSDT / currentPrice;
         const filtered = applyExchangeFilters(desiredQty, currentPrice, options.exchangeInfo, options.symbol || 'UNKNOWN', adjustedAvailableCash);
@@ -767,10 +779,71 @@ export function calculatePositionSize(options) {
                 message: `Position rejected by exchange filters: ${filtered.appliedFilters?.join(', ') || 'unknown'}`
             };
         }
-        result.positionSize = filtered.positionValueUSDT;
-        result.positionValueUSDT = filtered.positionValueUSDT;
-        result.quantityCrypto = filtered.quantityCrypto;
+        
+        // CRITICAL FIX: After exchange filters, ensure position meets minimum trade value
+        // Exchange filters may reduce position size below minimum trade value due to step size rounding
+        if (filtered.positionValueUSDT < minimumTradeValue) {
+            // Try to auto-raise to meet minimum trade value (if balance allows)
+            // Use iterative approach to account for step size rounding
+            const lotSizeFilter = options.exchangeInfo?.filters?.LOT_SIZE;
+            const stepSize = lotSizeFilter?.stepSize ? parseFloat(lotSizeFilter.stepSize) : 0.00000001;
+            
+            // Start with minimum quantity needed, then add buffer for step size rounding
+            let requiredQty = Math.ceil((minimumTradeValue * 1.1) / currentPrice); // 10% buffer to account for step size rounding
+            let maxAttempts = 5;
+            let attempt = 0;
+            let reFiltered = null;
+            
+            while (attempt < maxAttempts) {
+                const requiredCost = requiredQty * currentPrice;
+                
+                if (adjustedAvailableCash < requiredCost) {
+                    // Can't afford this quantity - reject
+                    return {
+                        isValid: false,
+                        reason: 'below_minimum',
+                        message: `Calculated position size $${filtered.positionValueUSDT.toFixed(2)} is below minimum trade value $${minimumTradeValue} (insufficient balance to raise)`
+                    };
+                }
+                
+                // Re-apply filters with the required quantity
+                reFiltered = applyExchangeFilters(requiredQty, currentPrice, options.exchangeInfo, options.symbol || 'UNKNOWN', adjustedAvailableCash);
+                
+                if (reFiltered.quantityCrypto > 0 && reFiltered.positionValueUSDT >= minimumTradeValue) {
+                    // Success! Position meets minimum after filters
+                    result.positionSize = reFiltered.positionValueUSDT;
+                    result.positionValueUSDT = reFiltered.positionValueUSDT;
+                    result.quantityCrypto = reFiltered.quantityCrypto;
+                    break;
+                }
+                
+                // Still below minimum - increase quantity by one step size increment
+                if (stepSize > 0) {
+                    requiredQty = Math.ceil(requiredQty / stepSize) * stepSize + stepSize;
+                } else {
+                    requiredQty = requiredQty * 1.05; // 5% increase if no step size
+                }
+                attempt++;
+            }
+            
+            // If we exhausted attempts or still below minimum, reject
+            if (!reFiltered || reFiltered.quantityCrypto === 0 || reFiltered.positionValueUSDT < minimumTradeValue) {
+                return {
+                    isValid: false,
+                    reason: 'below_minimum',
+                    message: `Calculated position size $${filtered.positionValueUSDT.toFixed(2)} is below minimum trade value $${minimumTradeValue} (even after auto-raising with step size adjustment)`
+                };
+            }
+        } else {
+            result.positionSize = filtered.positionValueUSDT;
+            result.positionValueUSDT = filtered.positionValueUSDT;
+            result.quantityCrypto = filtered.quantityCrypto;
+        }
+    } else if (adjustedBalanceRiskFactor !== null) {
+        // EBR provided but defaultPositionSize is invalid - log warning
+        console.warn(`[EBR_SIZING] ⚠️ EBR (${adjustedBalanceRiskFactor}%) provided but defaultPositionSize (${defaultPositionSize}) is invalid. Using calculated result without EBR scaling.`);
     }
+    // Note: Removed verbose log for null EBR case to reduce console spam
 
     if (result.error) {
         // console.log('[POSITION_SIZING] ❌ Calculation error:', result.error);
@@ -789,21 +862,66 @@ export function calculatePositionSize(options) {
     //     isValid: result.positionSize >= minimumTradeValue
     // });
 
+    // Final validation: Ensure position meets minimum trade value
+    // If below minimum due to exchange filter rounding, try to auto-raise
     if (result.positionSize < minimumTradeValue) {
-        // console.log('[POSITION_SIZING] ❌ Position size below minimum:', {
-            //positionSize: result.positionSize,
-            //minimumTradeValue,
-            //calculationMethod,
-            //availableCash,
-            //convictionScore
-        //});
-        return {
-            isValid: false,
-            reason: 'below_minimum',
-            message: `Calculated position size $${result.positionSize.toFixed(2)} is below minimum trade value $${minimumTradeValue}`,
-            positionSize: result.positionSize,
-            calculationMethod: calculationMethod
-        };
+        // Try to auto-raise to meet minimum trade value (if balance allows)
+        const lotSizeFilter = options.exchangeInfo?.filters?.LOT_SIZE;
+        const stepSize = lotSizeFilter?.stepSize ? parseFloat(lotSizeFilter.stepSize) : 0.00000001;
+        
+        // Start with minimum quantity needed, then add buffer for step size rounding
+        let requiredQty = Math.ceil((minimumTradeValue * 1.1) / currentPrice); // 10% buffer
+        let maxAttempts = 5;
+        let attempt = 0;
+        let reFiltered = null;
+        
+        while (attempt < maxAttempts) {
+            const requiredCost = requiredQty * currentPrice;
+            
+            if (adjustedAvailableCash < requiredCost) {
+                // Can't afford this quantity - reject
+                return {
+                    isValid: false,
+                    reason: 'below_minimum',
+                    message: `Calculated position size $${result.positionSize.toFixed(2)} is below minimum trade value $${minimumTradeValue} (insufficient balance to raise)`,
+                    positionSize: result.positionSize,
+                    calculationMethod: calculationMethod
+                };
+            }
+            
+            // Re-apply filters with the required quantity
+            reFiltered = applyExchangeFilters(requiredQty, currentPrice, options.exchangeInfo, options.symbol || 'UNKNOWN', adjustedAvailableCash);
+            
+            if (reFiltered.quantityCrypto > 0 && reFiltered.positionValueUSDT >= minimumTradeValue) {
+                // Success! Update result with raised position
+                result.positionSize = reFiltered.positionValueUSDT;
+                result.positionValueUSDT = reFiltered.positionValueUSDT;
+                result.quantityCrypto = reFiltered.quantityCrypto;
+                if (result.appliedFilters) {
+                    result.appliedFilters.push(`Auto-raised to meet minimum trade value: $${result.positionSize.toFixed(2)}`);
+                }
+                break;
+            }
+            
+            // Still below minimum - increase quantity by one step size increment
+            if (stepSize > 0) {
+                requiredQty = Math.ceil(requiredQty / stepSize) * stepSize + stepSize;
+            } else {
+                requiredQty = requiredQty * 1.05; // 5% increase if no step size
+            }
+            attempt++;
+        }
+        
+        // If we exhausted attempts or still below minimum, reject
+        if (!reFiltered || reFiltered.quantityCrypto === 0 || reFiltered.positionValueUSDT < minimumTradeValue) {
+            return {
+                isValid: false,
+                reason: 'below_minimum',
+                message: `Calculated position size $${result.positionSize.toFixed(2)} is below minimum trade value $${minimumTradeValue} (even after auto-raising with step size adjustment)`,
+                positionSize: result.positionSize,
+                calculationMethod: calculationMethod
+            };
+        }
     }
 /*
     // Log final result
@@ -814,6 +932,22 @@ export function calculatePositionSize(options) {
         method: calculationMethod
     });
 */
+    // CRITICAL: Final validation - ensure quantity is never zero
+    if (!result.quantityCrypto || result.quantityCrypto <= 0) {
+        console.error('[POSITION_SIZING] ❌ CRITICAL: Final validation failed - quantity is zero:', {
+            symbol: options.symbol || 'UNKNOWN',
+            quantityCrypto: result.quantityCrypto,
+            positionValueUSDT: result.positionValueUSDT,
+            calculationMethod: calculationMethod,
+            result: result
+        });
+        return {
+            isValid: false,
+            reason: 'zero_quantity',
+            message: 'Position size calculation resulted in zero quantity - likely due to exchange filter rounding or ATR calculation failure for very small prices'
+        };
+    }
+    
     return {
         isValid: true,
         positionSize: result.positionSize,

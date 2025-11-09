@@ -305,6 +305,27 @@ const pendingKlineRequests = new Map();
 const klineResponseCache = new Map();
 const CACHE_TTL = 5000; // 5 seconds cache
 
+// Cleanup function for expired cache entries (can be called on-demand)
+export const cleanupExpiredKlineResponseCache = () => {
+  const now = Date.now();
+  let cleanedCount = 0;
+  for (const [key, value] of klineResponseCache.entries()) {
+    if ((now - value.timestamp) >= CACHE_TTL) {
+      klineResponseCache.delete(key);
+      cleanedCount++;
+    }
+  }
+  if (cleanedCount > 0) {
+    console.log(`[KLINE_CACHE] 🧹 Cleaned ${cleanedCount} expired cache entries (${klineResponseCache.size} remaining)`);
+  }
+  return cleanedCount;
+};
+
+// Periodic cleanup as fallback (every 2 minutes - less frequent since we clean at scan cycle start)
+if (typeof setInterval !== 'undefined') {
+  setInterval(cleanupExpiredKlineResponseCache, 2 * 60 * 1000);
+}
+
 // Circuit breaker pattern to prevent cascading failures
 const circuitBreaker = {
   state: 'CLOSED', // CLOSED, OPEN, HALF_OPEN
@@ -389,8 +410,9 @@ function getCacheKey(symbols, interval, limit, endTime) {
 function getCachedResponse(symbols, interval, limit, endTime) {
   const cacheKey = getCacheKey(symbols, interval, limit, endTime);
   const cached = klineResponseCache.get(cacheKey);
+  const now = Date.now();
   
-  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL) {
+  if (cached && (now - cached.timestamp) < CACHE_TTL) {
     // Return cached response, filtering to requested symbols
     const filteredData = {};
     symbols.forEach(symbol => {
@@ -405,7 +427,7 @@ function getCachedResponse(symbols, interval, limit, endTime) {
     };
   }
   
-  // Remove stale cache entry
+  // Remove stale/expired cache entry on access
   if (cached) {
     klineResponseCache.delete(cacheKey);
   }
@@ -1677,8 +1699,21 @@ export const functions = {
       // Step 5: Delete trades in batches
       let deletedCount = 0;
       const deletionErrors = [];
+      let skippedCount = 0;
       
       for (const trade of tradesToDeleteList) {
+        // CRITICAL FIX: Skip trades without valid IDs to prevent 404 errors
+        if (!trade || !trade.id || trade.id === 'undefined' || trade.id === undefined || trade.id === null) {
+          skippedCount++;
+          console.warn(`[archiveOldTrades] ⚠️ Skipping trade with invalid ID:`, {
+            trade: trade,
+            id: trade?.id,
+            hasId: !!trade?.id,
+            idType: typeof trade?.id
+          });
+          continue;
+        }
+        
         try {
           await apiRequest(`/trades/${trade.id}`, {
             method: 'DELETE'
@@ -1688,12 +1723,19 @@ export const functions = {
           // Small delay between deletions
           await new Promise(resolve => setTimeout(resolve, 20));
         } catch (error) {
-          console.error(`[archiveOldTrades] Failed to delete trade ${trade.id}:`, error);
+          // Only log if it's not a 404 (which is expected for already-deleted trades)
+          if (error?.response?.status !== 404) {
+            console.error(`[archiveOldTrades] Failed to delete trade ${trade.id}:`, error);
+          }
           deletionErrors.push({ id: trade.id, error: error.message });
           
           // Longer delay on error
           await new Promise(resolve => setTimeout(resolve, 100));
         }
+      }
+      
+      if (skippedCount > 0) {
+        console.warn(`[archiveOldTrades] ⚠️ Skipped ${skippedCount} trades with invalid IDs`);
       }
       
       const remainingCount = totalCount - deletedCount;

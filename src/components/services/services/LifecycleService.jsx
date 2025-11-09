@@ -7,6 +7,7 @@
 
 import { queueEntityCall, queueFunctionCall } from '@/components/utils/apiQueue';
 import { getExchangeInfo } from '@/api/functions';
+import { BackgroundTimerService } from '../BackgroundTimerService';
 
 export class LifecycleService {
     constructor(scannerService) {
@@ -17,6 +18,11 @@ export class LifecycleService {
 
         // Lifecycle state
         this.countdownInterval = null;
+        this.countdownStartTime = null; // Track when countdown started (for throttling detection)
+        
+        // Initialize background timer service (Web Worker for anti-throttling)
+        this.backgroundTimer = new BackgroundTimerService(scannerService);
+        this.backgroundTimerInitialized = false;
     }
 
     /**
@@ -201,6 +207,17 @@ export class LifecycleService {
             await this.scannerService._persistLatestWalletSummary();
             console.log(`[AutoScannerService] ✅ Wallet summary persisted`);
 
+            // Initialize background timer service (non-blocking)
+            this.scannerService.addLog(`[BackgroundTimer] 🔧 Initializing background timer (anti-throttling)...`, 'system');
+            try {
+                await this.backgroundTimer.initialize();
+                this.backgroundTimerInitialized = true;
+                console.log(`[AutoScannerService] ✅ Background timer initialized - scanner will continue running even when tab is inactive`);
+            } catch (error) {
+                console.warn(`[AutoScannerService] ⚠️ Background timer initialization failed: ${error.message}. Will use main thread timer (may be throttled when tab is inactive).`);
+                this.backgroundTimerInitialized = false;
+            }
+
             // OPTIMIZATION: Mark as initialized early for UI responsiveness
             this.scannerService.state.isInitialized = true;
             this.scannerService.state.isInitializing = false;
@@ -335,13 +352,32 @@ export class LifecycleService {
     }
 
     /**
-     * Starts the countdown timer for the next scan cycle.
+     * Stops the countdown timer (both background and main thread).
      */
-    _startCountdown() {
+    _stopCountdown() {
+        // Stop background timer if running
+        if (this.backgroundTimerInitialized && this.backgroundTimer.isAvailable()) {
+            this.backgroundTimer.stopTimer();
+        }
+        
+        // Stop main thread timer
         if (this.countdownInterval) {
             clearInterval(this.countdownInterval);
+            clearTimeout(this.countdownInterval);
             this.countdownInterval = null;
         }
+        
+        this.scannerService.state.nextScanTime = null;
+        this.scannerService.notifySubscribers();
+    }
+
+    /**
+     * Starts the countdown timer for the next scan cycle.
+     * Uses Web Worker timer if available (anti-throttling), otherwise falls back to main thread.
+     */
+    _startCountdown() {
+        // Stop any existing timer first
+        this._stopCountdown();
 
         if (!this.scannerService.state.isRunning || this.scannerService.state.isScanning) {
             return;
@@ -349,36 +385,56 @@ export class LifecycleService {
 
         const scanFrequency = this.scannerService.state.settings?.scanFrequency || 60000;
         this.scannerService.state.nextScanTime = Date.now() + scanFrequency;
+        this.countdownStartTime = Date.now(); // Track when countdown started
 
         this.scannerService.notifySubscribers();
 
-        this.countdownInterval = setInterval(() => {
-            /*console.log('[LifecycleService] ⏰ COUNTDOWN INTERVAL TICK:', {
-                now: Date.now(),
-                nextScanTime: this.scannerService.state.nextScanTime,
-                timeUntilScan: this.scannerService.state.nextScanTime ? this.scannerService.state.nextScanTime - Date.now() : 0,
-                isRunning: this.scannerService.state.isRunning,
-                isScanning: this.scannerService.state.isScanning
-            });*/
-            
+        // Use background timer (Web Worker) if available - significantly less throttled
+        if (this.backgroundTimerInitialized && this.backgroundTimer.isAvailable()) {
+            this.backgroundTimer.startTimer(scanFrequency);
+            console.log(`[LifecycleService] ✅ Using background timer (Web Worker) - scanner will continue running even when tab is inactive`);
+            return; // Background timer handles everything
+        }
+
+        // Fallback to main thread timer (may be throttled when tab is inactive)
+        console.log(`[LifecycleService] ⚠️ Using main thread timer (may be throttled when tab is inactive)`);
+
+        // CRITICAL FIX: Use setTimeout with recursive calls instead of setInterval
+        // setInterval is heavily throttled when tab is inactive (can become 10+ seconds per tick)
+        // setTimeout with recursive calls is less affected by throttling
+        const scheduleNextTick = () => {
+            // Check if we should continue
             if (!this.scannerService.state.isRunning || this.scannerService.state.isScanning) {
                 console.log('[LifecycleService] 🔍 Countdown stopped:', {
                     reason: !this.scannerService.state.isRunning ? 'Scanner not running' : 'Scanner is scanning',
                     isRunning: this.scannerService.state.isRunning,
                     isScanning: this.scannerService.state.isScanning
                 });
-                clearInterval(this.countdownInterval);
-                this.countdownInterval = null;
+                if (this.countdownInterval) {
+                    clearTimeout(this.countdownInterval);
+                    this.countdownInterval = null;
+                }
                 this.scannerService.state.nextScanTime = null;
-
                 this.scannerService.notifySubscribers();
                 return;
             }
 
+            // Check if it's time to scan
             if (this.scannerService.state.nextScanTime && Date.now() >= this.scannerService.state.nextScanTime) {
+                if (this.countdownInterval) {
+                    clearTimeout(this.countdownInterval);
+                    this.countdownInterval = null;
+                }
                 
-                clearInterval(this.countdownInterval);
-                this.countdownInterval = null;
+                // Check for throttling before clearing nextScanTime
+                const scanFrequency = this.scannerService.state.settings?.scanFrequency || 60000;
+                const expectedTime = scanFrequency;
+                const actualTime = Date.now() - (this.countdownStartTime || Date.now());
+                if (actualTime > expectedTime * 1.5) {
+                    const throttlingDelay = actualTime - expectedTime;
+                    console.warn(`[LifecycleService] ⚠️ Browser throttling detected: countdown took ${(actualTime/1000).toFixed(1)}s instead of expected ${(expectedTime/1000).toFixed(1)}s (${(throttlingDelay/1000).toFixed(1)}s delay)`);
+                }
+                
                 this.scannerService.state.nextScanTime = null;
 
                 this.scannerService.scanEngineService.scanCycle().catch(e => {
@@ -388,7 +444,23 @@ export class LifecycleService {
             }
 
             this.scannerService.notifySubscribers();
-        }, 1000);
+            
+            // Schedule next tick - use requestAnimationFrame if tab is visible, otherwise setTimeout
+            // This helps reduce throttling impact
+            const isTabVisible = typeof document !== 'undefined' && !document.hidden;
+            if (isTabVisible && typeof requestAnimationFrame !== 'undefined') {
+                // Use requestAnimationFrame for visible tabs (more accurate timing)
+                requestAnimationFrame(() => {
+                    this.countdownInterval = setTimeout(scheduleNextTick, 1000);
+                });
+            } else {
+                // Use setTimeout for inactive tabs (still throttled but better than setInterval)
+                this.countdownInterval = setTimeout(scheduleNextTick, 1000);
+            }
+        };
+
+        // Start the recursive countdown
+        scheduleNextTick();
     }
 
     /**
@@ -412,11 +484,29 @@ export class LifecycleService {
      * Resets the lifecycle service state.
      */
     resetState() {
+        // Stop background timer if running
+        if (this.backgroundTimerInitialized) {
+            this.backgroundTimer.stopTimer();
+        }
+        
         if (this.countdownInterval) {
+            // Handle both setInterval and setTimeout
             clearInterval(this.countdownInterval);
+            clearTimeout(this.countdownInterval);
             this.countdownInterval = null;
         }
+        this.countdownStartTime = null;
         this.addLog('[LifecycleService] State reset.', 'system');
+    }
+
+    /**
+     * Cleanup and destroy resources
+     */
+    destroy() {
+        if (this.backgroundTimer) {
+            this.backgroundTimer.destroy();
+        }
+        this.resetState();
     }
 }
 

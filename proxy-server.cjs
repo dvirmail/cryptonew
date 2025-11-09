@@ -585,6 +585,12 @@ async function loadTradesFromDB() {
         
         // Map database columns to in-memory trade format
         const mappedTrades = dbTrades.map(dbTrade => {
+            const entryPrice = parseFloat(dbTrade.entry_price) || 0;
+            const quantity = parseFloat(dbTrade.quantity) || 0;
+            // CRITICAL FIX: Calculate entry_value_usdt from entry_price * quantity
+            // This field is required by PerformanceMetricsService for filtering
+            const entryValueUsdt = entryPrice * quantity;
+            
             return {
                 id: dbTrade.id,
                 trade_id: dbTrade.id, // For compatibility
@@ -592,12 +598,13 @@ async function loadTradesFromDB() {
                 symbol: dbTrade.symbol,
                 direction: dbTrade.side === 'BUY' ? 'long' : dbTrade.side === 'SELL' ? 'short' : 'long',
                 side: dbTrade.side,
-                quantity: dbTrade.quantity,
-                quantity_crypto: dbTrade.quantity,
-                entry_price: parseFloat(dbTrade.entry_price) || 0,
+                quantity: quantity,
+                quantity_crypto: quantity,
+                entry_price: entryPrice,
                 exit_price: dbTrade.exit_price ? parseFloat(dbTrade.exit_price) : null,
                 entry_timestamp: dbTrade.entry_timestamp,
                 exit_timestamp: dbTrade.exit_timestamp,
+                entry_value_usdt: entryValueUsdt, // CRITICAL FIX: Calculate from entry_price * quantity
                 pnl_usdt: dbTrade.pnl_usdt ? parseFloat(dbTrade.pnl_usdt) : 0,
                 pnl_percentage: dbTrade.pnl_percent ? parseFloat(dbTrade.pnl_percent) : 0,
                 pnl_percent: dbTrade.pnl_percent ? parseFloat(dbTrade.pnl_percent) : 0,
@@ -2907,6 +2914,35 @@ const KLINE_CACHE_DURATION = 2 * 60 * 1000; // 2 minutes cache for kline data
 // Request deduplication for klines
 const pendingKlineRequests = new Map();
 
+// Periodic cleanup of expired cache entries (every 2 minutes - less frequent since client triggers cleanup)
+const cleanupExpiredKlineCache = () => {
+  const now = Date.now();
+  let cleanedCount = 0;
+  for (const [key, value] of klineCache.entries()) {
+    if ((now - value.timestamp) >= KLINE_CACHE_DURATION) {
+      klineCache.delete(key);
+      cleanedCount++;
+    }
+  }
+  if (cleanedCount > 0) {
+    console.log(`[PROXY] 🧹 Cleaned ${cleanedCount} expired kline cache entries (${klineCache.size} remaining)`);
+  }
+  return cleanedCount;
+};
+
+// Start periodic cleanup as fallback (every 2 minutes)
+setInterval(cleanupExpiredKlineCache, 2 * 60 * 1000);
+
+// Endpoint to manually trigger cache cleanup (called by client at scan cycle start)
+app.get('/api/cache/cleanup-kline', (req, res) => {
+  try {
+    const cleanedCount = cleanupExpiredKlineCache();
+    res.json({ success: true, cleanedCount, remaining: klineCache.size });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Binance klines endpoint with caching and deduplication
 app.get('/api/binance/klines', async (req, res) => {
   try {
@@ -2921,12 +2957,15 @@ app.get('/api/binance/klines', async (req, res) => {
     const cacheKey = `${symbol}_${interval}_${limit || 'default'}_${endTime || 'latest'}_${tradingMode}`;
     const now = Date.now();
     
-    // Check cache first
+    // Check cache first (with on-access cleanup of expired entries)
     if (klineCache.has(cacheKey)) {
       const cached = klineCache.get(cacheKey);
       if ((now - cached.timestamp) < KLINE_CACHE_DURATION) {
         console.log(`[PROXY] 📊 Returning cached kline data for ${symbol} (${Math.round((now - cached.timestamp) / 1000)}s old)`);
         return res.json({ success: true, data: cached.data, cached: true });
+      } else {
+        // Remove expired entry on access
+        klineCache.delete(cacheKey);
       }
     }
 
@@ -2974,11 +3013,21 @@ app.get('/api/binance/klines', async (req, res) => {
         });
         
         // Clean old cache entries (keep cache size manageable)
+        // First, remove expired entries
+        const currentTime = Date.now();
+        for (const [key, value] of klineCache.entries()) {
+          if ((currentTime - value.timestamp) >= KLINE_CACHE_DURATION) {
+            klineCache.delete(key);
+          }
+        }
+        
+        // If still too large after removing expired entries, keep only most recent 500
         if (klineCache.size > 1000) {
           const entries = Array.from(klineCache.entries());
           entries.sort((a, b) => b[1].timestamp - a[1].timestamp);
           klineCache.clear();
           entries.slice(0, 500).forEach(([key, value]) => klineCache.set(key, value));
+          console.log(`[PROXY] 🧹 Cache size exceeded 1000, kept 500 most recent entries`);
         }
         
         console.log(`[PROXY] ✅ Kline data cached for ${symbol} (${JSON.stringify(data).length} bytes)`);
@@ -6447,7 +6496,295 @@ app.get('/api/trades', (req, res) => {
   //console.log('[PROXY] 📊 GET /api/trades - Total P&L of filtered trades:', totalPnl.toFixed(2));
   //console.log('[PROXY] 📊 GET /api/trades - Expected SQL result (for testnet):', totalPnl.toFixed(2));
   
+  // Add diagnostic info in response headers for debugging
+  res.set('X-Total-Pnl', totalPnl.toFixed(2));
+  res.set('X-Trade-Count', filteredTrades.length.toString());
+  
   res.json({ success: true, data: filteredTrades });
+});
+
+// Direct database query endpoint - matches SQL query exactly (no analytics field filters)
+app.get('/api/trades/direct-db', async (req, res) => {
+  if (!dbClient) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Database not available' 
+    });
+  }
+  
+  try {
+    const tradingMode = req.query.trading_mode || 'testnet';
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : null;
+    
+    // CRITICAL: Match SQL query exactly - only filter by essential fields
+    // SQL: WHERE exit_timestamp IS NOT NULL AND entry_price > 0 AND quantity > 0 AND trading_mode = 'testnet'
+    let query = `
+      SELECT 
+        id, position_id, symbol, side, quantity, entry_price, exit_price, 
+        entry_timestamp, exit_timestamp, pnl_usdt, pnl_percent, commission, 
+        trading_mode, strategy_name, created_date, updated_date
+      FROM trades
+      WHERE exit_timestamp IS NOT NULL
+        AND entry_price > 0
+        AND quantity > 0
+        AND trading_mode = $1
+      ORDER BY exit_timestamp DESC
+    `;
+    
+    const params = [tradingMode];
+    
+    if (limit) {
+      query += ` LIMIT $2`;
+      params.push(limit);
+    }
+    
+    const result = await dbClient.query(query, params);
+    const dbTrades = result.rows || [];
+    
+    // Map to same format as in-memory trades
+    const mappedTrades = dbTrades.map(dbTrade => ({
+      id: dbTrade.id,
+      trade_id: dbTrade.id,
+      position_id: dbTrade.position_id || null,
+      symbol: dbTrade.symbol,
+      direction: dbTrade.side === 'BUY' ? 'long' : 'short',
+      side: dbTrade.side,
+      quantity: parseFloat(dbTrade.quantity) || 0,
+      quantity_crypto: parseFloat(dbTrade.quantity) || 0,
+      entry_price: parseFloat(dbTrade.entry_price) || 0,
+      exit_price: dbTrade.exit_price ? parseFloat(dbTrade.exit_price) : null,
+      entry_timestamp: dbTrade.entry_timestamp,
+      exit_timestamp: dbTrade.exit_timestamp,
+      entry_value_usdt: (parseFloat(dbTrade.entry_price) || 0) * (parseFloat(dbTrade.quantity) || 0),
+      pnl_usdt: dbTrade.pnl_usdt ? parseFloat(dbTrade.pnl_usdt) : 0,
+      pnl_percentage: dbTrade.pnl_percent ? parseFloat(dbTrade.pnl_percent) : 0,
+      pnl_percent: dbTrade.pnl_percent ? parseFloat(dbTrade.pnl_percent) : 0,
+      commission: dbTrade.commission ? parseFloat(dbTrade.commission) : 0,
+      total_fees_usdt: dbTrade.commission ? parseFloat(dbTrade.commission) : 0,
+      trading_mode: dbTrade.trading_mode || 'testnet',
+      strategy_name: dbTrade.strategy_name || '',
+      created_date: dbTrade.created_date || dbTrade.entry_timestamp,
+      updated_date: dbTrade.updated_date || dbTrade.exit_timestamp
+    }));
+    
+    res.json({ 
+      success: true, 
+      data: mappedTrades,
+      count: mappedTrades.length
+    });
+  } catch (error) {
+    console.error('[PROXY] ❌ Error querying database directly:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
+// Diagnostic endpoint to compare in-memory vs database trades
+app.get('/api/trades/diagnostic', async (req, res) => {
+  console.log('[PROXY] 🔍 GET /api/trades/diagnostic - Comparing in-memory vs database trades');
+  
+  if (!dbClient) {
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Database not available' 
+    });
+  }
+  
+  try {
+    const tradingMode = req.query.trading_mode || 'testnet';
+    const limit = parseInt(req.query.limit || '100', 10);
+    
+    // Get trades from in-memory array (what the UI uses)
+    const inMemoryTrades = trades
+      .filter(t => {
+        if ((t.trading_mode || 'testnet') !== tradingMode) return false;
+        if (!t.exit_timestamp) return false;
+        // Calculate entry_value_usdt if missing
+        let entryValue = Number(t.entry_value_usdt);
+        if (isNaN(entryValue) || entryValue <= 0) {
+          const entryPrice = Number(t.entry_price) || 0;
+          const quantity = Number(t.quantity) || Number(t.quantity_crypto) || 0;
+          entryValue = entryPrice * quantity;
+        }
+        return entryValue > 0;
+      })
+      .sort((a, b) => {
+        const aTime = new Date(a.exit_timestamp).getTime();
+        const bTime = new Date(b.exit_timestamp).getTime();
+        return bTime - aTime;
+      })
+      .slice(0, limit);
+    
+    // Get trades from database (what SQL query uses)
+    const dbQuery = `
+      SELECT 
+        id, position_id, symbol, side, quantity, entry_price, exit_price, 
+        entry_timestamp, exit_timestamp, pnl_usdt, pnl_percent, commission, 
+        trading_mode, strategy_name
+      FROM trades
+      WHERE exit_timestamp IS NOT NULL
+        AND entry_price > 0
+        AND quantity > 0
+        AND trading_mode = $1
+      ORDER BY exit_timestamp DESC
+      LIMIT $2
+    `;
+    const dbResult = await dbClient.query(dbQuery, [tradingMode, limit]);
+    const dbTrades = dbResult.rows || [];
+    
+    // Calculate totals
+    const inMemoryTotalPnl = inMemoryTrades.reduce((sum, t) => {
+      return sum + (Number(t.pnl_usdt) || 0);
+    }, 0);
+    
+    const dbTotalPnl = dbTrades.reduce((sum, t) => {
+      return sum + (Number(t.pnl_usdt) || 0);
+    }, 0);
+    
+    // Create maps for comparison
+    const inMemoryMap = new Map();
+    inMemoryTrades.forEach(t => {
+      const key = t.position_id || t.id;
+      if (key) {
+        inMemoryMap.set(key, t);
+      }
+    });
+    
+    const dbMap = new Map();
+    dbTrades.forEach(t => {
+      const key = t.position_id || t.id;
+      if (key) {
+        dbMap.set(key, t);
+      }
+    });
+    
+    // Find differences
+    const onlyInMemory = [];
+    const onlyInDatabase = [];
+    const differentPnl = [];
+    
+    // Check trades in memory
+    inMemoryTrades.forEach(t => {
+      const key = t.position_id || t.id;
+      const dbTrade = dbMap.get(key);
+      
+      if (!dbTrade) {
+        onlyInMemory.push({
+          id: t.id,
+          position_id: t.position_id,
+          symbol: t.symbol,
+          exit_timestamp: t.exit_timestamp,
+          pnl_usdt: Number(t.pnl_usdt) || 0,
+          entry_price: Number(t.entry_price) || 0,
+          exit_price: Number(t.exit_price) || 0,
+          quantity: Number(t.quantity) || Number(t.quantity_crypto) || 0
+        });
+      } else {
+        const memPnl = Number(t.pnl_usdt) || 0;
+        const dbPnl = Number(dbTrade.pnl_usdt) || 0;
+        if (Math.abs(memPnl - dbPnl) > 0.01) {
+          differentPnl.push({
+            id: t.id,
+            position_id: t.position_id,
+            symbol: t.symbol,
+            exit_timestamp: t.exit_timestamp,
+            in_memory_pnl: memPnl,
+            database_pnl: dbPnl,
+            difference: memPnl - dbPnl
+          });
+        }
+      }
+    });
+    
+    // Check trades in database
+    dbTrades.forEach(t => {
+      const key = t.position_id || t.id;
+      if (!inMemoryMap.has(key)) {
+        onlyInDatabase.push({
+          id: t.id,
+          position_id: t.position_id,
+          symbol: t.symbol,
+          exit_timestamp: t.exit_timestamp,
+          pnl_usdt: Number(t.pnl_usdt) || 0,
+          entry_price: Number(t.entry_price) || 0,
+          exit_price: Number(t.exit_price) || 0,
+          quantity: Number(t.quantity) || 0
+        });
+      }
+    });
+    
+    // Calculate impact of differences
+    const onlyInMemoryPnl = onlyInMemory.reduce((sum, t) => sum + t.pnl_usdt, 0);
+    const onlyInDatabasePnl = onlyInDatabase.reduce((sum, t) => sum + t.pnl_usdt, 0);
+    const pnlDifferenceSum = differentPnl.reduce((sum, t) => sum + t.difference, 0);
+    
+    const result = {
+      success: true,
+      trading_mode: tradingMode,
+      limit: limit,
+      summary: {
+        in_memory: {
+          trade_count: inMemoryTrades.length,
+          total_pnl: parseFloat(inMemoryTotalPnl.toFixed(2))
+        },
+        database: {
+          trade_count: dbTrades.length,
+          total_pnl: parseFloat(dbTotalPnl.toFixed(2))
+        },
+        difference: {
+          pnl_difference: parseFloat((inMemoryTotalPnl - dbTotalPnl).toFixed(2)),
+          trade_count_difference: inMemoryTrades.length - dbTrades.length
+        }
+      },
+      differences: {
+        only_in_memory: {
+          count: onlyInMemory.length,
+          total_pnl_impact: parseFloat(onlyInMemoryPnl.toFixed(2)),
+          trades: onlyInMemory.slice(0, 20) // Limit to first 20 for readability
+        },
+        only_in_database: {
+          count: onlyInDatabase.length,
+          total_pnl_impact: parseFloat(onlyInDatabasePnl.toFixed(2)),
+          trades: onlyInDatabase.slice(0, 20) // Limit to first 20 for readability
+        },
+        different_pnl: {
+          count: differentPnl.length,
+          total_pnl_difference: parseFloat(pnlDifferenceSum.toFixed(2)),
+          trades: differentPnl.slice(0, 20) // Limit to first 20 for readability
+        }
+      },
+      explanation: {
+        in_memory_pnl: `$${inMemoryTotalPnl.toFixed(2)} - This is what the UI widget shows`,
+        database_pnl: `$${dbTotalPnl.toFixed(2)} - This is what your SQL query shows`,
+        difference: `$${(inMemoryTotalPnl - dbTotalPnl).toFixed(2)} - This is the discrepancy`,
+        causes: [
+          onlyInMemory.length > 0 ? `${onlyInMemory.length} trades in memory but not in database (impact: $${onlyInMemoryPnl.toFixed(2)})` : null,
+          onlyInDatabase.length > 0 ? `${onlyInDatabase.length} trades in database but not in memory (impact: $${onlyInDatabasePnl.toFixed(2)})` : null,
+          differentPnl.length > 0 ? `${differentPnl.length} trades with different P&L values (total difference: $${pnlDifferenceSum.toFixed(2)})` : null
+        ].filter(Boolean)
+      }
+    };
+    
+    console.log('[PROXY] 🔍 Diagnostic results:', {
+      in_memory_pnl: result.summary.in_memory.total_pnl,
+      database_pnl: result.summary.database.total_pnl,
+      difference: result.summary.difference.pnl_difference,
+      only_in_memory: onlyInMemory.length,
+      only_in_database: onlyInDatabase.length,
+      different_pnl: differentPnl.length
+    });
+    
+    res.json(result);
+  } catch (error) {
+    console.error('[PROXY] ❌ Error in diagnostic endpoint:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
 });
 
 // DELETE /api/trades/:id endpoint
@@ -7353,10 +7690,27 @@ app.post('/api/trades/recalculate-pnl', async (req, res) => {
   console.log('[PROXY] 🔧 POST /api/trades/recalculate-pnl - Recalculating P&L for all trades');
 
   if (!dbClient) {
-    return res.status(500).json({ success: false, error: 'Database not available' });
+    console.error('[PROXY] ❌ Database client not available');
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Database not available',
+      details: 'The database connection is not initialized. Please check if the proxy server is properly connected to the database.'
+    });
   }
 
   try {
+    // Test database connection first
+    try {
+      await dbClient.query('SELECT 1');
+    } catch (connError) {
+      console.error('[PROXY] ❌ Database connection test failed:', connError.message);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Database connection failed',
+        details: connError.message
+      });
+    }
+
     const COMMISSION_RATE = 0.001; // 0.1% trading fee
 
     // Helper function to recalculate P&L
@@ -7376,97 +7730,146 @@ app.post('/api/trades/recalculate-pnl', async (req, res) => {
     };
 
     // Fetch all trades with exit prices
-    // Note: Database column is 'quantity', but we handle both quantity and quantity_crypto in code
-    const tradesResult = await dbClient.query(`
-      SELECT id, entry_price, exit_price, 
-             COALESCE(quantity, quantity_crypto) as quantity,
-             pnl_usdt, pnl_percent, total_fees_usdt, trading_mode
-      FROM trades
-      WHERE exit_price IS NOT NULL AND exit_price > 0
-        AND entry_price IS NOT NULL AND entry_price > 0
-        AND (quantity IS NOT NULL AND quantity > 0 OR quantity_crypto IS NOT NULL AND quantity_crypto > 0)
-      ORDER BY exit_timestamp DESC
-    `);
+    // Note: Database column is 'quantity' (not quantity_crypto)
+    console.log('[PROXY] 📊 Fetching trades from database...');
+    let tradesResult;
+    try {
+      tradesResult = await dbClient.query(`
+        SELECT id, entry_price, exit_price, 
+               quantity,
+               pnl_usdt, pnl_percent, commission, trading_mode
+        FROM trades
+        WHERE exit_price IS NOT NULL AND exit_price > 0
+          AND entry_price IS NOT NULL AND entry_price > 0
+          AND quantity IS NOT NULL AND quantity > 0
+        ORDER BY exit_timestamp DESC
+      `);
+    } catch (queryError) {
+      console.error('[PROXY] ❌ SQL query failed:', queryError.message);
+      console.error('[PROXY] ❌ SQL error details:', queryError);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to fetch trades from database',
+        details: queryError.message,
+        sqlError: queryError.code
+      });
+    }
 
     const allTrades = tradesResult.rows;
     console.log(`[PROXY] 📊 Found ${allTrades.length} trades to recalculate P&L for`);
 
     let updatedCount = 0;
     const updatedTrades = [];
+    const errors = [];
 
-    for (const trade of allTrades) {
-      const { pnlUsdt, pnlPercent, totalFees } = recalculatePnl(
-        parseFloat(trade.entry_price),
-        parseFloat(trade.exit_price),
-        parseFloat(trade.quantity)
-      );
+    for (let i = 0; i < allTrades.length; i++) {
+      const trade = allTrades[i];
+      try {
+        const entryPrice = parseFloat(trade.entry_price);
+        const exitPrice = parseFloat(trade.exit_price);
+        const quantity = parseFloat(trade.quantity);
 
-      // Only update if P&L values changed significantly (more than 0.01 USDT or 0.01%)
-      const oldPnlUsdt = parseFloat(trade.pnl_usdt || 0);
-      const oldPnlPercent = parseFloat(trade.pnl_percent || 0);
-      const oldTotalFees = parseFloat(trade.total_fees_usdt || 0);
-
-      const pnlDiff = Math.abs(pnlUsdt - oldPnlUsdt);
-      const pnlPercentDiff = Math.abs(pnlPercent - oldPnlPercent);
-
-      if (pnlDiff > 0.01 || pnlPercentDiff > 0.01 || Math.abs(totalFees - oldTotalFees) > 0.01) {
-        // Update trade in database
-        await dbClient.query(`
-          UPDATE trades
-          SET pnl_usdt = $1,
-              pnl_percent = $2,
-              total_fees_usdt = $3,
-              updated_date = $4
-          WHERE id = $5
-        `, [
-          pnlUsdt,
-          pnlPercent,
-          totalFees,
-          new Date().toISOString(),
-          trade.id
-        ]);
-
-        // Update in-memory trades array
-        const inMemoryTrade = trades.find(t => t.id === trade.id);
-        if (inMemoryTrade) {
-          inMemoryTrade.pnl_usdt = pnlUsdt;
-          inMemoryTrade.pnl_percentage = pnlPercent;
-          inMemoryTrade.pnl_percent = pnlPercent;
-          inMemoryTrade.total_fees_usdt = totalFees;
+        // Validate parsed values
+        if (isNaN(entryPrice) || isNaN(exitPrice) || isNaN(quantity)) {
+          console.warn(`[PROXY] ⚠️ Skipping trade ${trade.id}: Invalid price/quantity values`, {
+            entry_price: trade.entry_price,
+            exit_price: trade.exit_price,
+            quantity: trade.quantity
+          });
+          errors.push({ tradeId: trade.id, error: 'Invalid price/quantity values' });
+          continue;
         }
 
-        updatedTrades.push({
-          id: trade.id,
-          trading_mode: trade.trading_mode,
-          oldPnlUsdt: oldPnlUsdt,
-          newPnlUsdt: pnlUsdt,
-          oldPnlPercent: oldPnlPercent,
-          newPnlPercent: pnlPercent
-        });
+        const { pnlUsdt, pnlPercent, totalFees } = recalculatePnl(entryPrice, exitPrice, quantity);
 
-        updatedCount++;
+        // Only update if P&L values changed significantly (more than 0.01 USDT or 0.01%)
+        const oldPnlUsdt = parseFloat(trade.pnl_usdt || 0);
+        const oldPnlPercent = parseFloat(trade.pnl_percent || 0);
+        const oldCommission = parseFloat(trade.commission || 0);
+
+        const pnlDiff = Math.abs(pnlUsdt - oldPnlUsdt);
+        const pnlPercentDiff = Math.abs(pnlPercent - oldPnlPercent);
+
+        if (pnlDiff > 0.01 || pnlPercentDiff > 0.01 || Math.abs(totalFees - oldCommission) > 0.01) {
+          // Update trade in database
+          try {
+            await dbClient.query(`
+              UPDATE trades
+              SET pnl_usdt = $1,
+                  pnl_percent = $2,
+                  commission = $3,
+                  updated_date = $4
+              WHERE id = $5
+            `, [
+              pnlUsdt,
+              pnlPercent,
+              totalFees,
+              new Date().toISOString(),
+              trade.id
+            ]);
+
+            // Update in-memory trades array (if available)
+            if (typeof trades !== 'undefined' && Array.isArray(trades)) {
+              const inMemoryTrade = trades.find(t => t.id === trade.id);
+              if (inMemoryTrade) {
+                inMemoryTrade.pnl_usdt = pnlUsdt;
+                inMemoryTrade.pnl_percentage = pnlPercent;
+                inMemoryTrade.pnl_percent = pnlPercent;
+                inMemoryTrade.commission = totalFees;
+                inMemoryTrade.total_fees_usdt = totalFees; // Also update for compatibility
+              }
+            }
+
+            updatedTrades.push({
+              id: trade.id,
+              trading_mode: trade.trading_mode,
+              oldPnlUsdt: oldPnlUsdt,
+              newPnlUsdt: pnlUsdt,
+              oldPnlPercent: oldPnlPercent,
+              newPnlPercent: pnlPercent
+            });
+
+            updatedCount++;
+          } catch (updateError) {
+            console.error(`[PROXY] ❌ Failed to update trade ${trade.id}:`, updateError.message);
+            errors.push({ tradeId: trade.id, error: updateError.message });
+          }
+        }
+      } catch (tradeError) {
+        console.error(`[PROXY] ❌ Error processing trade ${trade.id}:`, tradeError.message);
+        errors.push({ tradeId: trade.id, error: tradeError.message });
       }
     }
 
-    // Save updated trades to persistent storage
-    try {
-      saveStoredData('trades', trades);
-      console.log('[PROXY] 📊 Saved updated trades to persistent storage');
-    } catch (error) {
-      console.error('[PROXY] Error saving updated trades to storage:', error);
+    // Save updated trades to persistent storage (if available)
+    if (typeof saveStoredData === 'function' && typeof trades !== 'undefined') {
+      try {
+        saveStoredData('trades', trades);
+        console.log('[PROXY] 📊 Saved updated trades to persistent storage');
+      } catch (error) {
+        console.error('[PROXY] ⚠️ Error saving updated trades to storage (non-critical):', error.message);
+      }
     }
 
-    console.log(`[PROXY] ✅ Recalculated P&L for ${updatedCount} trades`);
+    console.log(`[PROXY] ✅ Recalculated P&L for ${updatedCount} trades (${errors.length} errors)`);
     res.json({
       success: true,
       updatedCount: updatedCount,
       totalTrades: allTrades.length,
+      errorCount: errors.length,
+      errors: errors.slice(0, 10), // Return first 10 errors for debugging
       updatedTrades: updatedTrades.slice(0, 10) // Return first 10 for debugging
     });
 
   } catch (error) {
     console.error('[PROXY] ❌ Error recalculating trade P&L:', error);
-    res.status(500).json({ success: false, error: error.message });
+    console.error('[PROXY] ❌ Error stack:', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      details: error.stack,
+      type: error.name
+    });
   }
 });
 
@@ -8152,6 +8555,35 @@ async function startServer() {
     // Initialize database connection
     console.log('[PROXY] 🔄 Initializing database connection...');
     const dbConnected = await initDatabase();
+    
+    // Run dust aggregation migration if database is connected
+    if (dbConnected) {
+        console.log('[PROXY] 🔄 Running dust aggregation migration...');
+        try {
+            const migrationSQL = `
+                -- Add dust aggregation fields to live_positions table
+                ALTER TABLE live_positions ADD COLUMN IF NOT EXISTS dust_status VARCHAR(50);
+                ALTER TABLE live_positions ADD COLUMN IF NOT EXISTS aggregated_position_id VARCHAR(255);
+                ALTER TABLE live_positions ADD COLUMN IF NOT EXISTS accumulated_quantity NUMERIC(20,8);
+                ALTER TABLE live_positions ADD COLUMN IF NOT EXISTS aggregated_position_ids JSONB;
+                ALTER TABLE live_positions ADD COLUMN IF NOT EXISTS note TEXT;
+                CREATE INDEX IF NOT EXISTS idx_live_positions_dust_status ON live_positions(dust_status) WHERE dust_status IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_live_positions_aggregated_position_id ON live_positions(aggregated_position_id) WHERE aggregated_position_id IS NOT NULL;
+            `;
+            await dbClient.query(migrationSQL);
+            console.log('[PROXY] ✅ Dust aggregation migration completed successfully');
+        } catch (migrationError) {
+            // Check if error is because columns already exist (not a critical error)
+            if (migrationError.code === '42701' || migrationError.message.includes('already exists')) {
+                console.log('[PROXY] ℹ️ Dust aggregation columns already exist, skipping migration');
+            } else {
+                console.error('[PROXY] ❌ Dust aggregation migration failed:', migrationError.message);
+                console.error('[PROXY] ❌ Migration error code:', migrationError.code);
+                console.error('[PROXY] ❌ Migration error details:', migrationError);
+                // Don't fail server startup if migration fails (columns might already exist)
+            }
+        }
+    }
     
     // Load positions from database/file storage
     console.log('[PROXY] 🔄 Loading existing positions...');

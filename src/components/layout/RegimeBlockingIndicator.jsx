@@ -13,6 +13,7 @@ const RegimeBlockingIndicator = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [blockedReason, setBlockedReason] = useState(null); // 'downtrend_config' | 'low_confidence' | 'max_cap_reached' | 'insufficient_balance' | null
   const [blockedDetails, setBlockedDetails] = useState(null); // Additional details for blocking reasons
+  const [qualityFilterInfo, setQualityFilterInfo] = useState(null); // Quality filter status message
 
   // Helper: safely read regime name from various shapes
   const getRegimeName = (regime) => {
@@ -27,6 +28,30 @@ const RegimeBlockingIndicator = () => {
   useEffect(() => {
     const scannerService = getAutoScannerService();
     const handleUpdate = (state) => {
+      // Check if scanner is initialized - if not, show loading
+      if (!state.isInitialized) {
+        setIsLoading(true);
+        return;
+      }
+
+      // If scanner is running but marketRegime or settings are missing, show default "Active" state
+      // This prevents infinite loading when scanner is running but hasn't completed first cycle
+      const hasRegime = state.marketRegime && typeof state.marketRegime === 'object' && Object.keys(state.marketRegime).length > 0;
+      const hasSettings = state.settings && typeof state.settings === 'object' && Object.keys(state.settings).length > 0;
+      
+      if (!hasRegime || !hasSettings) {
+        // Scanner is initialized but data not ready yet - show default state
+        setIsBlocked(false);
+        setBlockedReason(null);
+        setBlockedDetails(null);
+        setConfidence(50); // Default confidence
+        setThreshold(60); // Default threshold
+        setQualityFilterInfo(null);
+        setIsLoading(false);
+        return;
+      }
+
+      // If marketRegime and settings are present, process normally
       if (state.marketRegime && state.settings) {
         const currentConfidence = (state.marketRegime.confidence ?? 0) * 100;
         const currentThreshold = Number(state.settings.minimumRegimeConfidence ?? 60);
@@ -72,6 +97,9 @@ const RegimeBlockingIndicator = () => {
         const availableBalance = Number(currentWalletState?.available_balance ?? 0);
         const minimumTradeValue = Number(state.settings?.minimumTradeValue ?? 10);
         const blockByInsufficientBalance = availableBalance < minimumTradeValue;
+
+        // Check quality filter status (EBR < 50% triggers top 20% conviction filter)
+        const qualityFilterActive = ebrPercent < 50;
 
         // Determine final blocking state and reason
         let finalBlocked = false;
@@ -135,9 +163,25 @@ const RegimeBlockingIndicator = () => {
         setBlockedDetails(finalDetails);
         setConfidence(currentConfidence);
         setThreshold(currentThreshold);
+        
+        // Store quality filter info
+        if (qualityFilterActive) {
+            setQualityFilterInfo(`Quality filter active: Only top 20% by conviction (EBR ${ebrPercent.toFixed(0)}% < 50%)`);
+        } else {
+            setQualityFilterInfo(null);
+        }
+        
         setIsLoading(false);
       } else {
-        setIsLoading(true);
+        // If scanner is initialized but data is missing, show default "Active" state
+        // This prevents infinite loading when data hasn't been calculated yet
+        setIsBlocked(false);
+        setBlockedReason(null);
+        setBlockedDetails(null);
+        setConfidence(50); // Default confidence
+        setThreshold(60); // Default threshold
+        setQualityFilterInfo(null);
+        setIsLoading(false);
       }
     };
 
@@ -162,28 +206,43 @@ const RegimeBlockingIndicator = () => {
   const blockedClasses = "text-red-600 dark:text-red-500";
 
   const getTooltipText = () => {
+    let baseText = '';
+    
     if (!isBlocked) {
-      return `Active: ${confidence?.toFixed(1)}% ≥ ${threshold}%`;
+      baseText = `Active: ${confidence?.toFixed(1)}% ≥ ${threshold}%`;
+    } else {
+      switch (blockedReason) {
+        case 'max_cap_reached':
+        case 'investment_cap_reached':
+          baseText = `Blocked: Max cap ${blockedDetails}`;
+          break;
+        case 'insufficient_balance':
+          baseText = `Blocked: Low balance ${blockedDetails}`;
+          break;
+        case 'insufficient_remaining_cap':
+          baseText = `Blocked: Not enough remaining cap ${blockedDetails}`;
+          break;
+        case 'downtrend_config':
+          baseText = `Blocked: Downtrend ON`;
+          break;
+        case 'low_confidence':
+        case 'low_regime_confidence':
+          baseText = `Blocked: ${confidence?.toFixed(1)}% < ${threshold}%`;
+          break;
+        case 'no_active_strategies':
+          baseText = `Blocked: ${blockedDetails}`;
+          break;
+        default:
+          baseText = `Blocked: ${blockedDetails || 'Unknown'}`;
+      }
     }
-
-    switch (blockedReason) {
-      case 'max_cap_reached':
-      case 'investment_cap_reached':
-        return `Blocked: Max cap ${blockedDetails}`;
-      case 'insufficient_balance':
-        return `Blocked: Low balance ${blockedDetails}`;
-      case 'insufficient_remaining_cap':
-        return `Blocked: Not enough remaining cap ${blockedDetails}`;
-      case 'downtrend_config':
-        return `Blocked: Downtrend ON`;
-      case 'low_confidence':
-      case 'low_regime_confidence':
-        return `Blocked: ${confidence?.toFixed(1)}% < ${threshold}%`;
-      case 'no_active_strategies':
-        return `Blocked: ${blockedDetails}`;
-      default:
-        return `Blocked: ${blockedDetails || 'Unknown'}`;
+    
+    // Append quality filter info if active
+    if (qualityFilterInfo) {
+      return baseText ? `${baseText}. ${qualityFilterInfo}` : qualityFilterInfo;
     }
+    
+    return baseText;
   };
 
   const tooltipText = getTooltipText();

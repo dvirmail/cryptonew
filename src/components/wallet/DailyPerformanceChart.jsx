@@ -332,12 +332,25 @@ export default function DailyPerformanceChart({
         setDbTradesLoading(true);
         const tradingMode = isLiveMode ? 'live' : 'testnet';
         
-        // Use same query as ScanEngineService._logWalletSummary - fetch ALL trades
-        const allTrades = await queueEntityCall('Trade', 'filter', 
-          { trading_mode: tradingMode }, 
-          '-exit_timestamp', 
-          10000
-        ).catch(() => []);
+        // CRITICAL: Use direct database endpoint to bypass in-memory array limitations
+        // This matches the SQL query exactly: WHERE exit_timestamp IS NOT NULL AND entry_price > 0 AND quantity > 0
+        const response = await fetch(`http://localhost:3003/api/trades/direct-db?trading_mode=${tradingMode}`).catch(() => null);
+        if (!response || !response.ok) {
+          console.error('[DailyPerformanceChart] ❌ Failed to fetch from direct-db endpoint, falling back to queueEntityCall');
+          // Fallback to queueEntityCall
+          const allTrades = await queueEntityCall('Trade', 'filter', 
+            { trading_mode: tradingMode }, 
+            '-exit_timestamp', 
+            10000
+          ).catch(() => []);
+          if (allTrades && allTrades.length > 0) {
+            setDirectDbTrades(allTrades);
+          }
+          return;
+        }
+        
+        const result = await response.json();
+        const allTrades = result.success && result.data ? result.data : [];
         
         if (allTrades && allTrades.length > 0) {
           setDirectDbTrades(allTrades);
@@ -455,28 +468,38 @@ export default function DailyPerformanceChart({
       }
       
       // Filter trades within the time window
-      // CRITICAL: Ensure proper date parsing and comparison
+      // CRITICAL: Match SQL query filters exactly - exit_timestamp IS NOT NULL AND entry_price > 0 AND quantity > 0
       const tradesInWindow = tradesForCalculation.filter(t => {
+        // Match SQL query filters exactly
         if (!t?.exit_timestamp) return false;
+        if (Number(t?.entry_price) <= 0) return false;
+        if (Number(t?.quantity || t?.quantity_crypto) <= 0) return false;
         
-        // Parse exit_timestamp (handles both string and Date objects)
+        // For lifetime, include all trades (no date filter)
+        if (timeframe === 'lifetime') {
+          return true;
+        }
+        
+        // For other timeframes, filter by exit_timestamp
         const exitDate = new Date(t.exit_timestamp);
         if (isNaN(exitDate.getTime())) {
           console.warn(`[DailyPerformanceChart] Invalid exit_timestamp for trade:`, t.id, t.exit_timestamp);
           return false;
         }
         
-        // Compare timestamps (both should be in UTC if database stores UTC)
         return exitDate.getTime() >= startDate.getTime();
       });
       
-      // CRITICAL FIX: Deduplicate trades BEFORE calculating P&L to prevent inflated totals
-      // This ensures the summary stats match the chart data (which also deduplicates)
-      const uniqueTradesInWindow = deduplicateTrades(tradesInWindow);
+      // CRITICAL: For lifetime calculations, match database SQL query exactly - NO deduplication
+      // Database query: SELECT SUM(pnl_usdt) FROM trades WHERE exit_timestamp IS NOT NULL AND entry_price > 0 AND quantity > 0
+      // For other timeframes, deduplication may still be needed for chart display accuracy
+      const tradesForPnlCalculation = (timeframe === 'lifetime') 
+        ? tradesInWindow  // No deduplication for lifetime (matches database)
+        : deduplicateTrades(tradesInWindow);  // Deduplication for period calculations
       
-      // Calculate directly from closed trades in the window (same as activity log)
-      // Note: uniqueTradesInWindow already filtered for exit_timestamp != null
-      const closedTrades = uniqueTradesInWindow;
+      // Calculate directly from closed trades in the window (matches database query)
+      // Note: tradesForPnlCalculation already filtered for exit_timestamp != null, entry_price > 0, quantity > 0
+      const closedTrades = tradesForPnlCalculation;
       
       // CRITICAL: Filter out trades with invalid/null/NaN pnl_usdt values
       const validTrades = closedTrades.filter(t => {
